@@ -3038,7 +3038,13 @@ def run_gui() -> int:
 def _startup_crash_log() -> None:
     """exe（无控制台）里把 print 与崩溃栈写进 data_dir/crash.log，方便排查。"""
     try:
-        path = os.path.join(components.data_dir(), "crash.log")
+        # 放 %LOCALAPPDATA%\Pic2Video\ 里：发布包里别多出一个日志文件
+        base = os.path.join(os.environ.get("LOCALAPPDATA")
+                            or tempfile.gettempdir(), "Pic2Video")
+        os.makedirs(base, exist_ok=True)
+        path = os.path.join(base, "crash.log")
+        if os.path.exists(path) and os.path.getsize(path) > 512 * 1024:
+            os.remove(path)                              # 别无限长
         fh = open(path, "a", encoding="utf-8", errors="replace", buffering=1)
     except Exception:
         return
