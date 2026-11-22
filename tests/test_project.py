@@ -1695,9 +1695,10 @@ _j = src.index("        def _opts(self, preview=False):")
 check("_opts 里按实际画面高度换算字号",
       "subtitle_px(" in src[_j:_j + 1200], src[_j:_j + 1200][-300:])
 
-check("长 filtergraph 走 filter_complex_script（不是拼错的 -/filter_complex）",
-      '"-filter_complex_script", graph_file' in src
-      and '"-/filter_complex"' not in src)
+check("长 filtergraph 用当前 ffmpeg 认的文件参数",
+      "[graph_file_option(), graph_file]" in src
+      and p.graph_file_option() in ("-filter_complex_script",
+                                    "-/filter_complex"))
 
 # 52 命名转场：12 个内置名 / 逐段时长 / 塞不下要报错
 check("内置转场 12 个", len(p.XFADE_NAMES) == 12 and p.XFADE_NAMES[0] == "fade"
@@ -2210,6 +2211,180 @@ for _anchor, _lab in (("tl", "左上"), ("tc", "中上"), ("tr", "右上"),
     check("九宫格词条：" + _anchor,
           p.OVERLAY_ANCHOR_LABELS.get(_anchor) == _lab
           and all(_lab in tbl for tbl in _i18n.values()))
+
+# ---------------- 58 调色：参数、滤镜串、工程、真渲染、界面 ----------------
+_real_lut = os.path.join(tmp, "swap_rb.cube")
+_cube_rows = []          # .cube 的行序：红变得最快
+for _b in (0.0, 1.0):
+    for _g in (0.0, 1.0):
+        for _r in (0.0, 1.0):
+            _cube_rows.append("%.1f %.1f %.1f" % (_b, _g, _r))
+with open(_real_lut, "w", encoding="utf-8") as _fh:
+    _fh.write("TITLE \"swap r b\"\nLUT_3D_SIZE 2\n" + "\n".join(_cube_rows) + "\n")
+
+_c58 = p.Clip(IMG[0], 1.0)
+check("调色默认等于没调过",
+      (_c58.brightness, _c58.contrast, _c58.saturation, _c58.lut)
+      == (0.0, 1.0, 1.0, "") and not _c58.has_color)
+_c58b = p.Clip(IMG[0], 1.0, brightness=5, contrast=-2, saturation=9)
+check("调色参数夹在安全范围里",
+      (_c58b.brightness, _c58b.contrast, _c58b.saturation) == (1.0, 0.0, 3.0),
+      (_c58b.brightness, _c58b.contrast, _c58b.saturation))
+check("调色参数读不出来就用默认值",
+      p.Clip(IMG[0], 1.0, brightness=None, contrast="x",
+             saturation=float("nan")).brightness == 0.0
+      and p.Clip(IMG[0], 1.0, contrast="x").contrast == 1.0)
+check("改过色就认得出来",
+      p.Clip(IMG[0], 1.0, brightness=0.01).has_color
+      and p.Clip(IMG[0], 1.0, lut=_real_lut).has_color
+      and not p.Clip(IMG[0], 1.0, contrast=1.0).has_color)
+_c58c = p.Clip(IMG[0], 2.0, brightness=0.3, contrast=1.2, saturation=0.8,
+               lut=_real_lut)
+_c58d = _c58c.copy()
+check("复制片段带着调色参数",
+      (_c58d.brightness, _c58d.contrast, _c58d.saturation, _c58d.lut)
+      == (0.3, 1.2, 0.8, _real_lut))
+
+check("没调过色就不往 graph 里塞滤镜", p.color_filter(0.0, 1.0, 1.0) == "")
+check("调色先出 eq", p.color_filter(0.2, 1.0, 1.0)
+      == ",eq=brightness=0.200:contrast=1.000:saturation=1.000")
+_c58e = p.color_filter(0.0, 1.0, 1.0, "C:\\luts\\my film.cube")
+check("LUT 用 file= 且路径转义", "lut3d=file='C\\:/luts/my film.cube'" in _c58e,
+      _c58e)
+_c58f = p.color_filter(0.1, 1.1, 1.1, _real_lut)
+check("eq 在 lut3d 前面",
+      _c58f.index("eq=") < _c58f.index("lut3d=")
+      and _c58f.startswith(",eq="), _c58f)
+
+_g58 = p.build_graph([90], 3.0, 320, 180, fps=30,
+                     clips=[p.Clip(IMG[0], 3.0, brightness=0.3,
+                                   lut=_real_lut)])
+check("build_graph 里带上 eq 与 lut3d",
+      "eq=brightness=0.300" in _g58 and "lut3d=file=" in _g58)
+_g58b = p.build_graph([90], 3.0, 320, 180, fps=30, clips=[p.Clip(IMG[0], 3.0)])
+check("没调色的段 graph 里没有 eq/lut3d",
+      "lut3d=" not in _g58b and "saturation=" not in _g58b)
+_g58c = p.build_graph([90, 90], 6.0, 320, 180, fps=30,
+                      clips=[p.Clip(IMG[0], 3.0, saturation=1.5),
+                             p.Clip(IMG[1], 3.0)])
+_eq_seg = [s for s in _g58c.split(";") if s.startswith("[s0]")]
+check("调色只挂在改过的那一段上",
+      len(_eq_seg) == 1 and "saturation=1.500" in _eq_seg[0]
+      and _g58c.count("saturation=") == 1, _eq_seg)
+
+_pj58 = p.Project()
+_pj58.clips = [p.Clip(IMG[0], 2.0, brightness=0.25, contrast=1.4,
+                      saturation=0.5, lut=_real_lut)]
+_doc58 = _pj58.to_doc()
+_c0 = _doc58["clips"][0]
+check("工程存了每段的调色参数",
+      (_c0.get("brightness"), _c0.get("contrast"), _c0.get("saturation"),
+       _c0.get("lut")) == (0.25, 1.4, 0.5, _real_lut), _c0)
+_pj58b = p.Project.from_doc(_doc58)
+check("工程读回来调色不丢",
+      (_pj58b.clips[0].brightness, _pj58b.clips[0].contrast,
+       _pj58b.clips[0].saturation, _pj58b.clips[0].lut)
+      == (0.25, 1.4, 0.5, _real_lut))
+check("调色能 json 化", isinstance(json.dumps(_doc58, ensure_ascii=False), str))
+_old58 = {"version": 1, "clips": [{"path": IMG[0], "dur": 2.0,
+                                  "kind": "image"}], "audios": []}
+_pj58c = p.Project.from_doc(_old58)
+check("老工程没调色字段就是默认值",
+      (_pj58c.clips[0].brightness, _pj58c.clips[0].contrast,
+       _pj58c.clips[0].saturation, _pj58c.clips[0].lut) == (0.0, 1.0, 1.0, ""))
+_pj58d = p.Project()
+_pj58d.clips = [p.Clip(IMG[0], 2.0, lut=os.path.join(tmp, "gone.cube"))]
+check("LUT 不在就算缺素材",
+      os.path.join(tmp, "gone.cube") in _pj58d.missing_media(),
+      _pj58d.missing_media())
+check("重新定位能把 LUT 换过去",
+      _pj58d.relink_media(os.path.join(tmp, "gone.cube"), _real_lut) == 1
+      and _pj58d.clips[0].lut == _real_lut)
+check("LUT 目录里的 .cube 能列出来",
+      p.list_luts(tmp) == [_real_lut] and p.list_luts("") == []
+      and p.list_luts(os.path.join(tmp, "nope")) == [], p.list_luts(tmp))
+
+if p.missing_tools():
+    print("  (没 ffmpeg，跳过调色实测)")
+else:
+    _base58 = os.path.join(tmp, "color_base.mp4")
+    p.render([p.Clip(IMG[0], 2.0)], [60], TONE, _base58, w=320, h=180,
+             fps=30, crf=28)
+    _lut58 = os.path.join(tmp, "color_lut.mp4")
+    p.render([p.Clip(IMG[0], 2.0, lut=_real_lut)], [60], TONE, _lut58,
+             w=320, h=180, fps=30, crf=28)
+    _bright58 = os.path.join(tmp, "color_bright.mp4")
+    p.render([p.Clip(IMG[0], 2.0, brightness=0.5)], [60], TONE, _bright58,
+             w=320, h=180, fps=30, crf=28)
+    _f0 = _frame_rgb(_base58, 0.2)
+    _f1 = _frame_rgb(_lut58, 0.2)
+    _px0 = _pixel(_f0, 320, 160, 90)
+    _px1 = _pixel(_f1, 320, 160, 90)
+    check("套了换红蓝的 LUT，画面颜色真的变了",
+          not _close(_px0, _px1) and _px1[0] > _px0[0] and _px1[2] < _px0[2],
+          (_px0, _px1))
+    _f2 = _frame_rgb(_bright58, 0.2)
+    _px2 = _pixel(_f2, 320, 160, 90)
+    check("调亮以后同一像素更亮",
+          sum(_px2) > sum(_px0) + 30, (_px0, _px2))
+    try:
+        p.render([p.Clip(IMG[0], 2.0,
+                         lut=os.path.join(tmp, "no_such.cube"))], [60], TONE,
+                 os.path.join(tmp, "color_missing.mp4"), w=320, h=180,
+                 fps=30, crf=28)
+        check("LUT 不在要报错", False)
+    except p.RenderError as _e:
+        check("LUT 不在要报错", "LUT" in str(_e), str(_e))
+
+_src58 = open(os.path.join(ROOT, "pic2video.py"), encoding="utf-8").read()
+check("有调色对话框", "class ColorDialog(FramelessDialog)" in _src58
+      and "def get_values(" in _src58)
+check("右键菜单有「调色…」", '"调色…"' in _src58
+      and "def on_edit_color" in _src58
+      and 'ColorDialog.get_values(self, self.project.clips[rows[0]]' in _src58)
+check("调色读设置里的 LUT 目录",
+      'self.settings["lut_dir"]' in _src58
+      and "lut_dir=self.edit_lut.text().strip()" in _src58)
+check("设置页有 LUT 目录",
+      '"LUT 目录"' in _src58 and "def _browse_lut" in _src58)
+_s58 = p.Settings(os.path.join(tmp, "settings_lut.json"))
+check("设置默认没有 LUT 目录", _s58["lut_dir"] == "")
+_s58.update(lut_dir=123)
+check("LUT 目录不是文字就洗干净", _s58["lut_dir"] == "")
+_s58.update(lut_dir="C:\\lut")
+check("LUT 目录能存住", _s58["lut_dir"] == "C:\\lut", _s58["lut_dir"])
+_c58_keys = ["调色", "调色…", "亮度", "对比度", "饱和度", "重置", "不用",
+             "LUT", "LUT 目录", "选 LUT 目录", "{name}（不在目录里）",
+             "调色用的 LUT 不在了：{name}",
+             "放着 .cube 文件的目录（右键「调色…」时从这个目录里列）",
+             "调色只作用在这一段上：先调亮度/对比度/饱和度，再套 LUT。LUT 是 .cube 文件，目录在设置里指定。"]
+check("ffmpeg 的帮助读得到", "-filter_complex" in p.ffmpeg_help())
+if not p.missing_tools():
+    _gp58 = os.path.join(tmp, "optprobe.txt")
+    with open(_gp58, "w", encoding="utf-8", newline="\n") as _fh:
+        _fh.write("[0:v]null[vout];[1:a]anull[aout]")
+    _o58 = os.path.join(tmp, "optprobe.mp4")
+    _r58 = subprocess.run(
+        [p.FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+         "color=c=black:s=64x64:d=0.2", "-f", "lavfi", "-i",
+         "anullsrc=r=48000:cl=stereo", p.graph_file_option(), _gp58,
+         "-map", "[vout]", "-map", "[aout]", "-t", "0.2",
+         "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", _o58],
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    check("滤镜图写文件时当前 ffmpeg 认得那个参数",
+          _r58.returncode == 0 and os.path.getsize(_o58) > 0,
+          _r58.stderr[-300:])
+    _many58 = [p.Clip(IMG[0], 0.2) for _ in range(60)]
+    _g58many = p.build_graph([6] * 60, 12.0, 160, 88, fps=30, clips=_many58)
+    check("60 段的滤镜图确实超过 6000 字", len(_g58many) > 6000, len(_g58many))
+    _o58b = os.path.join(tmp, "many.mp4")
+    p.render(_many58, [6] * 60, TONE, _o58b, w=160, h=88, fps=30,
+             preset="ultrafast", crf=34)
+    check("长滤镜图能真出片", os.path.getsize(_o58b) > 0)
+
+check("调色词条四语齐全",
+      all(_k in tbl for _k in _c58_keys for tbl in _i18n.values()),
+      [k for k in _c58_keys if not all(k in tbl for tbl in _i18n.values())])
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")

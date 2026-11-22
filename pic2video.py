@@ -56,6 +56,35 @@ COLOR_TAG = "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc
 FFMPEG = os.environ.get("PIC2VIDEO_FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("PIC2VIDEO_FFPROBE", "ffprobe")
 
+_FFMPEG_HELP: str | None = None
+
+
+def ffmpeg_help() -> str:
+    """ffmpeg -h full 的文本（只取一次，失败就当空）。"""
+    global _FFMPEG_HELP
+    if _FFMPEG_HELP is None:
+        try:
+            proc = subprocess.run(
+                [FFMPEG, "-hide_banner", "-h", "full"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, timeout=30,
+                creationflags=CREATION_NO_WINDOW)
+            _FFMPEG_HELP = proc.stdout.decode("utf-8", "replace")
+        except (OSError, subprocess.SubprocessError):
+            _FFMPEG_HELP = ""
+    return _FFMPEG_HELP
+
+
+def graph_file_option() -> str:
+    """把滤镜图写进临时文件时用的参数名。
+
+    ffmpeg 8 起 -filter_complex_script 被删了，改成通用的「值从文件读」写法
+    -/filter_complex；老版本只认前者。-h full 里还会列出老名字就说明是老版本。
+    """
+    return ("-filter_complex_script"
+            if "-filter_complex_script" in ffmpeg_help()
+            else "-/filter_complex")
+
 
 # ---------------------------------------------------------------- 基础工具
 
@@ -421,6 +450,7 @@ class Settings:
         "bg_blur": True,          # 背景模糊（原图铺底 / 自定义背景都适用）
         "pad_color": "#000000",   # 纯色留白颜色
         "bg_path": "",            # 自定义背景图片或视频
+        "lut_dir": "",            # 调色用的 .cube 放哪个目录（挑 LUT 时列它）
         "fade_in": 0.5,
         "fade_out": 1.5,
         "transition": "none",     # none / fade
@@ -547,7 +577,7 @@ class Settings:
             except (TypeError, ValueError):
                 d[key] = self.DEFAULTS[key]
         for key in ("export_dir", "last_export_dir", "bg_path",
-                    "intro_path", "outro_path"):
+                    "lut_dir", "intro_path", "outro_path"):
             if not isinstance(d.get(key), str):
                 d[key] = ""
         rec = d.get("recent_projects")
@@ -641,21 +671,75 @@ class Settings:
 
 # ---------------------------------------------------------------- 时间线模型
 
+# 调色：每段的亮度 / 对比度 / 饱和度，外加一个 .cube LUT。
+# 默认值就是「没调过」：亮 0、对比 1、饱和 1、LUT 空。
+COLOR_BRIGHT = (-1.0, 1.0)
+COLOR_CONTRAST = (0.0, 2.0)
+COLOR_SATURATION = (0.0, 3.0)
+COLOR_DEFAULT = (0.0, 1.0, 1.0)
+
+
+def _clamp_range(value, bounds: tuple[float, float], default: float) -> float:
+    """把数字夹进区间；读不出来（None / 非数字）就用默认值。"""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if v != v:          # NaN
+        return float(default)
+    return min(bounds[1], max(bounds[0], v))
+
+
+def color_filter(brightness: float, contrast: float, saturation: float,
+                 lut: str = "") -> str:
+    """一段调色滤镜串（eq → lut3d），没调过就返回空串。
+
+    顺序是固定的：先 eq 把亮度/对比度/饱和度摆正，再套 LUT。
+    反过来 LUT 会按「原片」的色域发色，套完再拉对比就偏了。
+    """
+    parts = []
+    b = _clamp_range(brightness, COLOR_BRIGHT, COLOR_DEFAULT[0])
+    c = _clamp_range(contrast, COLOR_CONTRAST, COLOR_DEFAULT[1])
+    s = _clamp_range(saturation, COLOR_SATURATION, COLOR_DEFAULT[2])
+    if abs(b) > 1e-6 or abs(c - 1.0) > 1e-6 or abs(s - 1.0) > 1e-6:
+        parts.append(f"eq=brightness={b:.3f}:contrast={c:.3f}"
+                     f":saturation={s:.3f}")
+    if lut:
+        parts.append(f"lut3d=file='{_filter_path(lut)}'")
+    return "," + ",".join(parts) if parts else ""
+
+
+def list_luts(folder: str) -> list[str]:
+    """LUT 目录里的 .cube 文件（按文件名排）；目录不在就返回空表。"""
+    if not folder or not os.path.isdir(folder):
+        return []
+    try:
+        names = [n for n in os.listdir(folder) if n.lower().endswith(".cube")]
+    except OSError:
+        return []
+    return [os.path.join(folder, n) for n in sorted(names, key=str.lower)]
+
+
 class Clip:
     """时间线上的一个视频元素：图片、片头或片尾。
 
     kind: image / intro / outro
     fade: 这个元素自己开头淡入、结尾淡出（黑场）
     xfade: 跟下一个元素交叉淡化
+    brightness / contrast / saturation: 这一段自己的调色（默认 0 / 1 / 1）
+    lut: 套在这个元素上的 .cube LUT（空 = 不套）
     """
 
     __slots__ = ("path", "dur", "kind", "fade", "xfade", "xfade_name",
-                 "xfade_dur", "src_in", "src_out")
+                 "xfade_dur", "src_in", "src_out",
+                 "brightness", "contrast", "saturation", "lut")
 
     def __init__(self, path: str, dur: float, kind: str = "image",
                  fade: bool = False, xfade: bool = False,
                  src_in: float = 0.0, src_out: float | None = None,
-                 xfade_name: str = "", xfade_dur: float | None = None):
+                 xfade_name: str = "", xfade_dur: float | None = None,
+                 brightness: float = 0.0, contrast: float = 1.0,
+                 saturation: float = 1.0, lut: str = ""):
         self.path = path
         self.dur = float(dur)
         self.kind = kind if kind in ("image", "intro", "outro") else "image"
@@ -665,6 +749,22 @@ class Clip:
         self.xfade_dur = None if xfade_dur is None else float(xfade_dur)
         self.src_in = float(src_in)     # 视频：从源的第几秒开始
         self.src_out = None if src_out is None else float(src_out)
+        self.brightness = _clamp_range(brightness, COLOR_BRIGHT,
+                                       COLOR_DEFAULT[0])
+        self.contrast = _clamp_range(contrast, COLOR_CONTRAST, COLOR_DEFAULT[1])
+        self.saturation = _clamp_range(saturation, COLOR_SATURATION,
+                                       COLOR_DEFAULT[2])
+        self.lut = lut if isinstance(lut, str) else ""
+
+    @property
+    def has_color(self) -> bool:
+        return bool(self.lut) or color_filter(self.brightness, self.contrast,
+                                              self.saturation) != ""
+
+    def color_chain(self) -> str:
+        """build_graph 里接在这一段上的调色串（没调过就是空串）。"""
+        return color_filter(self.brightness, self.contrast, self.saturation,
+                            self.lut)
 
     @property
     def is_video(self) -> bool:
@@ -680,7 +780,8 @@ class Clip:
 
     def copy(self):
         return Clip(self.path, self.dur, self.kind, self.fade, self.xfade,
-                    self.src_in, self.src_out, self.xfade_name, self.xfade_dur)
+                    self.src_in, self.src_out, self.xfade_name, self.xfade_dur,
+                    self.brightness, self.contrast, self.saturation, self.lut)
 
     def __repr__(self):
         return f"Clip({os.path.basename(self.path)!r}, {self.dur:.2f}, {self.kind})"
@@ -888,7 +989,9 @@ class Project:
             "clips": [{"path": c.path, "dur": c.dur, "kind": c.kind,
                        "fade": bool(c.fade), "xfade": bool(c.xfade),
                        "xfade_name": c.xfade_name, "xfade_dur": c.xfade_dur,
-                       "src_in": c.src_in, "src_out": c.src_out}
+                       "src_in": c.src_in, "src_out": c.src_out,
+                       "brightness": c.brightness, "contrast": c.contrast,
+                       "saturation": c.saturation, "lut": c.lut}
                       for c in self.clips],
             "audios": [{"path": a.path, "dur": a.dur, "start": a.start,
                         "volume": a.volume, "gap": bool(a.gap)}
@@ -981,10 +1084,16 @@ class Project:
         raw_xd = raw.get("xfade_dur")
         xfade_dur = None if raw_xd is None else min(
             XFADE_MAX, max(XFADE_MIN, _doc_num(raw_xd, 0.3)))
+        raw_lut = raw.get("lut")
+        lut = raw_lut if isinstance(raw_lut, str) else ""
         return Clip(path, dur, kind,
                     bool(raw.get("fade", False)),
                     bool(raw.get("xfade", False)) or bool(name),
-                    src_in, src_out, name, xfade_dur)
+                    src_in, src_out, name, xfade_dur,
+                    _doc_num(raw.get("brightness"), 0.0),
+                    _doc_num(raw.get("contrast"), 1.0),
+                    _doc_num(raw.get("saturation"), 1.0),
+                    lut)
 
     @staticmethod
     def _overlay_from_doc(raw) -> "Overlay | None":
@@ -1028,6 +1137,7 @@ class Project:
         """工程里登记了、磁盘上已经不在了的素材（按出现顺序，去重）。"""
         out: list[str] = []
         for path in ([c.path for c in self.clips]
+                     + [c.lut for c in self.clips]
                      + [o.path for o in self.overlays]
                      + [a.path for a in self.audios]):
             if path and path not in out and not os.path.exists(path):
@@ -1042,6 +1152,9 @@ class Project:
         for clip in self.clips:
             if clip.path == old:
                 clip.path = new
+                n += 1
+            if clip.lut == old:
+                clip.lut = new
                 n += 1
         for overlay in self.overlays:
             if overlay.path == old:
@@ -1970,6 +2083,9 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
             parts.append(f"[bgz{i}][fgz{i}]overlay=(W-w)/2:(H-h)/2[s{i}]")
         chain = (f"[s{i}]setsar=1,fps={fps},format=yuv420p,"
                  f"trim=start_frame=0:end_frame={nf},setpts=PTS-STARTPTS")
+        if clips and i < len(clips) and clips[i].has_color:
+            # 调色接在缩放 / 铺底之后：整段连背景一起调，跟看到的一致
+            chain += clips[i].color_chain()
         if (motion in MOTIONS and motion != "none" and nf > 1
                 and not video_flags[i]):
             chain = _motion_chain(chain, motion, i, nf, w, h, fps,
@@ -2139,6 +2255,10 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
     if bad:
         raise RenderError(tr("这张图片读不出来：{name}",
                              name=os.path.basename(bad[0])))
+    for c in clips:
+        if c.lut and not os.path.exists(c.lut):
+            raise RenderError(tr("调色用的 LUT 不在了：{name}",
+                                 name=os.path.basename(c.lut)))
     short = xfade_short(clips, counts, fps, xfade_sec)
     if short:
         raise RenderError(xfade_error_text(short))
@@ -2261,7 +2381,7 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
         os.close(fd)
         with open(graph_file, "w", encoding="utf-8", newline="\n") as f:
             f.write(graph)
-        cmd += ["-filter_complex_script", graph_file]
+        cmd += [graph_file_option(), graph_file]
     else:
         cmd += ["-filter_complex", graph]
 
@@ -2486,7 +2606,8 @@ def run_gui() -> int:
         QFormLayout, QFrame, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit,
         QListWidget,
         QListWidgetItem, QMainWindow, QMenu, QProgressBar,
-        QPlainTextEdit, QPushButton, QRadioButton, QSizePolicy, QSpinBox,
+        QPlainTextEdit, QPushButton, QRadioButton, QSizePolicy, QSlider,
+        QSpinBox,
         QTextEdit,
         QSplitter, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget)
     from bili_audio import BiliError, bili_audio
@@ -3075,6 +3196,110 @@ def run_gui() -> int:
                 return None
             out = dlg.overlay()
             return out if out.path else None
+
+    class ColorDialog(FramelessDialog):
+        """一段素材的调色：亮度 / 对比度 / 饱和度三个滑杆 + 一个 .cube LUT。
+
+        滑杆用整数：亮度 -100..100（除以 100 就是 -1..1），对比度 0..200、
+        饱和度 0..300（除以 100 就是 0..2 / 0..3）。
+        """
+
+        def __init__(self, parent, clip: Clip, lut_dir: str = ""):
+            super().__init__(parent, tr("调色"))
+            self.setMinimumWidth(470)
+
+            self._bright = QSlider(Qt.Orientation.Horizontal)
+            self._bright.setRange(-100, 100)
+            self._contrast = QSlider(Qt.Orientation.Horizontal)
+            self._contrast.setRange(0, 200)
+            self._sat = QSlider(Qt.Orientation.Horizontal)
+            self._sat.setRange(0, 300)
+            self._lbl_b = QLabel()
+            self._lbl_c = QLabel()
+            self._lbl_s = QLabel()
+            for lbl in (self._lbl_b, self._lbl_c, self._lbl_s):
+                lbl.setObjectName("hint")
+                lbl.setMinimumWidth(52)
+
+            form = QFormLayout()
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+            form.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            form.addRow(tr("亮度"), self._slider_row(self._bright, self._lbl_b))
+            form.addRow(tr("对比度"),
+                         self._slider_row(self._contrast, self._lbl_c))
+            form.addRow(tr("饱和度"), self._slider_row(self._sat, self._lbl_s))
+            self.cmb_lut = QComboBox()
+            self.cmb_lut.addItem(tr("不用"), "")
+            luts = list_luts(lut_dir)
+            for path in luts:
+                self.cmb_lut.addItem(os.path.basename(path), path)
+            if clip.lut and clip.lut not in luts:
+                self.cmb_lut.addItem(
+                    tr("{name}（不在目录里）", name=os.path.basename(clip.lut)),
+                    clip.lut)
+            form.addRow(tr("LUT"), self.cmb_lut)
+            self.body.addLayout(form)
+
+            hint = QLabel(tr("调色只作用在这一段上：先调亮度/对比度/饱和度，"
+                             "再套 LUT。LUT 是 .cube 文件，目录在设置里指定。"))
+            hint.setWordWrap(True)
+            hint.setObjectName("hint")
+            self.body.addWidget(hint)
+
+            row = QHBoxLayout()
+            reset = QPushButton(tr("重置"))
+            reset.clicked.connect(self.reset)
+            row.addWidget(reset)
+            row.addStretch(1)
+            ok = QPushButton(tr("好了"))
+            ok.setDefault(True)
+            ok.clicked.connect(self.accept)
+            cancel = QPushButton(tr("取消"))
+            cancel.clicked.connect(self.reject)
+            row.addWidget(ok)
+            row.addWidget(cancel)
+            self.body.addLayout(row)
+
+            self._bright.setValue(int(round(clip.brightness * 100)))
+            self._contrast.setValue(int(round(clip.contrast * 100)))
+            self._sat.setValue(int(round(clip.saturation * 100)))
+            idx = self.cmb_lut.findData(clip.lut)
+            self.cmb_lut.setCurrentIndex(max(0, idx))
+            self._sync()
+
+        @staticmethod
+        def _slider_row(slider, label) -> QWidget:
+            wrap = QWidget()
+            row = QHBoxLayout(wrap)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(slider, 1)
+            row.addWidget(label)
+            return wrap
+
+        def _sync(self, *_a):
+            self._lbl_b.setText("%+.2f" % (self._bright.value() / 100.0))
+            self._lbl_c.setText("%.2f" % (self._contrast.value() / 100.0))
+            self._lbl_s.setText("%.2f" % (self._sat.value() / 100.0))
+
+        def reset(self):
+            self._bright.setValue(0)
+            self._contrast.setValue(100)
+            self._sat.setValue(100)
+            self.cmb_lut.setCurrentIndex(0)
+
+        def values(self) -> tuple[float, float, float, str]:
+            return (self._bright.value() / 100.0,
+                    self._contrast.value() / 100.0,
+                    self._sat.value() / 100.0,
+                    self.cmb_lut.currentData() or "")
+
+        @classmethod
+        def get_values(cls, parent, clip: Clip, lut_dir: str = ""):
+            dlg = cls(parent, clip, lut_dir)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return None
+            return dlg.values()
 
     class NumberDialog(FramelessDialog):
         """要一个数字的输入框（改每张图显示多久用）。"""
@@ -4237,6 +4462,19 @@ def run_gui() -> int:
                 max(0, list(CROP_FOCUS).index(settings["crop_focus"])))
             add_row("裁切位置", self.cmb_crop, pro=True)
 
+            self.edit_lut = QLineEdit(settings["lut_dir"])
+            self.edit_lut.setPlaceholderText(
+                tr("放着 .cube 文件的目录（右键「调色…」时从这个目录里列）"))
+            btn_lut = QPushButton(tr("浏览…"))
+            btn_lut.clicked.connect(self._browse_lut)
+            row_lut = QHBoxLayout()
+            row_lut.setContentsMargins(0, 0, 0, 0)
+            row_lut.addWidget(self.edit_lut, 1)
+            row_lut.addWidget(btn_lut)
+            wrap_lut = QWidget()
+            wrap_lut.setLayout(row_lut)
+            add_row("LUT 目录", wrap_lut, pro=True)
+
             self.cmb_sub_font = QFontComboBox()
             self.cmb_sub_font.setCurrentFont(QFont(str(settings["subtitle_font"])))
             self.cmb_sub_font.setToolTip(
@@ -4527,6 +4765,12 @@ def run_gui() -> int:
             if picked:
                 self.edit_bg.setText(picked[0])
 
+        def _browse_lut(self):
+            picked = FileDialog.get_dir(
+                self, tr("选 LUT 目录"), self.edit_lut.text().strip() or "")
+            if picked:
+                self.edit_lut.setText(picked)
+
         def _sync_trans(self, *_a):
             self.spin_trans.setEnabled(self.cmb_trans.currentData() == "fade")
 
@@ -4628,6 +4872,7 @@ def run_gui() -> int:
                 width=even(self.spin_w.value()),
                 height=even(self.spin_h.value()),
                 bg_path=self.edit_bg.text().strip(),
+                lut_dir=self.edit_lut.text().strip(),
                 pad_color=self._color,
                 bg_blur=bool(self.chk_bg_blur.isChecked()),
                 fps=int(self.cmb_fps.currentText()),
@@ -6160,6 +6405,9 @@ def run_gui() -> int:
                 act.setChecked(bool(fades) and all(fades))
                 act.triggered.connect(
                     lambda _c=False, t=targets: self.on_toggle_fade(t))
+                col = m.addAction(tr("调色…"))
+                col.triggered.connect(
+                    lambda _c=False, t=targets: self.on_edit_color(t))
                 xm = m.addMenu(tr("转场"))
                 cur_names = [self.project.clips[i].xfade_name
                              for i in targets
@@ -6251,6 +6499,23 @@ def run_gui() -> int:
                 self.project.clips[i].fade = want
             self._refresh_all()
             self._history_push(tr("淡入淡出"))
+
+        def on_edit_color(self, rows):
+            """给选中的画面元素调色（多选时一次用同一套参数）。"""
+            rows = [i for i in rows if 0 <= i < len(self.project.clips)]
+            if not rows:
+                return
+            vals = ColorDialog.get_values(self, self.project.clips[rows[0]],
+                                          self.settings["lut_dir"])
+            if vals is None:
+                return
+            b, c, s, lut = vals
+            for i in rows:
+                clip = self.project.clips[i]
+                clip.brightness, clip.contrast = b, c
+                clip.saturation, clip.lut = s, lut
+            self._refresh_all()
+            self._history_push(tr("调色"))
 
         def on_set_transition(self, rows, name):
             """给选中的画面元素挑转场；name 空 = 硬切。"""

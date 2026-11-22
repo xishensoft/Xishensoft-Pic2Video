@@ -2505,3 +2505,37 @@ _TR_EXTRA33 = {
 for _k, _trs in _TR_EXTRA33.items():
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
         TR[_lang].setdefault(_k, _v)
+
+
+_TR_EXTRA34 = {
+    "调色": ("調色", "Color", "色調整", "색 보정"),
+    "调色…": ("調色…", "Color…", "色調整…", "색 보정…"),
+    "亮度": ("亮度", "Brightness", "明るさ", "밝기"),
+    "对比度": ("對比度", "Contrast", "コントラスト", "대비"),
+    "饱和度": ("飽和度", "Saturation", "彩度", "채도"),
+    "重置": ("重設", "Reset", "リセット", "초기화"),
+    "不用": ("不用", "None", "使わない", "사용 안 함"),
+    "LUT": ("LUT", "LUT", "LUT", "LUT"),
+    "LUT 目录": ("LUT 資料夾", "LUT folder", "LUT フォルダー", "LUT 폴더"),
+    "选 LUT 目录": ("選 LUT 資料夾", "Pick a LUT folder", "LUT フォルダーを選ぶ",
+                "LUT 폴더 선택"),
+    "放着 .cube 文件的目录（右键「调色…」时从这个目录里列）": (
+        "放著 .cube 檔案的資料夾（右鍵「調色…」時從這個資料夾列出）",
+        "Folder holding .cube files (listed in the right-click Color… dialog)",
+        ".cube ファイルを置くフォルダー（右クリック「色調整…」で一覧表示）",
+        ".cube 파일을 넣어 둘 폴더(오른쪽 클릭 '색 보정…'에서 목록 표시)"),
+    "{name}（不在目录里）": ("{name}（不在資料夾裡）", "{name} (not in folder)",
+                        "{name}（フォルダーにありません）", "{name}(폴더에 없음)"),
+    "调色只作用在这一段上：先调亮度/对比度/饱和度，再套 LUT。LUT 是 .cube 文件，目录在设置里指定。": (
+        "調色只作用在這一段上：先調亮度/對比度/飽和度，再套 LUT。LUT 是 .cube 檔案，資料夾在設定裡指定。",
+        "Color affects this clip only: brightness/contrast/saturation first, then the LUT. LUTs are .cube files; pick their folder in settings.",
+        "色調整はこの区間だけに効きます：明るさ/コントラスト/彩度を整えてから LUT を当てます。LUT は .cube ファイルで、フォルダーは設定で指定します。",
+        "색 보정은 이 구간에만 적용됩니다: 밝기/대비/채도를 먼저 맞추고 LUT를 입힙니다. LUT는 .cube 파일이며 폴더는 설정에서 지정합니다."),
+    "调色用的 LUT 不在了：{name}": (
+        "調色用的 LUT 不見了：{name}", "The LUT used for color is gone: {name}",
+        "色調整に使う LUT が見つかりません：{name}",
+        "색 보정에 쓰는 LUT가 없습니다: {name}"),
+}
+for _k, _trs in _TR_EXTRA34.items():
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
+        TR[_lang].setdefault(_k, _v)
