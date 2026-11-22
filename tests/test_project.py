@@ -1807,6 +1807,182 @@ else:
     _unknown = [n for n in p.XFADE_NAMES if n not in _probe.stdout]
     check("ffmpeg 认这 12 个名字", not _unknown, (_unknown, _probe.stderr[-120:]))
 
+# ---------------- 53 导出预设与封面
+check("导出预设正好 5 项", len(p.EXPORT_PRESETS) == 5, list(p.EXPORT_PRESETS))
+check("预设顺序表覆盖全部", set(p.EXPORT_PRESET_ORDER) == set(p.EXPORT_PRESETS)
+      and len(p.EXPORT_PRESET_ORDER) == 5)
+check("每项都有名字和后缀字段",
+      all({"label", "w", "h", "fps", "crf", "ab", "suffix"} <= set(v)
+          for v in p.EXPORT_PRESETS.values()))
+check("通用档不含任何固定值", all(p.EXPORT_PRESETS["generic"][k] is None
+                           for k in ("w", "h", "fps", "crf", "ab")))
+_plat = [k for k in p.EXPORT_PRESETS if k != "generic"]
+check("平台档都有后缀", all(p.EXPORT_PRESETS[k]["suffix"] for k in _plat))
+check("宽高要么都有、要么都没有",
+      all((p.EXPORT_PRESETS[k]["w"] is None)
+          == (p.EXPORT_PRESETS[k]["h"] is None) for k in p.EXPORT_PRESETS))
+_odd = []
+for _k in _plat:
+    _spec = p.EXPORT_PRESETS[_k]
+    if _spec["w"] % 2 or _spec["h"] % 2:
+        _odd.append((_k, "尺寸不是偶数", _spec["w"], _spec["h"]))
+    if _spec["fps"] not in p.EXPORT_FPS:
+        _odd.append((_k, "帧率", _spec["fps"]))
+    if not 0 <= _spec["crf"] <= 51:
+        _odd.append((_k, "crf", _spec["crf"]))
+    if not (isinstance(_spec["ab"], str) and _spec["ab"].endswith("k")
+            and _spec["ab"][:-1].isdigit()):
+        _odd.append((_k, "音频码率", _spec["ab"]))
+check("预设表自洽（偶数尺寸 / 帧率 / CRF / 码率）", not _odd, _odd)
+check("预设音频码率都在下拉选项里",
+      all(p.EXPORT_PRESETS[k]["ab"] in p.EXPORT_AUDIO_RATES for k in _plat))
+
+_base = dict(w=1280, h=720, fps=30, crf=23, ab="160k")
+_plan_b = p.export_plan("bilibili", _base)
+check("B 站预设：1080p60 / CRF18 / 192k",
+      (_plan_b["w"], _plan_b["h"], _plan_b["fps"], _plan_b["crf"],
+       _plan_b["ab"]) == (1920, 1080, 60, 18, "192k"), _plan_b)
+check("B 站预设带文件名后缀", _plan_b["suffix"] == "_bilibili", _plan_b["suffix"])
+_plan_d = p.export_plan("douyin", _base)
+check("抖音预设：竖屏 1080×1920@30", (_plan_d["w"], _plan_d["h"],
+                                  _plan_d["fps"]) == (1080, 1920, 30), _plan_d)
+_plan_g = p.export_plan("generic", _base)
+check("通用档沿用设置里的值", (_plan_g["w"], _plan_g["h"], _plan_g["fps"],
+                        _plan_g["crf"], _plan_g["ab"], _plan_g["suffix"])
+      == (1280, 720, 30, 23, "160k", ""), _plan_g)
+_plan_n = p.export_plan("没这个预设", _base)
+check("不认识的预设退回通用", _plan_n["preset"] == "generic"
+      and (_plan_n["w"], _plan_n["h"]) == (1280, 720), _plan_n)
+_plan_e = p.export_plan("generic", dict(w=1281, h=721))
+check("宽高自动取偶数", (_plan_e["w"] % 2, _plan_e["h"] % 2) == (0, 0), _plan_e)
+_plan_dflt = p.export_plan("generic")
+check("不给基准值就用默认", (_plan_dflt["w"], _plan_dflt["h"]) == (1920, 1080)
+      and _plan_dflt["fps"] in p.EXPORT_FPS, _plan_dflt)
+
+check("封面时间夹在 [0,0]（没时长就是 0）", p.clamp_cover_time(5, 0) == 0.0)
+check("封面时间为负取 0", p.clamp_cover_time(-3, 10) == 0.0)
+check("封面时间超过总长取总长", p.clamp_cover_time(99, 10) == 10.0)
+check("封面时间在范围内原样保留", p.clamp_cover_time(4.2, 10) == 4.2)
+check("封面时间坏值当 0", p.clamp_cover_time("abc", 10) == 0.0)
+check("封面时间 NaN 当 0", p.clamp_cover_time(float("nan"), 10) == 0.0)
+
+check("帧率没变就不用换算", p.rescale_counts([60, 60], 30, 30) == [60, 60])
+check("30 换 60 帧数翻倍", p.rescale_counts([90, 30], 30, 60) == [180, 60])
+check("60 换 30 帧数减半", p.rescale_counts([180, 60], 60, 30) == [90, 30])
+check("空时间线还是空的", p.rescale_counts([], 30, 60) == [])
+check("极短的段至少留一帧", p.rescale_counts([1], 60, 30) == [1])
+_nc = p.rescale_counts([90, 90], 30, 60)
+check("换帧率后总秒数不变",
+      abs(sum(_nc) / 60.0 - 180 / 30.0) < 0.05, (sum(_nc) / 60.0))
+check("导出时按预设帧率换算帧数",
+      "rescale_counts(self.project.frame_counts()" in _src)
+
+_cimg = [p.Clip(IMG[0], 3.0, "image")]
+check("封面默认取第一张图正中", p.cover_default_time(_cimg, [90], 30) == 1.5,
+      p.cover_default_time(_cimg, [90], 30))
+_c2 = [p.Clip(IMG[0], 2.0, "image"), p.Clip(IMG[1], 2.0, "image")]
+check("两张图：封面落第一张正中", p.cover_default_time(_c2, [60, 60], 30) == 1.0,
+      p.cover_default_time(_c2, [60, 60], 30))
+_c2x = [p.Clip(IMG[0], 2.0, "image", xfade=True, xfade_name="fade"),
+        p.Clip(IMG[1], 2.0, "image", xfade=True, xfade_name="fade")]
+check("有转场时按挤短的段算中点",
+      abs(p.cover_default_time(_c2x, [60, 60], 30, 0.6) - 0.85) < 1e-6,
+      p.cover_default_time(_c2x, [60, 60], 30, 0.6))
+_cintro = [p.Clip(IMG[0], 5.0, "intro"), p.Clip(IMG[1], 2.0, "image")]
+check("有片头时跳过片头取图片段中点",
+      abs(p.cover_default_time(_cintro, [150, 60], 30) - 6.0) < 1e-6,
+      p.cover_default_time(_cintro, [150, 60], 30))
+check("没有素材返回 0", p.cover_default_time([], [], 30) == 0.0)
+
+check("码率估算是个正数", p.estimate_kbps(_plan_b) > 0, p.estimate_kbps(_plan_b))
+check("CRF 越小估的码率越高",
+      p.estimate_kbps(dict(_plan_b, crf=18))
+      > p.estimate_kbps(dict(_plan_b, crf=28)))
+check("分辨率越大估的码率越高",
+      p.estimate_kbps(dict(_plan_b, w=3840, h=2160))
+      > p.estimate_kbps(dict(_plan_b, w=1280, h=720)))
+
+_pj = p.Project()
+_pj.clips = [p.Clip(IMG[0], 3.0)]
+_pj.export_preset = "douyin"
+_doc_p = _pj.to_doc()
+check("工程里存了导出预设", _doc_p.get("export_preset") == "douyin", _doc_p.get("export_preset"))
+check("预设能原样读回", p.Project.from_doc(_doc_p).export_preset == "douyin")
+_old_pj = p.Project.from_doc({"version": 1, "clips": []})
+check("老工程缺预设 = 通用", _old_pj.export_preset == "generic")
+check("不认识的预设读回算通用", p.Project.from_doc(
+    {"version": 1, "clips": [], "export_preset": "nope"}).export_preset == "generic")
+check("预设能过 JSON", json.loads(json.dumps(_doc_p))["export_preset"] == "douyin")
+
+_st = p.Settings(os.path.join(tmp, "settings_defaults.json"))
+check("设置默认记住通用预设", _st["export_preset"] == "generic")
+check("设置默认不导封面", _st["cover_export"] is False)
+check("设置默认封面时间自动", _st["cover_at"] == -1.0)
+_st.data["export_preset"] = "taobao"
+_st.data["cover_export"] = "yes"
+_st.data["cover_at"] = "??? "
+_st._sanitize()
+check("坏预设洗回通用", _st["export_preset"] == "generic")
+check("坏封面开关洗成 False", _st["cover_export"] is False)
+check("坏封面时间洗成自动", _st["cover_at"] == -1.0)
+_st.data["cover_at"] = 3.5
+_st._sanitize()
+check("封面时间原样保留", _st["cover_at"] == 3.5)
+
+check("导出框是个对话框类", "class ExportDialog(FramelessDialog)" in _src)
+check("导出走预设合并", "ExportDialog.get_plan(" in _src
+      and 'plan["suffix"]' in _src and 'opts.update(w=plan["w"]' in _src)
+check("封面在导出成功后截", "def _write_cover" in _src
+      and "grab_cover(video_path, out" in _src)
+check("render 能改音频码率", 'ab="192k"' in _src
+      and '"-b:a", (ab if isinstance(ab, str) and ab else "192k")' in _src)
+check("记住上次预设与封面开关", '"export_preset"] = plan["preset"]' in _src
+      and 'self.settings["cover_export"] = bool(plan.get("cover"))' in _src)
+
+_keys31 = (list(p.EXPORT_PRESETS[k]["label"] for k in p.EXPORT_PRESETS)
+           + ["导出", "自定义", "平台预设", "分辨率", "帧率", "画质（CRF）",
+              "音频码率", "同时导出封面（同名 .jpg）", "封面时间点",
+              "封面没截出来", "封面截不出来：{msg}", "成片不在，封面截不出来",
+              "（封面：{name}）"])
+_miss31 = [(lang, k) for lang, tbl in _i18n.items()
+           for k in _keys31 if k not in tbl]
+check("导出预设词条四语齐全", bool(_i18n) and not _miss31, _miss31[:5])
+
+if p.missing_tools():
+    print("  (没 ffmpeg，跳过封面与音频码率实测)")
+else:
+    _out_ab = os.path.join(tmp, "ab_96k.mp4")
+    p.render([p.Clip(IMG[0], 1.0)], [30], TONE, _out_ab, w=320, h=180,
+             fps=30, crf=30, ab="96k")
+    _pr = subprocess.run(
+        [p.FFPROBE, "-v", "error", "-select_streams", "a:0",
+         "-show_entries", "stream=bit_rate", "-of", "csv=p=0", _out_ab],
+        capture_output=True, text=True)
+    try:
+        _ab_real = int((_pr.stdout or "0").strip().split(",")[0])
+    except ValueError:
+        _ab_real = 0
+    check("音频码率按预设落进成片", 80000 <= _ab_real <= 120000,
+          (_pr.stdout, _pr.stderr[-160:]))
+    _cover_out = os.path.join(tmp, "cover.jpg")
+    p.grab_cover(_out_ab, _cover_out, 0.2, 1.0)
+    check("封面图生成了", os.path.exists(_cover_out)
+          and os.path.getsize(_cover_out) > 500,
+          os.path.getsize(_cover_out) if os.path.exists(_cover_out) else -1)
+    _pc = subprocess.run(
+        [p.FFPROBE, "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0", _cover_out],
+        capture_output=True, text=True)
+    check("封面就是成片那一帧的尺寸", "320,180" in (_pc.stdout or ""),
+          _pc.stdout.strip())
+
+try:
+    p.grab_cover(os.path.join(tmp, "nope.mp4"),
+                 os.path.join(tmp, "nope.jpg"), 0.0)
+    check("成片不在时封面要报错", False)
+except p.RenderError as _exc:
+    check("成片不在时封面要报错", "成片不在" in str(_exc), str(_exc))
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

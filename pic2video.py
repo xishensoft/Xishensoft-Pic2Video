@@ -289,6 +289,119 @@ def is_hex_color(value: str) -> bool:
             and all(c in "0123456789abcdefABCDEF" for c in value[1:]))
 
 
+# ---------------------------------------------------------------- 导出预设
+# 平台规格表：宽高、帧率、CRF、音频码率、文件名后缀。
+# 值是 None 的项表示「沿用设置里的当前值」——「通用」那一项全是 None。
+EXPORT_PRESETS = {
+    "generic": {"label": "通用（沿用设置）", "w": None, "h": None,
+                "fps": None, "crf": None, "ab": None, "suffix": ""},
+    "bilibili": {"label": "B 站 1080p60", "w": 1920, "h": 1080,
+                 "fps": 60, "crf": 18, "ab": "192k", "suffix": "_bilibili"},
+    "douyin": {"label": "抖音 1080×1920", "w": 1080, "h": 1920,
+               "fps": 30, "crf": 20, "ab": "128k", "suffix": "_douyin"},
+    "channels": {"label": "视频号 1080p30", "w": 1920, "h": 1080,
+                 "fps": 30, "crf": 20, "ab": "128k", "suffix": "_channels"},
+    "youtube": {"label": "YouTube 1080p30", "w": 1920, "h": 1080,
+                "fps": 30, "crf": 20, "ab": "192k", "suffix": "_youtube"},
+}
+EXPORT_PRESET_ORDER = ("generic", "bilibili", "douyin", "channels", "youtube")
+EXPORT_AUDIO_RATES = ("96k", "128k", "160k", "192k", "256k")
+EXPORT_FPS = (30, 60)
+
+
+def export_plan(name: str, base: dict | None = None) -> dict:
+    """把平台预设和「通用」那套设置合并成一次导出实际要用的参数。
+
+    base 是通用档的取值（w / h / fps / crf / ab），界面上就是设置里的值；
+    不传就照软件默认值。宽高一律取偶数（yuv420p 的要求）。
+    """
+    base = base or {}
+    key = name if name in EXPORT_PRESETS else "generic"
+    spec = EXPORT_PRESETS[key]
+
+    def pick(field, default):
+        value = spec[field]
+        return default if value is None else value
+
+    def num(value, lo, hi, default):
+        try:
+            return int(min(hi, max(lo, int(round(float(value))))))
+        except (TypeError, ValueError):
+            return default
+
+    w = even(num(pick("w", base.get("w", WIDTH)), 16, 4096, WIDTH))
+    h = even(num(pick("h", base.get("h", HEIGHT)), 16, 4096, HEIGHT))
+    fps = 60 if num(pick("fps", base.get("fps", FPS)), 1, 120, FPS) >= 50 else 30
+    crf = num(pick("crf", base.get("crf", 20)), 0, 51, 20)
+    ab = str(pick("ab", base.get("ab", "192k")) or "192k")
+    return {"preset": key, "label": spec["label"], "w": w, "h": h,
+            "fps": fps, "crf": crf, "ab": ab, "suffix": spec["suffix"]}
+
+
+def estimate_kbps(plan: dict) -> int:
+    """按经验粗算视频码率（kbps），只在导出框里给个量级，不当准。"""
+    try:
+        w = int(plan["w"])
+        h = int(plan["h"])
+        fps = int(plan["fps"])
+        crf = int(plan["crf"])
+    except (KeyError, TypeError, ValueError):
+        return 0
+    # 以 1080p30 / CRF 20 ≈ 6 Mbps 为基准；CRF 每降 6 码率大约翻一倍
+    bpp = 6.0e6 / (1920.0 * 1080.0 * 30.0)
+    factor = 2.0 ** ((20 - crf) / 6.0)
+    return max(100, int(round(w * h * fps * bpp * factor / 1000.0 / 100.0)) * 100)
+
+
+def rescale_counts(counts, from_fps: int, to_fps: int) -> list[int]:
+    """按另一个帧率重算每段帧数；工程不动，成片时长不变。
+
+    导出预设会换帧率（B 站 60，其它 30），而时间线帧数是按设置里的帧率
+    存的；不换算成片就会变短或变长，所以渲染前先换一遍。
+    """
+    f = int(from_fps or 30)
+    t = int(to_fps or f)
+    if t == f:
+        return list(counts)
+    return [max(1, int(round(nf * t / float(f)))) for nf in counts]
+
+
+def clamp_cover_time(t, total) -> float:
+    """封面时间点夹在 [0, 成片总长]；坏值当 0。"""
+    try:
+        t = float(t)
+    except (TypeError, ValueError):
+        t = 0.0
+    try:
+        total = float(total)
+    except (TypeError, ValueError):
+        total = 0.0
+    if total <= 0 or t != t:      # 没时长 / NaN
+        return 0.0
+    return min(max(0.0, t), total)
+
+
+def cover_default_time(clips, counts, fps: int, xfade_sec: float = 0.3) -> float:
+    """封面默认时间点：第一张图片段在成片时间轴上的正中。
+
+    时间线算法跟 render() 里一致（交叉淡化把边界挤掉一块）。
+    """
+    if not clips or not counts:
+        return 0.0
+    fps = float(fps) or 30.0
+    counts2, overlaps = _xfade_plan(clips, counts, int(fps), xfade_sec)
+    idx = next((i for i, c in enumerate(clips) if c.kind == "image"), 0)
+    acc = 0.0
+    for i in range(idx):
+        acc += counts2[i] / fps
+        if i < len(overlaps):
+            acc -= overlaps[i] / fps
+    seg = counts2[idx] / fps
+    if idx < len(overlaps):
+        seg -= overlaps[idx] / fps
+    return max(0.0, acc + max(0.05, seg) / 2.0)
+
+
 class Settings:
     """持久设置：存在脚本旁边的 settings.json，坏文件就退回默认值。
 
@@ -328,6 +441,9 @@ class Settings:
         "subtitle_size": 48,      # 字号（按成片像素算）
         "open_after_export": True,   # 导出完自动打开所在文件夹
         "ask_export_dir": True,      # 导出时先问保存到哪（关掉就直接用默认目录）
+        "export_preset": "generic",  # 上次用的平台预设（导出框默认选它）
+        "cover_export": False,       # 导出时顺便截一张封面
+        "cover_at": -1.0,            # 封面时间点；-1 = 第一张图片段正中间
         "win_w": 0,               # 窗口大小/位置，0 = 用默认
         "win_h": 0,
         "win_x": -1,
@@ -458,6 +574,16 @@ class Settings:
             d["open_after_export"] = True
         if not isinstance(d.get("ask_export_dir"), bool):
             d["ask_export_dir"] = True
+        if d.get("export_preset") not in EXPORT_PRESETS:
+            d["export_preset"] = "generic"
+        if not isinstance(d.get("cover_export"), bool):
+            d["cover_export"] = False
+        try:
+            d["cover_at"] = float(d.get("cover_at", -1.0))
+        except (TypeError, ValueError):
+            d["cover_at"] = -1.0
+        if d["cover_at"] < -1.0:
+            d["cover_at"] = -1.0
         if d.get("motion") not in MOTIONS:
             d["motion"] = "none"
         if d.get("crop_focus") not in CROP_FOCUS:
@@ -622,6 +748,7 @@ class Project:
         self.fps = int(fps)
         self.subtitles_path = ""      # 导入的字幕文件（工程里记着，方便重定位）
         self.cues: list[dict] = []    # 解析好的字幕条目，时间对齐成片总轴
+        self.export_preset = "generic"   # 上次选的导出预设（跟着工程存）
 
     # -- 背景音乐：还是挂在第一条音频上，命令行/设置都靠它 ---------------
     @property
@@ -691,6 +818,7 @@ class Project:
                        for a in self.audios],
             "subtitles": {"path": self.subtitles_path,
                           "cues": [dict(c) for c in self.cues]},
+            "export_preset": self.export_preset,
         }
 
     @classmethod
@@ -726,6 +854,8 @@ class Project:
         if not isinstance(sub_path, str):
             sub_path = ""
         new_cues = _clean_cues(raw_cues)
+        raw_preset = doc.get("export_preset")
+        preset = raw_preset if raw_preset in EXPORT_PRESETS else "generic"
         mode = doc.get("mode")
         self.clips = new_clips
         self.audios = new_audios
@@ -736,6 +866,7 @@ class Project:
         self.fps = 60 if _doc_num(doc.get("fps"), FPS) >= 50 else 30
         self.subtitles_path = sub_path
         self.cues = new_cues
+        self.export_preset = preset
 
     @staticmethod
     def _clip_from_doc(raw) -> Clip:
@@ -1597,6 +1728,28 @@ def xfade_error_text(items) -> str:
                it["need"]))
 
 
+def grab_cover(video_path: str, out_path: str, at: float,
+               total: float = 0.0) -> str:
+    """从成片里截一帧当封面（jpg），at 是成片时间轴的秒数。"""
+    if not video_path or not os.path.exists(video_path):
+        raise RenderError(tr("成片不在，封面截不出来"))
+    ss = clamp_cover_time(at, total) if total > 0 else max(0.0, _doc_num(at, 0.0))
+    if total > 0:
+        ss = min(ss, max(0.0, float(total) - 0.05))   # 正片最后一帧取不到，退一点
+    folder = os.path.dirname(os.path.abspath(out_path))
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    cmd = [FFMPEG, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+           "-ss", "%.3f" % ss, "-i", video_path, "-frames:v", "1",
+           "-q:v", "2", out_path]
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", stdin=subprocess.DEVNULL,
+                       creationflags=CREATION_NO_WINDOW)
+    if p.returncode != 0 or not os.path.exists(out_path):
+        raise RenderError(tr("封面截不出来：{msg}", msg=(p.stderr or "")[-200:]))
+    return out_path
+
+
 def _sec(value: float) -> str:
     """0 就写 0（跟老滤镜串一致），其余保留三位。"""
     return "0" if abs(value) < 5e-4 else f"{value:.3f}"
@@ -1841,7 +1994,7 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
            bg_blur=True, pad_color="#000000", bg_path="", motion="none",
            volume=1.0, crop_focus="center", music_start=0.0, xfade_sec=0.3,
            subtitles=None, subtitle_font="Microsoft YaHei",
-           subtitle_size=48, subtitle_fonts="",
+           subtitle_size=48, subtitle_fonts="", ab="192k",
            on_progress=None, proc_holder=None) -> str:
     """一条 filtergraph 渲完；on_progress(0..1) 回调。
 
@@ -1971,7 +2124,8 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
             "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
             "-pix_fmt", "yuv420p", "-color_range", "tv",
             "-profile:v", "high", "-r", str(fps),
-            "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+            "-c:a", "aac", "-b:a", (ab if isinstance(ab, str) and ab else "192k"),
+            "-ar", "48000", "-ac", "2",
             "-movflags", "+faststart", "-shortest", out_path]
 
     tail: list[str] = []
@@ -2472,6 +2626,184 @@ def run_gui() -> int:
                 [(yes, "danger" if danger else "primary"), (no, "plain")],
                 "ask")
             return picked == 0
+
+    class ExportDialog(FramelessDialog):
+        """导出前选规格：平台预设、临时改参数、要不要顺带截一张封面。"""
+
+        CUSTOM = "custom"
+
+        def __init__(self, parent, settings: Settings, total: float,
+                     cover_at: float):
+            super().__init__(parent, tr("导出"))
+            self.settings = settings
+            self.total = max(0.0, float(total or 0.0))
+            self._loading = False
+            self.setMinimumWidth(500)
+
+            self.cmb_preset = QComboBox()
+            for key in EXPORT_PRESET_ORDER:
+                self.cmb_preset.addItem(tr(EXPORT_PRESETS[key]["label"]), key)
+            self.cmb_preset.addItem(tr("自定义"), self.CUSTOM)
+
+            self.spin_w = QSpinBox()
+            self.spin_w.setRange(160, 4096)
+            self.spin_w.setSingleStep(2)
+            self.spin_w.setSuffix(tr(" 像素"))
+            self.spin_h = QSpinBox()
+            self.spin_h.setRange(160, 4096)
+            self.spin_h.setSingleStep(2)
+            self.spin_h.setSuffix(tr(" 像素"))
+            row_wh = QHBoxLayout()
+            row_wh.setContentsMargins(0, 0, 0, 0)
+            row_wh.addWidget(self.spin_w, 1)
+            row_wh.addWidget(QLabel("×"))
+            row_wh.addWidget(self.spin_h, 1)
+            wrap_wh = QWidget()
+            wrap_wh.setLayout(row_wh)
+
+            self.cmb_fps = QComboBox()
+            for value in EXPORT_FPS:
+                self.cmb_fps.addItem("%d fps" % value, value)
+            self.spin_crf = QSpinBox()
+            self.spin_crf.setRange(0, 51)
+            self.spin_crf.setToolTip(tr("数字越小越清晰、文件越大；常见 18～23"))
+            self.cmb_ab = QComboBox()
+            for rate in EXPORT_AUDIO_RATES:
+                self.cmb_ab.addItem(rate, rate)
+
+            form = QFormLayout()
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+            form.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            form.addRow(tr("平台预设"), self.cmb_preset)
+            form.addRow(tr("分辨率"), wrap_wh)
+            form.addRow(tr("帧率"), self.cmb_fps)
+            form.addRow(tr("画质（CRF）"), self.spin_crf)
+            form.addRow(tr("音频码率"), self.cmb_ab)
+            self.body.addLayout(form)
+
+            self.lbl_summary = QLabel("")
+            self.lbl_summary.setWordWrap(True)
+            self.lbl_summary.setObjectName("hint")
+            self.body.addWidget(self.lbl_summary)
+
+            self.chk_cover = QCheckBox(tr("同时导出封面（同名 .jpg）"))
+            self.body.addWidget(self.chk_cover)
+            self.spin_cover = QDoubleSpinBox()
+            self.spin_cover.setRange(0.0, max(0.1, self.total))
+            self.spin_cover.setDecimals(1)
+            self.spin_cover.setSingleStep(0.5)
+            self.spin_cover.setSuffix(tr(" 秒"))
+            row_cover = QHBoxLayout()
+            row_cover.setContentsMargins(0, 0, 0, 0)
+            row_cover.addWidget(QLabel(tr("封面时间点")))
+            row_cover.addWidget(self.spin_cover, 1)
+            wrap_cover = QWidget()
+            wrap_cover.setLayout(row_cover)
+            self.body.addWidget(wrap_cover)
+
+            row = QHBoxLayout()
+            row.addStretch(1)
+            ok = QPushButton(tr("导出"))
+            ok.setDefault(True)
+            ok.clicked.connect(self.accept)
+            cancel = QPushButton(tr("取消"))
+            cancel.clicked.connect(self.reject)
+            row.addWidget(ok)
+            row.addWidget(cancel)
+            self.body.addLayout(row)
+
+            self.cmb_preset.activated.connect(self._on_preset)
+            for widget in (self.spin_w, self.spin_h, self.spin_crf):
+                widget.valueChanged.connect(self._touch)
+            self.cmb_fps.currentIndexChanged.connect(self._touch)
+            self.cmb_ab.currentIndexChanged.connect(self._touch)
+            self.chk_cover.toggled.connect(self._on_cover_toggle)
+
+            self.chk_cover.setChecked(bool(settings["cover_export"]))
+            self.spin_cover.setValue(clamp_cover_time(cover_at, self.total)
+                                     if self.total > 0 else 0.0)
+            self.spin_cover.setEnabled(self.chk_cover.isChecked())
+            remembered = settings["export_preset"]
+            self._apply_preset(
+                remembered if remembered in EXPORT_PRESETS else "generic")
+
+        # -- 取值 ---------------------------------------------------------
+        def _base(self) -> dict:
+            s = self.settings
+            return dict(w=even(s["width"]), h=even(s["height"]),
+                        fps=int(s["fps"]), crf=s.crf(), ab="192k")
+
+        def _apply_preset(self, key: str):
+            """按预设填一遍控件；preset=generic 就用设置里的值。"""
+            self._loading = True
+            try:
+                plan = export_plan(key, self._base())
+                self.spin_w.setValue(plan["w"])
+                self.spin_h.setValue(plan["h"])
+                i = self.cmb_fps.findData(plan["fps"])
+                self.cmb_fps.setCurrentIndex(i if i >= 0 else 0)
+                self.spin_crf.setValue(plan["crf"])
+                j = self.cmb_ab.findData(plan["ab"])
+                self.cmb_ab.setCurrentIndex(j if j >= 0 else 3)
+                k = self.cmb_preset.findData(key)
+                self.cmb_preset.setCurrentIndex(k if k >= 0 else 0)
+            finally:
+                self._loading = False
+            self._refresh_summary()
+
+        def _on_preset(self, *_args):
+            key = self.cmb_preset.currentData()
+            if key and key != self.CUSTOM:
+                self._apply_preset(key)
+
+        def _touch(self, *_args):
+            """手改任何一项就变成「自定义」。"""
+            if self._loading:
+                return
+            self._loading = True
+            try:
+                idx = self.cmb_preset.findData(self.CUSTOM)
+                if idx >= 0:
+                    self.cmb_preset.setCurrentIndex(idx)
+            finally:
+                self._loading = False
+            self._refresh_summary()
+
+        def _on_cover_toggle(self, on: bool):
+            self.spin_cover.setEnabled(bool(on))
+
+        def _refresh_summary(self):
+            plan = self.plan()
+            mbps = estimate_kbps(plan) / 1000.0
+            self.lbl_summary.setText(tr(
+                "实际参数：{w}×{h} · {fps} fps · CRF {crf} · 音频 {ab}"
+                " · 视频码率约 {mbps} Mbps",
+                w=plan["w"], h=plan["h"], fps=plan["fps"],
+                crf=plan["crf"], ab=plan["ab"], mbps="%.1f" % mbps))
+
+        def plan(self) -> dict:
+            key = self.cmb_preset.currentData() or "generic"
+            plan = export_plan(
+                "generic" if key == self.CUSTOM else key,
+                dict(w=self.spin_w.value(), h=self.spin_h.value(),
+                     fps=self.cmb_fps.currentData(),
+                     crf=self.spin_crf.value(),
+                     ab=self.cmb_ab.currentData()))
+            if key == self.CUSTOM:
+                plan["preset"] = self.CUSTOM
+            plan["cover"] = bool(self.chk_cover.isChecked())
+            plan["cover_at"] = clamp_cover_time(self.spin_cover.value(),
+                                                self.total)
+            return plan
+
+        @classmethod
+        def get_plan(cls, parent, settings: Settings, total: float,
+                     cover_at: float):
+            dlg = cls(parent, settings, total, cover_at)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return None
+            return dlg.plan()
 
     class NumberDialog(FramelessDialog):
         """要一个数字的输入框（改每张图显示多久用）。"""
@@ -4026,6 +4358,7 @@ def run_gui() -> int:
             self._hist_lock = True     # 建界面时不要记步骤
             self.project_path = ""     # 当前工程文件；空 = 还没存过
             self._dirty = False        # 有没有没存的改动
+            self._cover_plan = None    # 这次导出要不要顺带截封面
             self.autosaver = AutoSaver(   # 崩溃/断电后救命的那份
                 os.path.join(components.data_dir(), "自动保存.p2v"), 15.0)
 
@@ -5754,19 +6087,47 @@ def run_gui() -> int:
             MsgBox.warn(self, tr("取音轨失败"), msg)
 
         # ---------------- 导出
+        def _export_total(self) -> float:
+            """成片总长（秒）：跟 render 里算总帧数的方式一致。"""
+            fps = max(1, int(self.settings["fps"]))
+            return sum(self.project.frame_counts()) / float(fps)
+
+        def _ask_export_plan(self):
+            """弹导出框；取消返回 None。"""
+            counts = self.project.frame_counts()
+            fps = int(self.settings["fps"])
+            default_at = cover_default_time(
+                self.project.clips, counts, fps,
+                float(self.settings["transition_sec"]))
+            remembered = float(self.settings["cover_at"])
+            at = default_at if remembered < 0 else remembered
+            return ExportDialog.get_plan(self, self.settings,
+                                         self._export_total(), at)
+
         def on_export(self):
             if not self.project.clips:
                 self.lbl_status.setText(tr("先加图片"))
                 return
             if self.worker is not None and self.worker.isRunning():
                 return
+            shot = bool(os.environ.get("PIC2VIDEO_SHOT"))   # 自动化测试绝不弹窗
+            if shot:
+                plan = export_plan("generic", dict(
+                    w=even(self.settings["width"]),
+                    h=even(self.settings["height"]),
+                    fps=int(self.settings["fps"]),
+                    crf=self.settings.crf(), ab="192k"))
+                plan.update(cover=False, cover_at=0.0)
+            else:
+                plan = self._ask_export_plan()
+                if plan is None:        # 点了取消
+                    return
             first_dir = os.path.dirname(self.project.clips[0].path) or os.getcwd()
             base_dir = (self.settings["export_dir"]
                         or self.settings["last_export_dir"] or first_dir)
             if not os.path.isdir(base_dir):
                 base_dir = first_dir
-            stem = "slideshow_" + time.strftime("%Y%m%d_%H%M")
-            shot = bool(os.environ.get("PIC2VIDEO_SHOT"))   # 自动化测试绝不弹窗
+            stem = "slideshow_" + time.strftime("%Y%m%d_%H%M") + plan["suffix"]
             out = os.environ.get("PIC2VIDEO_EXPORT_PATH") or ""
             if out:
                 pass
@@ -5779,6 +6140,7 @@ def run_gui() -> int:
                     os.path.join(base_dir, stem + ".mp4"),
                     tr("视频 (*.mp4)"))
                 if not out:
+                    self._cover_plan = None
                     return
             else:                       # 不问了，直接落到默认目录
                 out = os.path.join(base_dir, stem + ".mp4")
@@ -5789,15 +6151,35 @@ def run_gui() -> int:
             if not out.lower().endswith(".mp4"):
                 out += ".mp4"
             self.settings["last_export_dir"] = os.path.dirname(out) or base_dir
+            if plan["preset"] in EXPORT_PRESETS:
+                self.settings["export_preset"] = plan["preset"]
+            self.settings["cover_export"] = bool(plan.get("cover"))
+            self.settings["cover_at"] = float(plan.get("cover_at", -1.0))
             self.settings.save()
-            log("export start %s opts=%r" % (out, self._opts()))
+            opts = self._opts()
+            opts.update(w=plan["w"], h=plan["h"], fps=plan["fps"],
+                        crf=plan["crf"], ab=plan["ab"],
+                        subtitle_size=subtitle_px(
+                            int(self.settings["subtitle_size"]), plan["h"]))
+            counts = rescale_counts(self.project.frame_counts(),
+                                    int(self.project.fps), plan["fps"])
+            cover_total = sum(counts) / float(plan["fps"] or 30)
+            self._cover_plan = (dict(cover=True,
+                                     at=float(plan.get("cover_at", 0.0)),
+                                     total=cover_total)
+                                if plan.get("cover") else None)
+            if (plan["preset"] in EXPORT_PRESETS
+                    and self.project.export_preset != plan["preset"]):
+                self.project.export_preset = plan["preset"]
+                self._mark_dirty()
+            log("export start %s plan=%r" % (out, plan))
             if shot:
                 print("EXPORT_START:", out, flush=True)
             self._rendering(True, "export")
             self.lbl_status.setText(tr("正在导出…"))
             self.worker = RenderWorker(
-                list(self.project.clips), self.project.frame_counts(),
-                list(self.project.audios), out, opts=self._opts(),
+                list(self.project.clips), counts,
+                list(self.project.audios), out, opts=opts,
                 preview=False, parent=self)
             self.worker.progress.connect(self._on_render_progress)
             self.worker.ok.connect(self.on_export_ok)
@@ -5805,12 +6187,35 @@ def run_gui() -> int:
             self.worker.stopped.connect(self.on_render_stopped)
             self.worker.start()
 
+        def _write_cover(self, video_path: str) -> str:
+            """导出成功后按计划截封面；失败只提示，不搅乱这次导出。"""
+            info, self._cover_plan = self._cover_plan, None
+            if not info or not info.get("cover"):
+                return ""
+            out = os.path.splitext(video_path)[0] + ".jpg"
+            try:
+                return grab_cover(video_path, out, info.get("at", 0.0),
+                                  info.get("total", 0.0))
+            except RenderError as exc:
+                log("cover failed: %s" % exc)
+                if os.environ.get("PIC2VIDEO_SHOT"):
+                    print("COVER_FAILED:", exc, flush=True)
+                else:
+                    MsgBox.warn(self, tr("封面没截出来"), str(exc))
+                return ""
+
         def on_export_ok(self, path):
             log("export ok %s" % path)
+            cover = self._write_cover(path)
             self._rendering(False)
-            self.lbl_status.setText(tr("导出完成：{path}", path=path))
+            self.lbl_status.setText(
+                tr("导出完成：{path}", path=path)
+                + (tr("（封面：{name}）", name=os.path.basename(cover))
+                   if cover else ""))
             if os.environ.get("PIC2VIDEO_SHOT"):
                 print("EXPORT_OK:", path, flush=True)
+                if cover:
+                    print("COVER_OK:", cover, flush=True)
                 return
             if self.settings["open_after_export"]:
                 try:
@@ -5828,6 +6233,7 @@ def run_gui() -> int:
 
         def on_export_bad(self, msg):
             log("export failed: %s" % msg)
+            self._cover_plan = None
             self._rendering(False)
             self.lbl_status.setText(tr("导出失败"))
             if os.environ.get("PIC2VIDEO_SHOT"):

@@ -2309,3 +2309,105 @@ _TR_EXTRA30 = {
 for _k, _trs in _TR_EXTRA30.items():
     for _lang, _v in _trs.items():
         TR[_lang].setdefault(_k, _v)
+
+# 导出预设与封面（issue #6）
+_TR_EXTRA31 = {
+    '导出': {
+        'zh-TW': '匯出', 'en': 'Export',
+        'ja': '書き出し', 'ko': '내보내기',
+    },
+    '自定义': {
+        'zh-TW': '自訂', 'en': 'Custom',
+        'ja': 'カスタム', 'ko': '사용자 지정',
+    },
+    '平台预设': {
+        'zh-TW': '平台預設', 'en': 'Platform preset',
+        'ja': 'プラットフォーム別プリセット', 'ko': '플랫폼 프리셋',
+    },
+    '分辨率': {
+        'zh-TW': '解析度', 'en': 'Resolution',
+        'ja': '解像度', 'ko': '해상도',
+    },
+    '帧率': {
+        'zh-TW': '幀率', 'en': 'Frame rate',
+        'ja': 'フレームレート', 'ko': '프레임 레이트',
+    },
+    '画质（CRF）': {
+        'zh-TW': '畫質（CRF）', 'en': 'Quality (CRF)',
+        'ja': '画質（CRF）', 'ko': '화질(CRF)',
+    },
+    '音频码率': {
+        'zh-TW': '音訊位元率', 'en': 'Audio bitrate',
+        'ja': '音声ビットレート', 'ko': '오디오 비트레이트',
+    },
+    '数字越小越清晰、文件越大；常见 18～23': {
+        'zh-TW': '數字越小越清晰、檔案越大；常見 18～23',
+        'en': 'Lower is clearer and bigger; 18–23 is typical',
+        'ja': '小さいほど高画質・大容量。通常 18〜23',
+        'ko': '숫자가 작을수록 선명하고 용량이 큽니다. 보통 18~23',
+    },
+    ' 像素': {
+        'zh-TW': ' 像素', 'en': ' px',
+        'ja': ' px', 'ko': ' 픽셀',
+    },
+    '同时导出封面（同名 .jpg）': {
+        'zh-TW': '同時匯出封面（同名 .jpg）',
+        'en': 'Also export a cover (.jpg, same name)',
+        'ja': 'カバー画像も書き出す（同名 .jpg）',
+        'ko': '표지도 함께 내보내기(같은 이름 .jpg)',
+    },
+    '封面时间点': {
+        'zh-TW': '封面時間點', 'en': 'Cover time',
+        'ja': 'カバー画像の位置', 'ko': '표지 시점',
+    },
+    '实际参数：{w}×{h} · {fps} fps · CRF {crf} · 音频 {ab} · 视频码率约 {mbps} Mbps': {
+        'zh-TW': '實際參數：{w}×{h} · {fps} fps · CRF {crf} · 音訊 {ab} · 影片位元率約 {mbps} Mbps',
+        'en': 'Actual: {w}×{h} · {fps} fps · CRF {crf} · audio {ab} · video ≈ {mbps} Mbps',
+        'ja': '実際の設定：{w}×{h} · {fps} fps · CRF {crf} · 音声 {ab} · 映像 ≈ {mbps} Mbps',
+        'ko': '실제 설정: {w}×{h} · {fps} fps · CRF {crf} · 오디오 {ab} · 영상 ≈ {mbps} Mbps',
+    },
+    '（封面：{name}）': {
+        'zh-TW': '（封面：{name}）', 'en': ' (cover: {name})',
+        'ja': '（カバー：{name}）', 'ko': ' (표지: {name})',
+    },
+    '封面没截出来': {
+        'zh-TW': '封面沒截出來', 'en': 'Could not grab the cover',
+        'ja': 'カバー画像を書き出せませんでした', 'ko': '표지를 만들지 못했습니다',
+    },
+    '封面截不出来：{msg}': {
+        'zh-TW': '封面截不出來：{msg}',
+        'en': 'Could not grab the cover: {msg}',
+        'ja': 'カバー画像を書き出せません：{msg}',
+        'ko': '표지를 만들지 못했습니다: {msg}',
+    },
+    '成片不在，封面截不出来': {
+        'zh-TW': '成片不在，封面截不出來',
+        'en': 'The video is gone, so the cover cannot be grabbed',
+        'ja': '完成ファイルがないため、カバー画像を書き出せません',
+        'ko': '완성 파일이 없어 표지를 만들 수 없습니다',
+    },
+    '通用（沿用设置）': {
+        'zh-TW': '通用（沿用設定）', 'en': 'Generic (use current settings)',
+        'ja': '汎用（設定どおり）', 'ko': '일반(현재 설정 사용)',
+    },
+    'B 站 1080p60': {
+        'zh-TW': 'B 站 1080p60', 'en': 'Bilibili 1080p60',
+        'ja': 'Bilibili 1080p60', 'ko': 'Bilibili 1080p60',
+    },
+    '抖音 1080×1920': {
+        'zh-TW': '抖音 1080×1920', 'en': 'Douyin 1080×1920',
+        'ja': 'Douyin 1080×1920', 'ko': 'Douyin 1080×1920',
+    },
+    '视频号 1080p30': {
+        'zh-TW': '視頻號 1080p30', 'en': 'WeChat Channels 1080p30',
+        'ja': 'WeChat 視頻号 1080p30', 'ko': '위챗 채널 1080p30',
+    },
+    'YouTube 1080p30': {
+        'zh-TW': 'YouTube 1080p30', 'en': 'YouTube 1080p30',
+        'ja': 'YouTube 1080p30', 'ko': 'YouTube 1080p30',
+    },
+}
+
+for _k, _trs in _TR_EXTRA31.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)
