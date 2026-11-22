@@ -164,6 +164,8 @@ MOTIONS = ("none", "in", "out", "inout")          # 画面动效
 MOTION_LABELS = {"none": "静止", "in": "缓慢推近",
                  "out": "缓慢拉远", "inout": "交替推拉"}
 MOTION_AMOUNT = 0.06                              # 推拉幅度：放大 6%
+CROP_FOCUS = {"center": 0.5, "top": 0.0, "bottom": 1.0}   # 裁切铺满时留住哪一段
+CROP_LABELS = {"center": "居中", "top": "偏上", "bottom": "偏下"}
 
 
 # 界面语言的显示文案（内部值保持中文，只有显示时翻译）
@@ -225,6 +227,8 @@ class Settings:
         "theme": "auto",          # 外观：auto 跟随系统 / light / dark
         "accent": theme.DEFAULT_ACCENT,   # 主色（对撞色由它自动算）
         "motion": "none",         # 画面动效：none / in / out / inout
+        "music_volume": 1.0,      # 背景音乐音量倍数（0..2）
+        "crop_focus": "center",   # 裁切铺满时留中心 / 偏上 / 偏下
         "open_after_export": True,  # 导出完自动打开所在文件夹
         "win_w": 0,               # 窗口大小/位置，0 = 用默认
         "win_h": 0,
@@ -288,7 +292,8 @@ class Settings:
             d["fps"] = 60 if int(d.get("fps", 30)) >= 50 else 30
         except (TypeError, ValueError):
             d["fps"] = 30
-        for key, lo, hi in (("per_image", MIN_DUR, 3600.0),
+        for key, lo, hi in (("music_volume", 0.0, 2.0),
+                            ("per_image", MIN_DUR, 3600.0),
                             ("fade_in", 0.0, 10.0),
                             ("fade_out", 0.0, 30.0),
                             ("transition_sec", 0.0, 5.0)):
@@ -311,6 +316,8 @@ class Settings:
             d["open_after_export"] = True
         if d.get("motion") not in MOTIONS:
             d["motion"] = "none"
+        if d.get("crop_focus") not in CROP_FOCUS:
+            d["crop_focus"] = "center"
         for key, lo, hi in (("win_w", 0, 8000), ("win_h", 0, 8000),
                             ("win_x", -1, 8000), ("win_y", -1, 8000)):
             try:
@@ -498,6 +505,14 @@ def set_mode(project: Project, mode: str) -> None:
 
 # ---------------------------------------------------------------- 出片
 
+def crop_expr(w: int, h: int, focus: str = "center") -> str:
+    """裁切铺满时按 focus 决定纵向留住哪一段（人像常常要偏上）。"""
+    frac = CROP_FOCUS.get(focus, 0.5)
+    if frac == 0.5:
+        return f"crop={w}:{h}"
+    return f"crop={w}:{h}:(iw-{w})/2:(ih-{h})*{frac:.3f}"
+
+
 def _motion_chain(chain: str, motion: str, index: int, nf: int,
                   w: int, h: int, fps: int, amount: float) -> str:
     """在 [s{i}] 之后插一段 zoompan，做成缓慢推近/拉远（Ken Burns）。"""
@@ -523,7 +538,8 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
                 transition_sec: float = 0.3, bg_blur: bool = True,
                 pad_color: str = "#000000", bg_index: int | None = None,
                 audio_index: int | None = None, motion: str = "none",
-                motion_amount: float = MOTION_AMOUNT) -> str:
+                motion_amount: float = MOTION_AMOUNT, volume: float = 1.0,
+                crop_focus: str = "center") -> str:
     """一条 filtergraph：每图按帧数切片 → 拼接 → 音频裁到总长并淡入淡出。
 
     fit: own 原图铺底（bg_blur 决定模糊不模糊）/ color 纯色留白（pad_color）
@@ -531,6 +547,8 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
          / cover 裁切铺满
     transition: none 硬切；fade 每张首尾淡黑
     motion: none 静帧；in 缓慢推近；out 缓慢拉远；inout 一张推近一张拉远
+    volume: 背景音乐音量倍数（1.0 = 原样）
+    crop_focus: 裁切铺满时留住 center / top / bottom
     """
     K = len(counts)
     if audio_index is None:
@@ -545,7 +563,7 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
     parts = []
     if fit in BG_MODES and bg_index is not None:
         bg = (f"[{bg_index}:v]scale={w}:{h}:force_original_aspect_ratio=increase:"
-              f"in_range=full:out_range=tv,crop={w}:{h},setsar=1,"
+              f"in_range=full:out_range=tv,{crop_expr(w, h, crop_focus)},setsar=1,"
               f"fps={fps},format=yuv420p")
         if bg_blur:
             bg += ",gblur=sigma=40"
@@ -556,7 +574,7 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
         if fit == "cover":
             parts.append(
                 f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=increase:"
-                f"in_range=full:out_range=tv,crop={w}:{h}[s{i}]")
+                f"in_range=full:out_range=tv,{crop_expr(w, h, crop_focus)}[s{i}]")
         elif fit == "color":
             parts.append(
                 f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=decrease:"
@@ -574,7 +592,7 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
         else:  # own：这张图自己当背景（可选模糊）
             parts.append(f"[{i}:v]split=2[bg{i}][fg{i}]")
             bg = (f"[bg{i}]scale={w}:{h}:force_original_aspect_ratio=increase:"
-                  f"in_range=full:out_range=tv,crop={w}:{h}")
+                  f"in_range=full:out_range=tv,{crop_expr(w, h, crop_focus)}")
             if bg_blur:
                 bg += ",gblur=sigma=40,eq=brightness=-0.08"
             parts.append(bg + f"[bgz{i}]")
@@ -595,6 +613,8 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
     labels = "".join(f"[v{i}]" for i in range(K))
     parts.append(f"{labels}concat=n={K}:v=1:a=0[vout]")
     audio = f"[{audio_index}:a]atrim=0:{total:.3f},asetpts=N/SR/TB"
+    if abs(volume - 1.0) > 0.005:
+        audio += f",volume={max(0.0, float(volume)):.3f}"
     if fade_in > 0:
         audio += f",afade=t=in:st=0:d={fade_in:.3f}"
     fade = min(max(0.0, fade_out), max(0.0, total - 0.05))
@@ -608,7 +628,8 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
            crf=20, preset="veryfast", fps=FPS, fit="own", fade_in=FADE_IN,
            fade_out=FADE_OUT, transition="none", transition_sec=0.3,
            bg_blur=True, pad_color="#000000", bg_path="", motion="none",
-           on_progress=None, proc_holder=None) -> str:
+           volume=1.0, crop_focus="center", on_progress=None,
+           proc_holder=None) -> str:
     """一条 filtergraph 渲完；on_progress(0..1) 回调。
 
     proc_holder 给一个 dict 时，把 ffmpeg 进程塞进 proc_holder["proc"]，
@@ -632,7 +653,7 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
                         bg_blur=bg_blur, pad_color=pad_color,
                         bg_index=(len(counts) if add_bg else None),
                         audio_index=(len(counts) + (1 if add_bg else 0)),
-                        motion=motion)
+                        motion=motion, volume=volume, crop_focus=crop_focus)
     cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
            "-progress", "pipe:1", "-nostats"]
     for c, nf in zip(clips, counts):
@@ -744,6 +765,10 @@ def cli_export(argv: list[str]) -> int:
                     help=tr("图片转场：none 硬切 / fade 淡入淡出"))
     ap.add_argument("--motion", choices=list(MOTIONS), default="none",
                     help=tr("画面动效：none 静止 / in 缓慢推近 / out 缓慢拉远 / inout 交替"))
+    ap.add_argument("--crop-focus", choices=list(CROP_FOCUS), default="center",
+                    help=tr("裁切铺满时留住哪里：center 居中 / top 偏上 / bottom 偏下"))
+    ap.add_argument("--volume", type=int, default=100, metavar="0-200",
+                    help=tr("背景音乐音量百分比（默认 100）"))
     ap.add_argument("images", nargs="+")
     a = ap.parse_args(argv)
 
@@ -753,14 +778,17 @@ def cli_export(argv: list[str]) -> int:
     st.update(fps=a.fps, fit=FIT_LEGACY.get(a.fit, a.fit), ratio=a.ratio,
               width=a.width or pw, height=a.height or ph,
               transition=a.transition, bg_path=a.bg, pad_color=a.pad_color,
-              bg_blur=not a.no_bg_blur, motion=a.motion)
+              bg_blur=not a.no_bg_blur, motion=a.motion,
+              music_volume=max(0.0, min(2.0, a.volume / 100.0)),
+              crop_focus=a.crop_focus)
     w, h = st.size()
     opts = dict(w=w, h=h, fps=int(st["fps"]), fit=st["fit"], crf=st.crf(),
                 bg_blur=bool(st["bg_blur"]), pad_color=st["pad_color"],
                 bg_path=st["bg_path"],
                 transition=st["transition"],
                 transition_sec=float(st["transition_sec"]),
-                motion=st["motion"],
+                motion=st["motion"], volume=float(st["music_volume"]),
+                crop_focus=st["crop_focus"],
                 fade_in=float(st["fade_in"]), fade_out=float(st["fade_out"]))
 
     from bili_audio import BiliError
@@ -1407,6 +1435,20 @@ def run_gui() -> int:
             self.spin_fout.setValue(float(settings["fade_out"]))
             add_row("音乐淡出", self.spin_fout, pro=True)
 
+            self.cmb_crop = QComboBox()
+            for key in CROP_FOCUS:
+                self.cmb_crop.addItem(tr(CROP_LABELS[key]), key)
+            self.cmb_crop.setCurrentIndex(
+                max(0, list(CROP_FOCUS).index(settings["crop_focus"])))
+            add_row("裁切位置", self.cmb_crop, pro=True)
+
+            self.spin_vol = QSpinBox()
+            self.spin_vol.setRange(0, 200)
+            self.spin_vol.setSingleStep(5)
+            self.spin_vol.setSuffix("%")
+            self.spin_vol.setValue(int(round(float(settings["music_volume"]) * 100)))
+            add_row("音乐音量", self.spin_vol, pro=True)
+
             self.cmb_motion = QComboBox()
             for key in MOTIONS:
                 self.cmb_motion.addItem(tr(MOTION_LABELS[key]), key)
@@ -1613,6 +1655,8 @@ def run_gui() -> int:
                 fade_out=float(self.spin_fout.value()),
                 transition=self.cmb_trans.currentData(),
                 motion=self.cmb_motion.currentData(),
+                music_volume=float(self.spin_vol.value()) / 100.0,
+                crop_focus=self.cmb_crop.currentData(),
                 transition_sec=float(self.spin_trans.value()),
             )
             super().accept()
@@ -2097,7 +2141,9 @@ def run_gui() -> int:
                         fade_out=float(s["fade_out"]),
                         transition=s["transition"],
                         transition_sec=float(s["transition_sec"]),
-                        motion=s["motion"])
+                        motion=s["motion"],
+                        volume=float(s["music_volume"]),
+                        crop_focus=s["crop_focus"])
 
         # ---------------- 动作
         def on_add(self):

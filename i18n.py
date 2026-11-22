@@ -1027,3 +1027,57 @@ _TR_EXTRA7 = {
 }
 for _lang, _extra7 in _TR_EXTRA7.items():
     TR[_lang].update(_extra7)
+
+_TR_EXTRA8 = {
+    "zh-TW": {
+        "音乐音量": "音樂音量",
+        "背景音乐音量百分比（默认 100）": "背景音樂音量百分比（預設 100）",
+    },
+    "en": {
+        "音乐音量": "Music volume",
+        "背景音乐音量百分比（默认 100）": "Background music volume in percent (default 100)",
+    },
+    "ja": {
+        "音乐音量": "音楽の音量",
+        "背景音乐音量百分比（默认 100）": "BGM の音量（％、既定 100）",
+    },
+    "ko": {
+        "音乐音量": "음악 볼륨",
+        "背景音乐音量百分比（默认 100）": "배경 음악 볼륨 백분율 (기본 100)",
+    },
+}
+for _lang, _extra8 in _TR_EXTRA8.items():
+    TR[_lang].update(_extra8)
+
+_TR_EXTRA9 = {
+    "zh-TW": {
+        "裁切位置": "裁切位置",
+        "居中": "置中",
+        "偏上": "偏上",
+        "偏下": "偏下",
+        "裁切铺满时留住哪里：center 居中 / top 偏上 / bottom 偏下": "裁切鋪滿時保留哪裡：center 置中 / top 偏上 / bottom 偏下",
+    },
+    "en": {
+        "裁切位置": "Crop focus",
+        "居中": "Center",
+        "偏上": "Top",
+        "偏下": "Bottom",
+        "裁切铺满时留住哪里：center 居中 / top 偏上 / bottom 偏下": "Crop focus when filling: center / top / bottom",
+    },
+    "ja": {
+        "裁切位置": "トリミング位置",
+        "居中": "中央",
+        "偏上": "上寄せ",
+        "偏下": "下寄せ",
+        "裁切铺满时留住哪里：center 居中 / top 偏上 / bottom 偏下": "切り抜き位置：center 中央 / top 上寄せ / bottom 下寄せ",
+    },
+    "ko": {
+        "裁切位置": "자르기 위치",
+        "居中": "가운데",
+        "偏上": "위쪽",
+        "偏下": "아래쪽",
+        "裁切铺满时留住哪里：center 居中 / top 偏上 / bottom 偏下": "채울 때 자를 위치: center 가운데 / top 위쪽 / bottom 아래쪽",
+    },
+}
+for _lang, _extra9 in _TR_EXTRA9.items():
+    TR[_lang].update(_extra9)

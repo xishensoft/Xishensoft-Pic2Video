@@ -52,7 +52,7 @@ python pic2video.py --export 竖屏.mp4 --bili BV... --ratio 9:16 --fps 60 --fit
 ```
 
 `--total` 是每张图的秒数；`--fps` / `--ratio` / `--width` / `--height` / `--fit` / `--bg` /
-`--pad-color` / `--no-bg-blur` / `--transition` / `--motion` 同设置页；命令行不写 `settings.json`。
+`--pad-color` / `--no-bg-blur` / `--transition` / `--motion` / `--crop-focus` / `--volume` 同设置页；命令行不写 `settings.json`。
 
 ## 设置
 
@@ -67,6 +67,8 @@ python pic2video.py --export 竖屏.mp4 --bili BV... --ratio 9:16 --fps 60 --fit
 | 默认节奏 / 逐张默认秒数 | 跟 BGM、自设总长、逐张秒数 |
 | 音乐淡入淡出 / 图片转场 | 秒数可调；转场支持硬切与淡入淡出 |
 | 画面动效 | 静止 / 缓慢推近 / 缓慢拉远 / 交替推拉（Ken Burns，默认静止） |
+| 裁切位置 | 裁切铺满时留住居中 / 偏上 / 偏下（人像照片常常要偏上） |
+| 音乐音量 | 0–200%，默认 100% |
 | 导出完自动打开所在文件夹 | 默认开；关掉就只弹完成提示 |
 | 抖音 / YouTube 支持 | yt-dlp 的安装状态，一键下载 / 删除 |
 
@@ -84,7 +86,7 @@ audio_source.py  音源判定与 yt-dlp 封装
 theme.py         主题、主色/对撞色、QSS
 i18n.py          五种语言的词条
 启动.bat          双击开窗口
-tests/           单元检查（135 条）
+tests/           单元检查（148 条）
 docs/            研究笔记、设计记录（wayfinder 票）与原始探针脚本
 screenshots/     README 里的截图
 ```

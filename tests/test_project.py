@@ -378,6 +378,78 @@ else:
     n = probe.stdout.strip().rstrip(",")
     check("动效出片帧数不变", n == "30", (n, probe.stderr[-200:]))
 
+# 21 背景音乐音量
+check("音量默认 100%", p.Settings()["music_volume"] == 1.0, p.Settings()["music_volume"])
+_sv = p.Settings()
+_sv.data["music_volume"] = 9.0
+_sv._sanitize()
+check("音量上限 2 倍", _sv["music_volume"] == 2.0, _sv["music_volume"])
+_sv.data["music_volume"] = -3
+_sv._sanitize()
+check("音量下限 0", _sv["music_volume"] == 0.0, _sv["music_volume"])
+g_v = p.build_graph([30], 1.0, 320, 180, volume=0.5)
+check("半音量写进 graph", ",volume=0.500" in g_v, g_v[-120:])
+check("原音量不加滤镜", "volume=" not in p.build_graph([30], 1.0, 320, 180))
+
+if p.missing_tools():
+    print("  (没 ffmpeg，跳过音量出片验证)")
+else:
+    mean = {}
+    for vol in (1.0, 0.5):
+        dst = os.path.join(tmp, f"vol_{vol}.mp4")
+        p.render([p.Clip(IMG[0], 1.0)], [30], TONE, dst, w=320, h=180,
+                 fps=30, volume=vol)
+        det = subprocess.run(
+            [p.FFMPEG, "-hide_banner", "-i", dst, "-af", "volumedetect",
+             "-f", "null", "-"], capture_output=True, text=True)
+        line = [ln for ln in det.stderr.splitlines() if "mean_volume" in ln]
+        mean[vol] = float(line[0].split("mean_volume:")[1].split("dB")[0])
+    check("半音量比原音量低约 6dB", 4.5 <= (mean[1.0] - mean[0.5]) <= 7.5,
+          mean)
+
+# 22 裁切位置
+check("裁切默认居中", p.Settings()["crop_focus"] == "center")
+_sc = p.Settings()
+_sc.data["crop_focus"] = "weird"
+_sc._sanitize()
+check("非法裁切位置回落居中", _sc["crop_focus"] == "center", _sc["crop_focus"])
+check("居中不写偏移", "crop=320:180" in p.build_graph([30], 1.0, 320, 180, fit="cover")
+      and "(ih-180)" not in p.build_graph([30], 1.0, 320, 180, fit="cover"))
+g_top = p.build_graph([30], 1.0, 320, 180, fit="cover", crop_focus="top")
+check("偏上从顶部裁", "(ih-180)*0.000" in g_top, g_top[:160])
+g_bot = p.build_graph([30], 1.0, 320, 180, fit="cover", crop_focus="bottom")
+check("偏下从底部裁", "(ih-180)*1.000" in g_bot, g_bot[:160])
+
+if p.missing_tools():
+    print("  (没 ffmpeg，跳过裁切位置出片验证)")
+else:
+    # 一张上红下绿的竖图：偏上裁只剩红，偏下裁只剩绿
+    tall = os.path.join(tmp, "tall.png")
+    subprocess.run(
+        [p.FFMPEG, "-v", "error", "-y",
+         "-f", "lavfi", "-i", "color=c=red:s=400x400:d=1",
+         "-f", "lavfi", "-i", "color=c=green:s=400x400:d=1",
+         "-filter_complex", "vstack=inputs=2", "-frames:v", "1", tall],
+        capture_output=True)
+
+    def center_rgb(mp4, name):
+        frame = os.path.join(tmp, name + ".png")
+        subprocess.run([p.FFMPEG, "-v", "error", "-y", "-i", mp4,
+                        "-frames:v", "1", frame], capture_output=True)
+        raw = subprocess.run(
+            [p.FFMPEG, "-v", "error", "-i", frame,
+             "-vf", "crop=1:1:160:90", "-f", "rawvideo",
+             "-pix_fmt", "rgb24", "-"], capture_output=True).stdout
+        return tuple(raw[:3])
+
+    for focus, which in (("top", "红"), ("bottom", "绿")):
+        dst = os.path.join(tmp, f"focus_{focus}.mp4")
+        p.render([p.Clip(tall, 1.0)], [30], None, dst, w=320, h=180,
+                 fps=30, fit="cover", crop_focus=focus)
+        r, g, b = center_rgb(dst, f"focus_{focus}")
+        ok = (r > g) if which == "红" else (g > r)
+        check(f"裁切{focus}留住{which}", ok, (r, g, b))
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)
