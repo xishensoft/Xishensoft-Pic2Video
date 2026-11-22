@@ -2,7 +2,7 @@
 
 给几张图片、粘一个视频链接，一键出一条带背景音乐的成片。做视频时最省事的那一步：**图片 + B 站 / 抖音 / YouTube 的音乐 → mp4**。
 
-![主窗口](screenshots/main-window-dark.png)
+![演示：排好图片 → 粘音乐链接 → 导出](screenshots/demo.gif)
 
 - **图片随便几张**：拖进来排序，每张单独调秒数，底部时间线点哪跳哪、拖右边界直接改时长。
 - **音乐直接从视频链接取整条音轨**：B 站（含 b23.tv 短链 / 裸 BV、av 号）、抖音、YouTube、快手、小红书、微博；也可以把本地音频/视频直接拖进窗口。
@@ -55,9 +55,17 @@ python pic2video.py --export 竖屏.mp4 --bili BV... --ratio 9:16 --fps 60 --fit
 `--total` 是每张图的秒数；`--fps` / `--ratio` / `--width` / `--height` / `--fit` / `--bg` /
 `--pad-color` / `--no-bg-blur` / `--transition` / `--motion` / `--crop-focus` / `--volume` 同设置页；命令行不写 `settings.json`。
 
+## 界面
+
+![主窗口](screenshots/main-window-dark.png)
+
+导出时状态栏给百分比和剩余时间，随时能取消：
+
+![导出进度](screenshots/export-progress.png)
+
 ## 设置
 
-![设置（深色）](screenshots/settings-dark.png)
+![设置（深色，画面页）](screenshots/settings-dark.png)
 
 设置页按 **外观 / 导出 / 画面 / 音乐 / 节奏与动效 / 其它** 分块：专业模式每组一页（顶上切页，不用再滚一屏），
 简洁模式仍是一列、组间用细线分开，只留其中的必要项，空掉的组连标题一起收起来。
@@ -79,6 +87,18 @@ python pic2video.py --export 竖屏.mp4 --bili BV... --ratio 9:16 --fps 60 --fit
 | 导出完自动打开所在文件夹 | 默认开；关掉就只弹完成提示 |
 | ffmpeg | 出片引擎（约 90 MB）。没装过 ffmpeg 时第一次打开会问「现在下载吗」，下完直接用；也能在这删掉、以后重新下 |
 | yt-dlp | 抖音 / YouTube 等平台的解析器（约 25 MB）。显示装没装、一键下载或删除 |
+
+音乐页与「其它」（组件管理）长这样：
+
+| 音乐 | 其它（ffmpeg / yt-dlp） |
+| --- | --- |
+| ![设置-音乐](screenshots/settings-music.png) | ![设置-其它](screenshots/settings-components.png) |
+
+浅色主题，以及点主色右边开的色环（对撞色自动算）：
+
+| 浅色 | 色环取色 |
+| --- | --- |
+| ![设置-浅色](screenshots/settings-light.png) | ![色环取色](screenshots/color-wheel.png) |
 
 预览音频始终跟随 **Windows 默认输出设备**，插拔耳机自动切，不用重启。
 
