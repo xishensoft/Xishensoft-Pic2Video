@@ -577,12 +577,14 @@ check("标题栏自己画", "class TitleBar" in _src
       and 'setObjectName("winbtn")' in _src and "def sync_max" in _src)
 check("弹窗自绘", "class FramelessDialog" in _src and "class MsgBox" in _src
       and "class NumberDialog" in _src and "class ProgressDialog" in _src)
-check("文件框非系统", "class FileDialog" in _src
-      and "DontUseNativeDialog" in _src)
+check("文件框换回系统原生", "QFileDialog.getOpenFileNames" in _src
+      and "QFileDialog.getSaveFileName" in _src
+      and "DontUseNativeDialog" not in _src)
 check("不再用系统弹窗", "QMessageBox(" not in _src
       and "QProgressDialog" not in _src and "QInputDialog" not in _src)
-check("文件框箭头跟主题", "_arrow_icon" in _src
-      and "toParentButton" in _src and "backButton" in _src)
+check("素材列表能接外部拖入", "drop_files = pyqtSignal(list, int, str)" in _src
+      and "def _hit(self, pos)" in _src and "1.0 / 3" in _src
+      and "2.0 / 3" in _src)
 check("Qt 自带文案本地化", "QTranslator" in _src
       and 'qt_tr.load("qtbase_"' in _src and "apply_qt_translator" in _src)
 check("样式贴到全局", "app_.setStyleSheet" in _src
@@ -833,6 +835,168 @@ check("重放时不再记步骤", "self._hist_lock = True" in src
 check("各操作都记历史", src.count("self._history_push(") >= 14,
       src.count("self._history_push("))
 
+# ---------------- 33 快捷键可自定义
+_sd = p.Settings.DEFAULTS["shortcuts"]
+check("默认快捷键对齐剪辑软件",
+      _sd["add"] == "Ctrl+I" and _sd["export"] == "Ctrl+M"
+      and _sd["undo"] == "Ctrl+Z" and _sd["redo"] == "Ctrl+Shift+Z"
+      and _sd["play"] == "Space" and _sd["remove"] == "Delete"
+      and _sd["preview"] == "F5", _sd)
+_tmpd = tempfile.mkdtemp(prefix="p2v_keys_")
+_sp = os.path.join(_tmpd, "settings.json")
+_s = p.Settings(_sp)
+_s.update(shortcuts={"add": "Ctrl+Alt+A", "nope": "Ctrl+Q", "export": ""})
+check("坏快捷键回落默认", _s["shortcuts"]["add"] == "Ctrl+Alt+A"
+      and _s["shortcuts"]["export"] == "Ctrl+M"
+      and "nope" not in _s["shortcuts"], _s["shortcuts"])
+_s.save()
+_s2 = p.Settings(_sp)
+check("自定义快捷键能存住", _s2["shortcuts"]["add"] == "Ctrl+Alt+A")
+_s3 = p.Settings(_sp)
+_s3.data["shortcuts"] = "not-a-dict"
+_s3._sanitize()
+check("快捷键写成字符串也不炸",
+      set(_s3["shortcuts"]) == set(p.SHORTCUT_ORDER), _s3["shortcuts"])
+check("七个动作都有名字",
+      all(p.SHORTCUT_LABELS[k] for k in p.SHORTCUT_ORDER))
+check("重绑时会清掉旧的", 'for sc in getattr(self, "_shortcuts", [])' in src)
+check("按设置绑定快捷键", 'bound.update(self.settings["shortcuts"] or {})' in src)
+check("设置里有快捷键页", 'add_sep("快捷键", pro=True)' in src
+      and "QKeySequenceEdit(" in src)
+check("重复键被拦下", 'tr("快捷键冲突")' in src and "return" in src)
+check("能一键恢复默认", "def _reset_shortcuts" in src)
+
+
+# 34 拖到列表三分区：插前 / 替换 / 插后；文件框换回系统
+_pr2 = p.Project(); _pr2.mode = "free"
+_pr2.add_images([IMG[0], IMG[1]], 2.0)
+_pr2.insert_images(1, [IMG[2]], 2.0)
+check("插到中间位置", [os.path.basename(c.path)
+                        for c in _pr2.clips] == ["land.png", "sq.png", "port.png"],
+      [os.path.basename(c.path) for c in _pr2.clips])
+check("插入后总数对", _pr2.image_count() == 3, _pr2.image_count())
+_pr2.replace_image(0, IMG[2])
+check("替换换掉路径", os.path.basename(_pr2.clips[0].path) == "sq.png")
+check("替换不改时长", abs(_pr2.clips[0].dur - 2.0) < 1e-6, _pr2.clips[0].dur)
+_pr2.clips[0].fade = True
+_pr2.replace_image(0, IMG[1])
+check("替换保留淡入淡出", _pr2.clips[0].fade is True)
+_pr2.insert_images(999, [IMG[0]], 1.0)
+check("越界插到末尾", os.path.basename(_pr2.clips[-1].path) == "land.png"
+      and len(_pr2.clips) == 4, len(_pr2.clips))
+_pr2.insert_images(-5, [IMG[0]], 1.0)
+check("负下标当开头", os.path.basename(_pr2.clips[0].path) == "land.png")
+_pv = p.Project(); _pv.mode = "free"
+_pv.add_images([IMG[0]], 2.0)
+_vid = os.path.join(tempfile.gettempdir(), "p2v_test_outro.mp4")
+subprocess.run([p.FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                "color=c=red:s=320x180:d=1", "-pix_fmt", "yuv420p", _vid],
+               capture_output=True)
+if os.path.isfile(_vid):
+    _pv.add_video(_vid, "outro")
+    _before = len(_pv.clips)
+    _pv.replace_image(len(_pv.clips) - 1, IMG[1])
+    check("片尾不会被替换掉", len(_pv.clips) == _before
+          and _pv.clips[-1].kind == "outro", _pv.clips[-1].kind)
+    try:
+        os.remove(_vid)
+    except OSError:
+        pass
+else:
+    check("片尾不会被替换掉", False, "ffmpeg 生成测试视频失败")
+check("外部拖入发三个参数", "drop_files.emit(paths, row, zone)" in src)
+check("拖入画落点提示", "def paintEvent(self, ev)" in src and
+      "zone == \"replace\"" in src)
+check("拖入按图片扩展名过滤", "if ext in IMG_EXTS or os.path.isdir(p)" in src)
+check("列表接了拖入信号",
+      "self.list.drop_files.connect(self.on_drop_into_list)" in src)
+check("三段判定在 ImageList 里",
+      "if frac < 1.0 / 3:" in src and "if frac > 2.0 / 3:" in src)
+check("系统文件框三件套", "QFileDialog.getExistingDirectory" in src
+      and "QFileDialog.getSaveFileName" in src
+      and "QFileDialog.getOpenFileNames" in src)
+check("保存框自动补后缀", 'name += "." + suffix' in src)
+
+# ---- 35 跟素材总长 + 铺满音频 + 视频循环 ----
+print()
+_vid2 = os.path.join(tempfile.gettempdir(), "p2v_test_intro.mp4")
+subprocess.run([p.FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
+                "color=c=blue:s=320x180:d=1", "-pix_fmt", "yuv420p", _vid2],
+               capture_output=True)
+check("素材测试视频生成", os.path.isfile(_vid2))
+_m = p.Project()
+_m.add_images([IMG[0], IMG[1]], 2.0)
+_m.add_video(_vid2, "intro")
+_m.add_video(_vid2, "outro")
+_m.mode = "material"
+_m.apply_material()
+_fixed = _m.fixed_span()
+_per = _fixed / 2.0
+check("跟素材总长：每张 = 素材总长 / 图片数",
+      abs(_m.clips[_m.clips.index(_m.images()[0])].dur - _per) < 1e-6,
+      round(_per, 3))
+check("跟素材总长：图片总时长 = 素材总长",
+      abs(sum(c.dur for c in _m.images()) - _fixed) < 1e-6)
+_cnt = _m.frame_counts()
+check("跟素材总长：帧数总和 = 总长 x 帧率",
+      sum(_cnt) == int(round(sum(c.dur for c in _m.clips) * p.FPS)))
+_nomat = p.Project()
+_nomat.add_images([IMG[0], IMG[1]], 2.5)
+_nomat.mode = "material"
+_nomat.apply_material()
+check("跟素材总长：没片头片尾时不动图片",
+      all(abs(c.dur - 2.5) < 1e-6 for c in _nomat.images()))
+_b = p.Project()
+_b.add_images([IMG[0], IMG[1]], 1.0)
+_b.add_video(_vid2, "intro")
+_b.audio_dur = 6.0
+_b.mode = "bgm"
+_b.normalize()
+_old = _b.total()
+_b.set_video_len(0, 2.0)
+check("改片头时长：片头变长", abs(_b.clips[0].dur - 2.0) < 1e-6,
+      round(_b.clips[0].dur, 3))
+check("改片头时长：音乐不被截短，图片让位",
+      abs(_b.total() - (_old + 1.0)) < 1e-6
+      and abs(_b.images()[0].dur - _b.images()[1].dur) < 1e-6,
+      [round(c.dur, 3) for c in _b.clips])
+check("改片头时长：传图片下标不动",
+      (lambda pr: (pr.set_video_len(1, 5.0), abs(pr.images()[0].dur - _b.images()[0].dur) < 1e-9)[1])(_b))
+_fa = p.Project()
+_fa.add_images([IMG[0], IMG[1]], 2.0)
+_fa.audio_dur = 9.0
+_fa.mode = "free"
+check("铺满音频：图片时长改成音频时长（逐张模式）",
+      (lambda pr: (pr.set_duration(0, 9.0), abs(pr.clips[0].dur - 9.0) < 1e-6)[1])(_fa))
+check("铺满音频：菜单项存在",
+      "画面铺满这条音频" in src and "def on_fill_audio(" in src)
+check("铺满音频：编辑记一步",
+      "self._history_push(tr(\"铺满音频\"))" in src)
+check("视频要放长时加 stream_loop",
+      'cmd += ["-stream_loop", "-1"]   # 要放得比原片长就循环' in src)
+check("节奏改成下拉：跟 BGM / 跟素材总长",
+      'self.cmb_rhythm.addItem(tr(MODE_LABELS["bgm"]), "bgm")' in src
+      and 'self.cmb_rhythm.addItem(tr(MODE_LABELS["material"]), "material")' in src)
+check("节奏下拉带 mode 数据", "self.on_mode(self.cmb_rhythm.currentData())" in src)
+check("跟素材总长在 MODE_LABELS 里", "material" in p.MODE_LABELS)
+_long = p.Project()
+_long.add_images([IMG[0]], 1.0)
+_long.add_video(_vid2, "intro")
+_long.mode = "free"
+_long.set_video_len(0, 3.0)
+_out2 = os.path.join(tempfile.gettempdir(), "p2v_loop.mp4")
+_cnt2 = _long.frame_counts()
+p.render(_long.clips, _cnt2, None, _out2, w=320, h=180, fps=30,
+         preset="ultrafast", crf=30, fit="cover", transition="none",
+         fade_in=0.0, fade_out=0.0, bg_blur=False)
+_dur2 = p.probe_duration(_out2)
+check("1 秒视频要放 3 秒就循环补满", abs(_dur2 - 4.0) < 0.2,
+      round(_dur2, 3))
+for _p2 in (_out2, _vid2):
+    try:
+        os.remove(_p2)
+    except OSError:
+        pass
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

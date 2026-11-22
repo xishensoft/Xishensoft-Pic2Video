@@ -380,9 +380,10 @@ QRadioButton::indicator {{
 }}
 QRadioButton::indicator:hover {{ border-color: {p['accent']}; }}
 QRadioButton::indicator:checked {{
-    background: {p['accent']};
-    border: 4px solid {p['panel']};
-    outline: 1px solid {p['accent']};
+    /* 外框仍是 14+2 = 16px：勾上时字数不会整体右移 */
+    width: 6px; height: 6px; border-radius: 8px;
+    background: {p['panel']};
+    border: 5px solid {p['accent']};
 }}
 
 QProgressBar {{

@@ -1717,3 +1717,109 @@ for _k, _trs in _TR_EXTRA20.items():
     for _lang, _v in _trs.items():
         TR[_lang].setdefault(_k, _v)
 
+_TR_EXTRA21 = {
+    '快捷键': {
+        'zh-TW': '快捷鍵',
+        'en': 'Shortcuts',
+        'ja': 'ショートカット',
+        'ko': '단축키',
+    },
+    '恢复默认': {
+        'zh-TW': '恢復預設',
+        'en': 'Reset to defaults',
+        'ja': '初期値に戻す',
+        'ko': '기본값으로',
+    },
+    '快捷键默认': {
+        'zh-TW': '快捷鍵預設',
+        'en': 'Shortcut defaults',
+        'ja': 'ショートカット初期値',
+        'ko': '단축키 기본값',
+    },
+    '播放 / 暂停': {
+        'zh-TW': '播放 / 暫停',
+        'en': 'Play / Pause',
+        'ja': '再生 / 一時停止',
+        'ko': '재생 / 일시정지',
+    },
+    '默认照剪辑软件的惯例；点一下再按键就能改': {
+        'zh-TW': '預設照剪輯軟體的慣例；點一下再按鍵就能改',
+        'en': 'Defaults follow editing-software conventions; click a field and press keys to change',
+        'ja': '既定は編集ソフトの慣例どおり。欄をクリックしてキーを押すと変更できます',
+        'ko': '기본값은 편집 소프트웨어 관례를 따릅니다. 칸을 클릭하고 키를 누르면 바꿀 수 있습니다',
+    },
+    '快捷键冲突': {
+        'zh-TW': '快捷鍵衝突',
+        'en': 'Shortcut conflict',
+        'ja': 'ショートカットの重複',
+        'ko': '단축키 충돌',
+    },
+    '「{a}」和「{b}」都设成了 {key}，改一个再来。': {
+        'zh-TW': '「{a}」和「{b}」都設成了 {key}，改一個再來。',
+        'en': '"{a}" and "{b}" are both {key}. Change one and try again.',
+        'ja': '「{a}」と「{b}」がどちらも {key} です。片方を変えてください。',
+        'ko': "'{a}'와 '{b}'가 모두 {key}입니다. 하나를 바꾸세요.",
+    },
+}
+
+for _k, _trs in _TR_EXTRA21.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)
+_TR_EXTRA22 = {
+    '替换素材': {
+        'zh-TW': '替換素材',
+        'en': 'Replace item',
+        'ja': '素材を差し替え',
+        'ko': '소재 바꾸기',
+    },
+    '已换成 {n} 张图': {
+        'zh-TW': '已換成 {n} 張圖',
+        'en': 'Replaced with {n} image(s)',
+        'ja': '{n} 枚の画像に差し替えました',
+        'ko': '{n}장의 이미지로 바꿨습니다',
+    },
+    '已插入 {n} 张图': {
+        'zh-TW': '已插入 {n} 張圖',
+        'en': 'Inserted {n} image(s)',
+        'ja': '{n} 枚の画像を挿入しました',
+        'ko': '{n}장의 이미지를 넣었습니다',
+    },
+}
+
+for _k, _trs in _TR_EXTRA22.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA23 = {
+    '画面铺满这条音频': {
+        'zh-TW': '畫面鋪滿這條音訊',
+        'en': 'Stretch this visual to the audio',
+        'ja': 'この音声いっぱいに映像を合わせる',
+        'ko': '이 오디오 길이에 화면 맞추기',
+    },
+    '铺满音频': {
+        'zh-TW': '鋪滿音訊',
+        'en': 'Fit to audio',
+        'ja': '音声に合わせる',
+        'ko': '오디오에 맞추기',
+    },
+}
+
+for _k, _trs in _TR_EXTRA23.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA24 = {
+    '跟素材总长': {
+        'zh-TW': '跟素材總長',
+        'en': 'Match footage length',
+        'ja': '素材の長さに合わせる',
+        'ko': '소재 길이에 맞추기',
+    },
+}
+
+for _k, _trs in _TR_EXTRA24.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)
+
+

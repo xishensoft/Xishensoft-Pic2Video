@@ -197,7 +197,8 @@ RATIO_VALUE = {"16:9": 16 / 9, "9:16": 9 / 16, "1:1": 1.0, "4:5": 0.8,
                "4:3": 4 / 3, "21:9": 21 / 9, "3:4": 3 / 4, "2:3": 2 / 3}
 SHORT_SIDE = 1080  # 选比例时按短边 1080 给出预设尺寸
 QUALITY = {"高": 18, "标准": 20, "小体积": 23}
-MODE_LABELS = {"bgm": "跟 BGM", "total": "自设总长", "free": "逐张秒数"}
+MODE_LABELS = {"bgm": "跟 BGM", "material": "跟素材总长",
+               "total": "自设总长", "free": "逐张秒数"}
 MODE_BY_LABEL = {v: k for k, v in MODE_LABELS.items()}
 MOTIONS = ("none", "in", "out", "inout")          # 画面动效
 MOTION_LABELS = {"none": "静止", "in": "缓慢推近",
@@ -208,6 +209,20 @@ CROP_LABELS = {"center": "居中", "top": "偏上", "bottom": "偏下"}
 WIN_MODES = ("remember", "max", "fixed")             # 启动时窗口
 WIN_LABELS = {"remember": "记住上次", "max": "启动时最大化",
               "fixed": "固定大小"}
+# 快捷键：默认值照剪辑软件的惯例（Ctrl+I 导入、Ctrl+M 导出、Space 播放…）
+SHORTCUT_DEFAULTS = {
+    "add": "Ctrl+I",
+    "export": "Ctrl+M",
+    "undo": "Ctrl+Z",
+    "redo": "Ctrl+Shift+Z",
+    "play": "Space",
+    "remove": "Delete",
+    "preview": "F5",
+}
+SHORTCUT_ORDER = ("add", "export", "undo", "redo", "play", "remove", "preview")
+SHORTCUT_LABELS = {"add": "加图片", "export": "导出视频", "undo": "撤回",
+                   "redo": "还原", "play": "播放 / 暂停",
+                   "remove": "删除素材", "preview": "刷新预览"}
 
 
 # 界面语言的显示文案（内部值保持中文，只有显示时翻译）
@@ -284,6 +299,7 @@ class Settings:
         "win_fixed_h": 1000,
         "intro_path": "",        # 默认片头视频（加第一张图时自动放到最前）
         "outro_path": "",        # 默认片尾视频
+        "shortcuts": dict(SHORTCUT_DEFAULTS),   # 各动作的快捷键，可改
     }
 
     def __init__(self, path: str = SETTINGS_PATH):
@@ -381,6 +397,15 @@ class Settings:
             d["motion"] = "none"
         if d.get("crop_focus") not in CROP_FOCUS:
             d["crop_focus"] = "center"
+        sc = d.get("shortcuts")
+        clean = {}
+        if isinstance(sc, dict):
+            for k, v in sc.items():
+                if k in SHORTCUT_DEFAULTS and isinstance(v, str) and v.strip():
+                    clean[k] = v.strip()
+        for k, v in SHORTCUT_DEFAULTS.items():
+            clean.setdefault(k, v)
+        d["shortcuts"] = clean
         for key, lo, hi in (("win_w", 0, 8000), ("win_h", 0, 8000),
                             ("win_x", -1, 8000), ("win_y", -1, 8000)):
             try:
@@ -607,11 +632,32 @@ class Project:
             return max(self.total_setting, MIN_DUR * n + self.fixed_span())
         return None
 
+    def material_len(self) -> float:
+        """跟素材总长：素材总长（片头 + 片尾）÷ 图片数，每张图播这么久。"""
+        n = self.image_count()
+        fixed = self.fixed_span()
+        if n <= 0 or fixed <= 0:
+            return 0.0
+        return max(MIN_DUR, fixed / n)
+
+    def apply_material(self):
+        """把「跟素材总长」算出来的每张时长铺到图片上。"""
+        if self.mode != "material":
+            return
+        per = self.material_len()
+        if per <= 0:
+            return
+        for c in self.images():
+            c.dur = per
+
     def total(self) -> float:
         return sum(c.dur for c in self.clips)
 
     # -- 归一化 --------------------------------------------------------
     def normalize(self):
+        if self.mode == "material":
+            self.apply_material()
+            return
         t = self.target()
         imgs = self.images()
         if t is None or not imgs:
@@ -659,6 +705,20 @@ class Project:
             c.dur = d
         self._fix_sum(room)
 
+    def set_video_len(self, index: int, value: float):
+        """改片头 / 片尾这类视频元素播多久：比原片短就截短，长就循环。"""
+        if not (0 <= index < len(self.clips)):
+            return
+        clip = self.clips[index]
+        if not clip.is_video:
+            return
+        clip.dur = max(MIN_DUR, float(value))
+        t = self.target()
+        imgs = self.images()
+        if t is not None and imgs:
+            room = max(MIN_DUR * len(imgs), t - self.fixed_span())
+            self._fix_sum(room)
+
     @staticmethod
     def _fit_others(durs: list[float], fixed: int, target: float):
         idx = [j for j in range(len(durs)) if j != fixed]
@@ -705,6 +765,27 @@ class Project:
                 self.clips.insert(0, Clip(intro, _media_dur(intro), "intro"))
             if outro and os.path.exists(outro) and self.outro() is None:
                 self.clips.append(Clip(outro, _media_dur(outro), "outro"))
+        self.normalize()
+
+    def insert_images(self, index: int, paths, dur: float | None = None):
+        """在指定位置插图片（从外面拖到列表某个位置时用）。"""
+        if not paths:
+            return
+        t = self.target()
+        base = dur if dur is not None else (
+            (t / (self.image_count() + len(paths))) if t else 3.0)
+        at = max(0, min(int(index), len(self.clips)))
+        self.clips[at:at] = [Clip(p, max(MIN_DUR, base)) for p in paths]
+        self.normalize()
+
+    def replace_image(self, index: int, path: str):
+        """换掉这一张，时长 / 淡入淡出 / 交叉淡化都照旧。"""
+        if not (0 <= index < len(self.clips)):
+            return
+        clip = self.clips[index]
+        if clip.is_video:
+            return
+        clip.path = path
         self.normalize()
 
     def add_video(self, path: str, kind: str) -> Clip | None:
@@ -762,6 +843,7 @@ class Project:
     # -- 帧数 ----------------------------------------------------------
     def frame_counts(self) -> list[int]:
         """按累计时间取整，保证总帧数 = round(总时长 * FPS)，不漂移。"""
+        self.apply_material()
         counts, acc, prev = [], 0.0, 0
         for c in self.clips:
             acc += c.dur
@@ -775,6 +857,9 @@ class Project:
 
 def set_mode(project: Project, mode: str) -> None:
     project.mode = mode
+    if mode == "material":
+        project.apply_material()
+        return
     if mode == "total":
         project.total_setting = max(MIN_DUR * max(1, project.image_count()),
                                     project.total())
@@ -1106,6 +1191,9 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
            "-progress", "pipe:1", "-nostats"]
     for c, nf in zip(clips, counts2):
         if c.is_video:
+            natural = probe_duration(c.path)
+            if natural > 0 and nf / fps > natural + 0.05:
+                cmd += ["-stream_loop", "-1"]   # 要放得比原片长就循环
             cmd += ["-i", c.path]
         else:
             cmd += ["-loop", "1", "-framerate", str(fps), "-t",
@@ -1366,7 +1454,7 @@ def run_gui() -> int:
     from PyQt6.QtCore import (QEvent, QEventLoop, QLibraryInfo, QPoint, QPointF,
                               QSize, Qt, QThread, QTimer, QTranslator, QUrl,
                               pyqtSignal)
-    from PyQt6.QtGui import (QColor, QConicalGradient, QFont, QIcon,
+    from PyQt6.QtGui import (QBrush, QColor, QConicalGradient, QFont, QIcon,
                             QImageReader, QKeySequence, QLinearGradient,
                             QPainter, QPainterPath, QPalette, QPen, QPixmap,
                             QPolygonF, QShortcut)
@@ -1375,7 +1463,7 @@ def run_gui() -> int:
     from PyQt6.QtWidgets import (
         QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QColorDialog,
         QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
-        QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
+        QFormLayout, QFrame, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit,
         QListWidget,
         QListWidgetItem, QMainWindow, QMenu, QProgressBar,
         QPushButton, QRadioButton, QSizePolicy, QSpinBox,
@@ -1753,84 +1841,34 @@ def run_gui() -> int:
         painter.end()
         return QIcon(pm)
 
-    class FileDialog(FramelessDialog):
-        """自己画边框的文件框：里面嵌 Qt 的 QFileDialog（不用系统那个）。"""
-
-        def __init__(self, parent, caption: str, directory: str = "",
-                     filters: str = "", mode: str = "open",
-                     multi: bool = False):
-            super().__init__(parent, caption)
-            self.files = []
-            self._inner = QFileDialog(self, caption, directory)
-            self._inner.setOption(
-                QFileDialog.Option.DontUseNativeDialog, True)
-            self._inner.setWindowFlags(Qt.WindowType.Widget)
-            if filters:
-                self._inner.setNameFilters([filters])
-            if mode == "save":
-                self._inner.setAcceptMode(
-                    QFileDialog.AcceptMode.AcceptSave)
-            elif mode == "dir":
-                self._inner.setFileMode(QFileDialog.FileMode.Directory)
-                self._inner.setOption(
-                    QFileDialog.Option.ShowDirsOnly, True)
-            elif multi:
-                self._inner.setFileMode(QFileDialog.FileMode.ExistingFiles)
-            self.body.addWidget(self._inner, 1)
-            self._inner.finished.connect(self._inner_done)
-            self.resize(880, 580)
-
-        def showEvent(self, ev):
-            # 工具栏是 show 的时候才建出来的，等它建好再换图标
-            super().showEvent(ev)
-            QTimer.singleShot(0, self._recolor_toolbar)
-
-        def _recolor_toolbar(self):
-            """把后退 / 前进 / 上一级三个三角换成跟配色一致的图标。"""
-            color = self.palette().color(
-                QPalette.ColorRole.WindowText).name()
-            for name, kind in (("backButton", "back"),
-                               ("forwardButton", "forward"),
-                               ("toParentButton", "up")):
-                btn = self._inner.findChild(QToolButton, name)
-                if btn is not None:
-                    btn.setIcon(_arrow_icon(kind, color))
-                    btn.setIconSize(QSize(16, 16))
-
-        def _inner_done(self, code):
-            if code == QDialog.DialogCode.Accepted:
-                self.files = list(self._inner.selectedFiles())
-                self.accept()
-            else:
-                self.reject()
+    class FileDialog:
+        """系统原生文件框：有快速访问、最近位置，键盘操作和系统一致。"""
 
         @classmethod
         def get_open_files(cls, parent, caption: str, directory: str = "",
                            filters: str = "", multi: bool = False):
-            dlg = cls(parent, caption, directory, filters, "open", multi)
-            if dlg.exec() == QDialog.DialogCode.Accepted:
-                return list(dlg.files)
-            return []
+            if multi:
+                files, _ = QFileDialog.getOpenFileNames(
+                    parent, caption, directory, filters)
+                return [p for p in files if p]
+            one, _ = QFileDialog.getOpenFileName(
+                parent, caption, directory, filters)
+            return [one] if one else []
 
         @classmethod
         def get_save_file(cls, parent, caption: str, path: str = "",
                           filters: str = "", suffix: str = "mp4") -> str:
-            directory = os.path.dirname(path)
-            name = os.path.basename(path)
-            dlg = cls(parent, caption, directory, filters, "save")
-            dlg._inner.setDefaultSuffix(suffix)
-            if name:
-                dlg._inner.selectFile(name)
-            if dlg.exec() == QDialog.DialogCode.Accepted and dlg.files:
-                return dlg.files[0]
-            return ""
+            name, _ = QFileDialog.getSaveFileName(parent, caption, path, filters)
+            if not name:
+                return ""
+            if suffix and not name.lower().endswith("." + suffix.lower()):
+                name += "." + suffix
+            return name
 
         @classmethod
         def get_dir(cls, parent, caption: str, directory: str = "") -> str:
-            dlg = cls(parent, caption, directory, "", "dir")
-            if dlg.exec() == QDialog.DialogCode.Accepted and dlg.files:
-                return dlg.files[0]
-            return ""
+            return QFileDialog.getExistingDirectory(
+                parent, caption, directory) or ""
 
     class FetchWorker(QThread):
         """取音源：B 站走自带解析，其它平台走 yt-dlp，本地文件直接用。"""
@@ -1939,13 +1977,108 @@ def run_gui() -> int:
                     self.ok.emit(self.out)
 
     class ImageList(QListWidget):
-        """内部拖动排序后发信号；QListWidget 的 internal move 不一定触发 rowsMoved。"""
+        """素材列表。
+
+        内部拖动只改顺序（internal move 不一定触发 rowsMoved，所以自己发信号）；
+        从外面拖图片进来按落点分三段：左三分之一插在前面、中间替换这一张、
+        右三分之一插在后面。
+        """
 
         order_changed = pyqtSignal()
+        drop_files = pyqtSignal(list, int, str)   # 路径, 行号, before/replace/after
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self._zone = None        # (行号, 段)
+            self.setAcceptDrops(True)
+
+        def _external(self, mime) -> list:
+            """外面拖进来的图片（或文件夹）才算，内部拖动返回空。"""
+            if not mime.hasUrls():
+                return []
+            out = []
+            for u in mime.urls():
+                if not u.isLocalFile():
+                    continue
+                p = os.path.normpath(u.toLocalFile())
+                ext = os.path.splitext(p)[1].lower()
+                if ext in IMG_EXTS or os.path.isdir(p):
+                    out.append(p)
+            return out
+
+        def _hit(self, pos):
+            """落点 → (行号, 段)。空处算追加到末尾。"""
+            item = self.itemAt(pos)
+            if item is None:
+                return -1, "after"
+            rect = self.visualItemRect(item)
+            frac = (pos.x() - rect.left()) / max(1, rect.width())
+            row = self.row(item)
+            if frac < 1.0 / 3:
+                return row, "before"
+            if frac > 2.0 / 3:
+                return row, "after"
+            return row, "replace"
+
+        def dragEnterEvent(self, ev):
+            if self._external(ev.mimeData()):
+                self._zone = self._hit(ev.position().toPoint())
+                ev.acceptProposedAction()
+                self.viewport().update()
+                return
+            self._zone = None
+            super().dragEnterEvent(ev)
+
+        def dragMoveEvent(self, ev):
+            if self._external(ev.mimeData()):
+                self._zone = self._hit(ev.position().toPoint())
+                ev.acceptProposedAction()
+                self.viewport().update()
+                return
+            self._zone = None
+            super().dragMoveEvent(ev)
+
+        def dragLeaveEvent(self, ev):
+            self._zone = None
+            self.viewport().update()
+            super().dragLeaveEvent(ev)
 
         def dropEvent(self, ev):
+            paths = self._external(ev.mimeData())
+            if paths:
+                row, zone = self._zone or self._hit(ev.position().toPoint())
+                self._zone = None
+                self.viewport().update()
+                self.drop_files.emit(paths, row, zone)
+                ev.acceptProposedAction()
+                return
+            self._zone = None
             super().dropEvent(ev)
             self.order_changed.emit()
+
+        def paintEvent(self, ev):
+            super().paintEvent(ev)
+            if not self._zone:
+                return
+            row, zone = self._zone
+            item = self.item(row) if row >= 0 else None
+            p = QPainter(self.viewport())
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            col = self.palette().color(QPalette.ColorRole.Highlight)
+            p.setPen(QPen(col, 3))
+            if item is None:
+                y = self.viewport().height() - 2
+                p.drawLine(0, y, self.viewport().width(), y)
+            else:
+                rect = self.visualItemRect(item)
+                if zone == "replace":
+                    p.setBrush(QBrush(QColor(col.red(), col.green(),
+                                           col.blue(), 40)))
+                    p.drawRect(rect.adjusted(1, 1, -1, -1))
+                else:
+                    x = rect.left() if zone == "before" else rect.right()
+                    p.drawLine(x, rect.top(), x, rect.bottom())
+            p.end()
 
     class Timeline(QWidget):
         """双轨时间线：上面视频元素，下面音频元素。
@@ -2798,6 +2931,29 @@ def run_gui() -> int:
             add_row("错误日志", wrap, pro=True)
             add_row("版本", QLabel(APP_VERSION), pro=True)
 
+            add_sep("快捷键", pro=True)
+            self._seq = {}
+            for key in SHORTCUT_ORDER:
+                ed = QKeySequenceEdit(QKeySequence(
+                    (settings["shortcuts"] or {}).get(key,
+                                                      SHORTCUT_DEFAULTS[key])))
+                ed.setMaximumSequenceLength(1)
+                self._seq[key] = ed
+                add_row(SHORTCUT_LABELS[key], ed, pro=True)
+            self.btn_sc_reset = QPushButton(tr("恢复默认"))
+            self.btn_sc_reset.clicked.connect(self._reset_shortcuts)
+            self.lbl_sc_hint = QLabel(tr("默认照剪辑软件的惯例；点一下再按键就能改"))
+            self.lbl_sc_hint.setStyleSheet("color:#9ca3af")
+            self.lbl_sc_hint.setWordWrap(True)
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
+            row.addWidget(self.lbl_sc_hint, 1)
+            row.addWidget(self.btn_sc_reset)
+            wrap = QWidget()
+            wrap.setLayout(row)
+            add_row("快捷键默认", wrap, pro=True)
+
             buttons = QDialogButtonBox(
                 QDialogButtonBox.StandardButton.Ok
                 | QDialogButtonBox.StandardButton.Cancel)
@@ -2998,8 +3154,30 @@ def run_gui() -> int:
             if d:
                 self.edit_dir.setText(d)
 
+        def _reset_shortcuts(self):
+            for key, ed in self._seq.items():
+                ed.setKeySequence(QKeySequence(SHORTCUT_DEFAULTS[key]))
+
+        def _shortcut_values(self) -> dict:
+            return {k: (ed.keySequence().toString().strip()
+                        or SHORTCUT_DEFAULTS[k])
+                    for k, ed in self._seq.items()}
+
         def accept(self):
+            seqs = self._shortcut_values()
+            seen = {}
+            for k in SHORTCUT_ORDER:
+                seq = seqs[k]
+                if seq in seen:
+                    MsgBox.warn(
+                        self, tr("快捷键冲突"),
+                        tr("「{a}」和「{b}」都设成了 {key}，改一个再来。",
+                           a=tr(SHORTCUT_LABELS[seen[seq]]),
+                           b=tr(SHORTCUT_LABELS[k]), key=seq))
+                    return
+                seen[seq] = k
             self.s.update(
+                shortcuts=seqs,
                 lang=self.cmb_lang.currentData(),
                 theme=self.cmb_theme.currentData(),
                 accent=self._accent,
@@ -3113,16 +3291,25 @@ def run_gui() -> int:
             self._hist_lock = False
 
         def _bind_shortcuts(self):
-            """键盘：Ctrl+O 加图、Ctrl+E 导出、空格播放/暂停、Delete 删图。"""
-            for keys, slot in (("Ctrl+O", self.on_add),
-                               ("Ctrl+S", self.on_export),
-                               ("Space", self.toggle_play),
-                               ("Delete", self.on_remove),
-                               ("F5", self.on_preview),
-                               ("Ctrl+Z", self.on_undo),
-                               ("Ctrl+Shift+Z", self.on_redo),
-                               ("Ctrl+Y", self.on_redo)):
-                QShortcut(QKeySequence(keys), self).activated.connect(slot)
+            """按设置绑快捷键（默认照剪辑软件惯例，设置里能逐条改）。"""
+            for sc in getattr(self, "_shortcuts", []):
+                sc.setEnabled(False)
+                sc.deleteLater()
+            self._shortcuts = []
+            bound = dict(SHORTCUT_DEFAULTS)
+            bound.update(self.settings["shortcuts"] or {})
+            slots = {"add": self.on_add, "export": self.on_export,
+                     "undo": self.on_undo, "redo": self.on_redo,
+                     "play": self.toggle_play, "remove": self.on_remove,
+                     "preview": self.on_preview}
+            for key in SHORTCUT_ORDER:
+                seq = (bound.get(key) or SHORTCUT_DEFAULTS[key]).strip()
+                slot = slots.get(key)
+                if not seq or slot is None:
+                    continue
+                sc = QShortcut(QKeySequence(seq), self)
+                sc.activated.connect(slot)
+                self._shortcuts.append(sc)
 
         # ---------------- 撤回 / 还原
         _HISTORY_MAX = 120
@@ -3314,12 +3501,16 @@ def run_gui() -> int:
                 tr("设置"), self.on_settings,
                 tr("导出目录、画幅比例、分辨率、帧率、画质、铺底、转场、默认节奏"))
             bar.addSpacing(12)
-            self.radio_bgm = QRadioButton(tr("跟 BGM"))
+            self.cmb_rhythm = QComboBox()
+            self.cmb_rhythm.addItem(tr(MODE_LABELS["bgm"]), "bgm")
+            self.cmb_rhythm.addItem(tr(MODE_LABELS["material"]), "material")
+            self.cmb_rhythm.activated.connect(
+                lambda _i: self.on_mode(self.cmb_rhythm.currentData()))
             self.radio_total = QRadioButton(tr("自设总长"))
             self.radio_free = QRadioButton(tr("逐张秒数"))
-            self.radio_bgm.setChecked(True)
+            bar.addWidget(self.cmb_rhythm)
             group = QButtonGroup(self)
-            for r in (self.radio_bgm, self.radio_total, self.radio_free):
+            for r in (self.radio_total, self.radio_free):
                 group.addButton(r)
                 bar.addWidget(r)
             self.spin_total = QDoubleSpinBox()
@@ -3362,6 +3553,7 @@ def run_gui() -> int:
             self.list.setMinimumWidth(300)
             self.list.setStyleSheet("QListWidget::item{padding:4px 2px;}")
             self.list.order_changed.connect(self.on_rows_moved)
+            self.list.drop_files.connect(self.on_drop_into_list)
             self.list.itemDoubleClicked.connect(self.on_edit_dur)
             self.list.currentRowChanged.connect(self.on_row_changed)
             self.list.setContextMenuPolicy(
@@ -3485,7 +3677,8 @@ def run_gui() -> int:
             self.btn_settings.setText(tr("设置"))
             self.btn_settings.setToolTip(
                 tr("导出目录、画幅比例、分辨率、帧率、画质、铺底、转场、默认节奏"))
-            self.radio_bgm.setText(tr("跟 BGM"))
+            self.cmb_rhythm.setItemText(0, tr(MODE_LABELS["bgm"]))
+            self.cmb_rhythm.setItemText(1, tr(MODE_LABELS["material"]))
             self.radio_total.setText(tr("自设总长"))
             self.radio_free.setText(tr("逐张秒数"))
             self.spin_total.setSuffix(tr(" 秒"))
@@ -3514,7 +3707,7 @@ def run_gui() -> int:
                        self.btn_undo_bar, self.btn_redo_bar,
                        self.btn_settings, self.btn_refresh, self.btn_export,
                        self.btn_mode, self.btn_retry, self.lbl_bgm,
-                       self.btn_more, self.radio_bgm, self.radio_total,
+                       self.btn_more, self.cmb_rhythm, self.radio_total,
                        self.radio_free):
                 w_.setMinimumWidth(w_.sizeHint().width())
             need = self.minimumSizeHint().width()
@@ -3593,7 +3786,7 @@ def run_gui() -> int:
             simple = self.settings["ui"] == "simple"
             for w_ in (self.btn_up, self.btn_down, self.btn_remove,
                        self.btn_undo_bar, self.btn_redo_bar,
-                       self.btn_settings, self.radio_bgm, self.radio_total,
+                       self.btn_settings, self.cmb_rhythm, self.radio_total,
                        self.radio_free, self.spin_total, self.btn_refresh):
                 w_.setVisible(not simple)
             self.btn_more.setVisible(simple)
@@ -3642,9 +3835,12 @@ def run_gui() -> int:
             self._refresh_list()
             self.timeline.update()
             self._mark_stale()
-            self.radio_bgm.setChecked(self.project.mode == "bgm")
-            self.radio_total.setChecked(self.project.mode == "total")
-            self.radio_free.setChecked(self.project.mode == "free")
+            m = self.project.mode
+            self.cmb_rhythm.blockSignals(True)
+            self.cmb_rhythm.setCurrentIndex(1 if m == "material" else 0)
+            self.cmb_rhythm.blockSignals(False)
+            self.radio_total.setChecked(m == "total")
+            self.radio_free.setChecked(m == "free")
             self.spin_total.setEnabled(self.project.mode == "total")
             if self.project.mode == "total":
                 self.spin_total.blockSignals(True)
@@ -3734,6 +3930,7 @@ def run_gui() -> int:
             set_mode(self.project, self.project.mode)
             self.retranslate()
             self._mark_stale()
+            self._bind_shortcuts()
             w, h = self.settings.size()
             self.lbl_preview.setText(
                 tr("参数已更新：{w}x{h} {fps}fps，点「刷新预览」看效果",
@@ -3800,6 +3997,45 @@ def run_gui() -> int:
                 self._refresh_all()
                 self.lbl_status.setText(tr("已加 {n} 张图", n=len(good)))
                 self._history_push(tr("加图片"))
+
+        def on_drop_into_list(self, paths, row, zone):
+            """从外面拖到素材列表上：左 / 中 / 右三段分别是插前 / 替换 / 插后。"""
+            paths = expand_paths(paths)
+            good = []
+            for p in paths:
+                rd = QImageReader(p)
+                if os.path.isdir(p):
+                    continue
+                if rd.canRead() and rd.size().width() > 0:
+                    good.append(p)
+                else:
+                    self.lbl_status.setText(
+                        tr("{name} 读不了，已跳过", name=os.path.basename(p)))
+            if not good:
+                return
+            good.sort(key=lambda p: os.path.basename(p).lower())
+            dur = (self.settings["per_image"]
+                   if self.project.mode == "free" else None)
+            if (zone == "replace" and 0 <= row < len(self.project.clips)
+                    and not self.project.clips[row].is_video):
+                self.project.replace_image(row, good[0])
+                if len(good) > 1:
+                    self.project.insert_images(row + 1, good[1:], dur)
+                label = tr("替换素材")
+                self.lbl_status.setText(tr("已换成 {n} 张图", n=len(good)))
+            else:
+                if row < 0:
+                    at = len(self.project.clips)
+                elif zone == "before":
+                    at = row
+                else:
+                    at = row + 1
+                self.project.insert_images(at, good, dur)
+                label = tr("加图片")
+                self.lbl_status.setText(
+                    tr("已插入 {n} 张图", n=len(good)))
+            self._refresh_all()
+            self._history_push(label)
 
         def on_move(self, delta):
             row = self.list.currentRow()
@@ -3981,6 +4217,12 @@ def run_gui() -> int:
                     xact.setChecked(bool(xfs) and all(xfs))
                     xact.triggered.connect(
                         lambda _c=False, t=targets: self.on_toggle_xfade(t))
+                if (len(targets) == 1 and len(arows) == 1
+                        and 0 <= targets[0] < len(self.project.clips)):
+                    fill = m.addAction(tr("画面铺满这条音频"))
+                    fill.triggered.connect(
+                        lambda _c=False, t=targets, a=arows:
+                        self.on_fill_audio(t[0], a[0]))
                 m.addSeparator()
                 dur = m.addAction(tr("这张显示多久…"))
                 dur.setEnabled(len(targets) == 1
@@ -4035,6 +4277,23 @@ def run_gui() -> int:
                 self.project.clips[i].xfade = want
             self._refresh_all()
             self._history_push(tr("淡入淡出"))
+
+        def on_fill_audio(self, clip_row, audio_row):
+            """让这一个画面元素正好铺满它下面那条音频。"""
+            if not (0 <= clip_row < len(self.project.clips)):
+                return
+            if not (0 <= audio_row < len(self.project.audios)):
+                return
+            a = self.project.audios[audio_row]
+            dur = a.dur or probe_duration(a.path)
+            if dur <= 0:
+                return
+            if self.project.clips[clip_row].is_video:
+                self.project.set_video_len(clip_row, dur)
+            else:
+                self.project.set_duration(clip_row, dur)
+            self._refresh_all()
+            self._history_push(tr("铺满音频"))
 
         def on_ask_volume(self, rows):
             rows = [k for k in rows if 0 <= k < len(self.project.audios)]
@@ -4508,8 +4767,7 @@ def run_gui() -> int:
         if th or acc:
             w.apply_theme()
 
-    w.radio_bgm.toggled.connect(
-        lambda on: on and w.on_mode("bgm"))
+    w.on_mode(w.cmb_rhythm.currentData())
     w.radio_total.toggled.connect(
         lambda on: on and w.on_mode("total"))
     w.radio_free.toggled.connect(
@@ -4556,18 +4814,174 @@ def run_gui() -> int:
             QTimer.singleShot(400, grab_menu)
             return app.exec()
 
+        # 把各种菜单 / 下拉的弹层挨个抓下来，肉眼核对有没有文字被压
+        if os.environ.get("PIC2VIDEO_SHOT_MENU4"):
+            outdir = os.path.dirname(shot)
+            outs = []
+            vidx = [i for i, c in enumerate(w.project.clips)
+                    if c.kind == "image"]
+            if len(vidx) >= 2:
+                w.timeline.set_selection(vidx[:2])
+                m1 = w.timeline_menu("video", vidx[0])
+                m1.popup(w.mapToGlobal(QPoint(40, 60)))
+                QApplication.processEvents()
+                m1.grab().save(os.path.join(outdir, "menu_video2" + tag + ".png"))
+                outs.append(("video2", [a.text() for a in m1.actions()],
+                             m1.sizeHint().width()))
+                m1.close()
+            if w.project.audios:
+                w.timeline.set_audio_selection([0])
+                m2 = w.timeline_menu("audio", 0)
+                m2.popup(w.mapToGlobal(QPoint(40, 60)))
+                QApplication.processEvents()
+                m2.grab().save(os.path.join(outdir, "menu_audio2" + tag + ".png"))
+                outs.append(("audio2", [a.text() for a in m2.actions()],
+                             m2.sizeHint().width()))
+                m2.close()
+            dlg = SettingsDialog(w.settings, w)
+            dlg.show()
+            QApplication.processEvents()
+            for nm, cb in (("lang", dlg.cmb_lang), ("ratio", dlg.cmb_ratio),
+                           ("quality", dlg.cmb_quality)):
+                cb.showPopup()
+                QApplication.processEvents()
+                view = cb.view()
+                view.window().grab().save(
+                    os.path.join(outdir, "menu_cb_" + nm + tag + ".png"))
+                outs.append(("cb_" + nm, [cb.itemText(i)
+                                          for i in range(cb.count())],
+                             view.window().width()))
+                cb.hidePopup()
+            dlg.close()
+            for name, texts, width in outs:
+                print("MENU4", name, "w=", width, texts, flush=True)
+            app.quit()
+
+            return app.exec()
+
+        # 节奏下拉：切到「跟素材总长」看每张时长
+        if os.environ.get("PIC2VIDEO_SHOT_RHYTHM"):
+            outdir = os.path.dirname(shot)
+            print("RHYTHM items:", [w.cmb_rhythm.itemText(i)
+                                    for i in range(w.cmb_rhythm.count())],
+                  "mode:", w.project.mode, flush=True)
+            w.cmb_rhythm.setCurrentIndex(1)
+            w.on_mode(w.cmb_rhythm.currentData())
+            QApplication.processEvents()
+            print("RHYTHM after:", w.project.mode,
+                  [round(c.dur, 3) for c in w.project.clips],
+                  "frames:", sum(w.project.frame_counts()), flush=True)
+            w.grab().save(os.path.join(outdir, "shot_rhythm" + tag + ".png"))
+            app.quit()
+            return app.exec()
+        # 铺满音频：选中一个画面元素 + 一条音频，走右键菜单里那一项
+        if os.environ.get("PIC2VIDEO_SHOT_FILL"):
+            outdir = os.path.dirname(shot)
+            if w.project.audios and len(w.project.clips) >= 2:
+                w.timeline.set_selection([0])
+                w.timeline.set_audio_selection([0])
+                menu = w.timeline_menu("video", 0)
+                texts = [a.text() for a in menu.actions()]
+                print("FILL menu:", texts, flush=True)
+                before = [round(c.dur, 3) for c in w.project.clips]
+                for a in menu.actions():
+                    if a.text() == tr("画面铺满这条音频"):
+                        a.trigger()
+                        break
+                menu.close()
+                after = [round(c.dur, 3) for c in w.project.clips]
+                print("FILL audio_dur:", round(w.project.audios[0].dur, 3),
+                      "before:", before, "after:", after,
+                      "history:", [h["label"] for h in w.history], flush=True)
+                w.timeline.grab().save(
+                    os.path.join(outdir, "shot_fill" + tag + ".png"))
+            else:
+                print("FILL skipped", flush=True)
+            app.quit()
+            return app.exec()
+        # 菜单 + 子菜单一起截屏：看文字有没有被压住 / 被裁掉
+        if os.environ.get("PIC2VIDEO_SHOT_MENUSUB"):
+            outdir = os.path.dirname(shot)
+            w.timeline.set_audio_selection([0])
+            menu = w.timeline_menu("audio", 0)
+            menu.popup(w.mapToGlobal(w.rect().center()))
+
+            def grab_sub():
+                sub = None
+                for a in menu.actions():
+                    if a.menu() is not None:
+                        sub = a.menu()
+                rect = menu.geometry()
+                if sub is not None:
+                    sub.popup(menu.mapToGlobal(
+                        QPoint(menu.width() - 6, 24)))
+                    QApplication.processEvents()
+                    rect = rect.united(sub.geometry())
+                scr = QApplication.primaryScreen()
+                shotpix = scr.grabWindow(0, rect.x(), rect.y(),
+                                         rect.width(), rect.height())
+                shotpix.save(os.path.join(outdir, "shot_menusub" + tag +
+                                          ".png"))
+                print("MENUSUB", rect.width(), rect.height(),
+                      "| menu:", menu.sizeHint().width(),
+                      "| sub:", sub.sizeHint().width() if sub else None,
+                      flush=True)
+                for a in menu.actions():
+                    r = menu.actionGeometry(a)
+                    print("  ITEM %-28r geo=%dx%d+%d+%d" % (
+                        a.text(), r.width(), r.height(), r.x(), r.y()),
+                        flush=True)
+                menu.close()
+                app.quit()
+
+            QTimer.singleShot(500, grab_sub)
+            return app.exec()
+
+        # 单选按钮勾选前后宽度：勾上时文字会不会整体挪一下
+        if os.environ.get("PIC2VIDEO_SHOT_JITTER"):
+            def jitter():
+                for rb in (w.cmb_rhythm, w.radio_total, w.radio_free):
+                    if isinstance(rb, QRadioButton):
+                        rb.setChecked(False)
+                QApplication.processEvents()
+                off = [rb.sizeHint().width() for rb in
+                       (w.cmb_rhythm, w.radio_total, w.radio_free)]
+                w.radio_total.setChecked(True)
+                QApplication.processEvents()
+                on = [rb.sizeHint().width() for rb in
+                      (w.cmb_rhythm, w.radio_total, w.radio_free)]
+                print("JITTER off:", off, "on:", on, flush=True)
+                from PyQt6.QtWidgets import QStyle, QStyleOptionButton
+                def ind(rb):
+                    opt = QStyleOptionButton()
+                    opt.initFrom(rb)
+                    if rb.isChecked():
+                        opt.state |= QStyle.StateFlag.State_On
+                    else:
+                        opt.state &= ~QStyle.StateFlag.State_On
+                    r = rb.style().subControlRect(
+                        QStyle.ComplexControl.CC_RadioButton, opt,
+                        QStyle.SubControl.SC_RadioButtonIndicator, rb)
+                    return r.width(), r.height()
+                for rb in (w.radio_total, w.radio_free):
+                    rb.setChecked(False)
+                    QApplication.processEvents()
+                    print("  RADIO off", rb.text(), ind(rb), flush=True)
+                    rb.setChecked(True)
+                    QApplication.processEvents()
+                    print("  RADIO on ", rb.text(), ind(rb), flush=True)
+                    rb.setChecked(False)
+                app.quit()
+
+            QTimer.singleShot(600, jitter)
+            return app.exec()
+
         # 自绘对话框的样子（文件框 / 消息框 / 数字框各截一张）
         dlg_probe = os.environ.get("PIC2VIDEO_SHOT_DLG")
         if dlg_probe:
             outdir = os.path.dirname(shot)
-            fd = FileDialog(w, tr("加图片"), os.path.expanduser("~"),
-                            tr("图片 (*.png *.jpg *.jpeg *.webp *.bmp)"))
-            fd.show()
 
             def grab_fd():
-                fd.grab().save(os.path.join(outdir,
-                                            "shot_filedlg" + tag + ".png"))
-                fd.close()
                 mb = MsgBox(w, tr("提示"), tr("导出完成，要不要打开文件夹？"),
                             [(tr("打开所在文件夹"), "plain"), (tr("好"), "primary")],
                             icon="ask")
@@ -4652,6 +5066,55 @@ def run_gui() -> int:
                 QTimer.singleShot(200, app.quit)
 
             QTimer.singleShot(600, undo_probe)
+            return app.exec()
+
+        # 快捷键冒烟：改成自定义键后重绑，打印实际绑上的序列
+        if os.environ.get("PIC2VIDEO_SHOT_KEYS"):
+            def keys_probe():
+                print("KEYS default:", [sc.key().toString()
+                                        for sc in w._shortcuts], flush=True)
+                w.settings.update(shortcuts=dict(SHORTCUT_DEFAULTS,
+                                                 add="Ctrl+Alt+A",
+                                                 preview="F9"))
+                w._bind_shortcuts()
+                print("KEYS custom :", [sc.key().toString()
+                                        for sc in w._shortcuts], flush=True)
+                QTimer.singleShot(200, app.quit)
+
+            QTimer.singleShot(400, keys_probe)
+            return app.exec()
+
+        # 拖入三分区冒烟：直接发 drop_files，看插前 / 替换 / 插后三种落点
+        if os.environ.get("PIC2VIDEO_SHOT_DROP"):
+            def drop_probe():
+                def names():
+                    return [os.path.basename(c.path) for c in w.project.clips]
+                extra = os.environ.get("PIC2VIDEO_SHOT_DROP_IMG") or ""
+                if not os.path.isfile(extra):
+                    print("DROP: 没有 PIC2VIDEO_SHOT_DROP_IMG", flush=True)
+                    app.quit()
+                    return
+                print("DROP start      :", names(), flush=True)
+                w.list.drop_files.emit([extra], 1, "before")
+                print("DROP before @1  :", names(), flush=True)
+                w.list.drop_files.emit([extra], 0, "replace")
+                print("DROP replace @0 :", names(), flush=True)
+                w.list.drop_files.emit([extra], 0, "after")
+                print("DROP after @0   :", names(), flush=True)
+                # 画一下落点提示（grab 会同步触发 paintEvent，崩了这里就炸）
+                base_dir = os.path.dirname(os.environ.get("PIC2VIDEO_SHOT") or "")
+                if base_dir:
+                    w.list._zone = (1, "replace")
+                    w.list.grab().save(os.path.join(base_dir, "shot_drop_zone.png"))
+                    w.list._zone = (1, "before")
+                    w.list.grab().save(os.path.join(base_dir, "shot_drop_before.png"))
+                w.list._zone = None
+                w.list.viewport().update()
+                print("DROP history    :", [e["label"] for e in w.history],
+                      flush=True)
+                QTimer.singleShot(300, app.quit)
+
+            QTimer.singleShot(800, drop_probe)
             return app.exec()
 
         # 故意在 Qt 回调里抛异常：验证「未捕获异常会连 traceback 写进日志」
@@ -4833,7 +5296,7 @@ def run_gui() -> int:
                 _shot("shot_live_ja_simple")
                 names = ["btn_add", "btn_up", "btn_down", "btn_remove",
                          "btn_settings", "btn_refresh", "btn_export",
-                         "btn_mode", "btn_more", "radio_bgm", "spin_total"]
+                         "btn_mode", "btn_more", "cmb_rhythm", "spin_total"]
                 print("VISIBLE:", [(n, getattr(w, n).isVisible()) for n in names])
                 print("MENU ACTIONS:", w._menu_labels(), flush=True)
                 QTimer.singleShot(6000, shot_ready)
