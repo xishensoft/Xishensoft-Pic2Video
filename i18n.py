@@ -1582,3 +1582,138 @@ _TR_EXTRA18 = {
 for _k, _trs in _TR_EXTRA18.items():
     for _lang, _v in _trs.items():
         TR[_lang][_k] = _v
+
+
+_TR_EXTRA19 = {
+    '闪退 / 导出失败时先看这份记录：{path}': {
+        'zh-TW': '閃退 / 匯出失敗時先看這份記錄：{path}',
+        'en': 'Crashes and failed exports are logged here: {path}',
+        'ja': 'クラッシュや書き出し失敗の記録はここ：{path}',
+        'ko': '크래시 및 내보내기 실패 기록: {path}',
+    },
+    '打开日志': {
+        'zh-TW': '開啟日誌',
+        'en': 'Open log',
+        'ja': 'ログを開く',
+        'ko': '로그 열기',
+    },
+    '错误日志': {
+        'zh-TW': '錯誤日誌',
+        'en': 'Error log',
+        'ja': 'エラーログ',
+        'ko': '오류 로그',
+    },
+    '版本': {
+        'zh-TW': '版本',
+        'en': 'Version',
+        'ja': 'バージョン',
+        'ko': '버전',
+    },
+}
+for _k, _trs in _TR_EXTRA19.items():
+    for _lang, _v in _trs.items():
+        TR[_lang][_k] = _v
+
+_TR_EXTRA20 = {
+    '撤回': {
+        'zh-TW': '撤回',
+        'en': 'Undo',
+        'ja': '元に戻す',
+        'ko': '실행 취소',
+    },
+    '素材': {
+        'zh-TW': '素材',
+        'en': 'Media',
+        'ja': '素材',
+        'ko': '소재',
+    },
+    '历史': {
+        'zh-TW': '歷史',
+        'en': 'History',
+        'ja': '履歴',
+        'ko': '기록',
+    },
+    '打开': {
+        'zh-TW': '開啟',
+        'en': 'Opened',
+        'ja': '開く',
+        'ko': '열기',
+    },
+    '调整顺序': {
+        'zh-TW': '調整順序',
+        'en': 'Reorder',
+        'ja': '順序を変更',
+        'ko': '순서 조정',
+    },
+    '删除素材': {
+        'zh-TW': '刪除素材',
+        'en': 'Remove media',
+        'ja': '素材を削除',
+        'ko': '소재 삭제',
+    },
+    '改时长': {
+        'zh-TW': '改時長',
+        'en': 'Change duration',
+        'ja': '長さを変更',
+        'ko': '길이 변경',
+    },
+    '改节奏': {
+        'zh-TW': '改節奏',
+        'en': 'Change timing',
+        'ja': 'タイミング変更',
+        'ko': '타이밍 변경',
+    },
+    '加音频': {
+        'zh-TW': '加音訊',
+        'en': 'Add audio',
+        'ja': '音声を追加',
+        'ko': '오디오 추가',
+    },
+    '删音频': {
+        'zh-TW': '刪音訊',
+        'en': 'Remove audio',
+        'ja': '音声を削除',
+        'ko': '오디오 삭제',
+    },
+    '移音频': {
+        'zh-TW': '移音訊',
+        'en': 'Move audio',
+        'ja': '音声を移動',
+        'ko': '오디오 이동',
+    },
+    '改音量': {
+        'zh-TW': '改音量',
+        'en': 'Change volume',
+        'ja': '音量を変更',
+        'ko': '볼륨 변경',
+    },
+    '改设置': {
+        'zh-TW': '改設定',
+        'en': 'Change settings',
+        'ja': '設定を変更',
+        'ko': '설정 변경',
+    },
+    '换背景音乐': {
+        'zh-TW': '換背景音樂',
+        'en': 'Change BGM',
+        'ja': 'BGM を変更',
+        'ko': '배경 음악 변경',
+    },
+    '撤销上一步（Ctrl+Z）': {
+        'zh-TW': '復原上一步（Ctrl+Z）',
+        'en': 'Undo the last step (Ctrl+Z)',
+        'ja': '直前の操作を取り消す（Ctrl+Z）',
+        'ko': '이전 단계 실행 취소 (Ctrl+Z)',
+    },
+    '重做（Ctrl+Shift+Z）': {
+        'zh-TW': '重做（Ctrl+Shift+Z）',
+        'en': 'Redo (Ctrl+Shift+Z)',
+        'ja': 'やり直し（Ctrl+Shift+Z）',
+        'ko': '다시 실행 (Ctrl+Shift+Z)',
+    },
+}
+
+for _k, _trs in _TR_EXTRA20.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)
+

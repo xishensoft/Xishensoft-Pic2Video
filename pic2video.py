@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +39,8 @@ components.prepend_path()      # tools/ 里的 ffmpeg 优先于系统那份
 
 # exe 是窗口程序，没有控制台：起子进程时别让它继承无效的句柄
 CREATION_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+APP_VERSION = "1.1.0"
 
 WIDTH, HEIGHT, FPS = 1920, 1080, 30
 PREVIEW_W, PREVIEW_H = 960, 540
@@ -542,6 +545,29 @@ class Project:
         for a in self.audios:
             if a.gap:
                 a.volume = max(0.0, min(2.0, float(value)))
+
+    # -- 撤回 / 还原用的快照（素材与音频都很小，整份存下来最省事）---------
+    def to_state(self) -> dict:
+        return {
+            "clips": [[c.path, c.dur, c.kind, c.fade, c.xfade]
+                      for c in self.clips],
+            "audios": [[a.path, a.dur, a.start, a.volume, a.gap]
+                       for a in self.audios],
+            "mode": self.mode,
+            "audio_start": self.audio_start,
+            "audio_len": self.audio_len,
+            "total_setting": self.total_setting,
+        }
+
+    def load_state(self, state: dict):
+        self.clips = [Clip(p, d, k, f, x)
+                      for p, d, k, f, x in state.get("clips", [])]
+        self.audios = [AudioClip(p, d, s, v, g)
+                       for p, d, s, v, g in state.get("audios", [])]
+        self.mode = state.get("mode", "bgm")
+        self.audio_start = float(state.get("audio_start", 0.0))
+        self.audio_len = float(state.get("audio_len", 0.0))
+        self.total_setting = float(state.get("total_setting", 10.0))
 
     # -- 片段分类 ------------------------------------------------------
     def images(self) -> list[Clip]:
@@ -2755,6 +2781,23 @@ def run_gui() -> int:
             self.lbl_audio.setStyleSheet("color:#9ca3af")
             add_row("预览音频输出", self.lbl_audio, pro=True)
 
+            # 错误日志：闪退了、导出失败了，先看这份记录
+            self.lbl_log = QLabel(tr("闪退 / 导出失败时先看这份记录：{path}",
+                                     path=log_path()))
+            self.lbl_log.setWordWrap(True)
+            self.lbl_log.setStyleSheet("color:#9ca3af")
+            btn_log = QPushButton(tr("打开日志"))
+            btn_log.clicked.connect(self._open_log)
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
+            row.addWidget(self.lbl_log, 1)
+            row.addWidget(btn_log)
+            wrap = QWidget()
+            wrap.setLayout(row)
+            add_row("错误日志", wrap, pro=True)
+            add_row("版本", QLabel(APP_VERSION), pro=True)
+
             buttons = QDialogButtonBox(
                 QDialogButtonBox.StandardButton.Ok
                 | QDialogButtonBox.StandardButton.Cancel)
@@ -2892,6 +2935,18 @@ def run_gui() -> int:
             self.spin_trans.setEnabled(self.cmb_trans.currentData() == "fade")
 
         # -- 组件（ffmpeg / yt-dlp）：下载与删除 ---------------------------
+        def _open_log(self):
+            """把日志选中打开：反馈问题时让用户直接把这份发过来。"""
+            path = log_path()
+            try:
+                if not os.path.exists(path):
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    open(path, "a", encoding="utf-8").close()
+                subprocess.Popen(["explorer", "/select,",
+                                  os.path.normpath(path)])
+            except OSError:
+                pass
+
         def _sync_component(self, key: str):
             lbl, btn = self._comp[key]
             spec = components.COMPONENTS[key]
@@ -3029,6 +3084,9 @@ def run_gui() -> int:
             self._render_t0 = 0.0
             self._maxed = False
             self._geo_before_max = None
+            self.history = []          # 撤回栈：每步一份项目 + 设置快照
+            self.hist_index = -1
+            self._hist_lock = True     # 建界面时不要记步骤
 
             self.player = QMediaPlayer(self)
             self.audio_out = QAudioOutput(self)
@@ -3051,6 +3109,8 @@ def run_gui() -> int:
             except Exception:  # noqa: BLE001
                 pass
             self._refresh_all()
+            self._history_reset(tr("打开"))
+            self._hist_lock = False
 
         def _bind_shortcuts(self):
             """键盘：Ctrl+O 加图、Ctrl+E 导出、空格播放/暂停、Delete 删图。"""
@@ -3058,8 +3118,101 @@ def run_gui() -> int:
                                ("Ctrl+S", self.on_export),
                                ("Space", self.toggle_play),
                                ("Delete", self.on_remove),
-                               ("F5", self.on_preview)):
+                               ("F5", self.on_preview),
+                               ("Ctrl+Z", self.on_undo),
+                               ("Ctrl+Shift+Z", self.on_redo),
+                               ("Ctrl+Y", self.on_redo)):
                 QShortcut(QKeySequence(keys), self).activated.connect(slot)
+
+        # ---------------- 撤回 / 还原
+        _HISTORY_MAX = 120
+
+        def _state_now(self) -> dict:
+            """当前状态：项目全量 + 设置（窗口几何与上次导出目录不算操作）。"""
+            keep = {k: v for k, v in self.settings.data.items()
+                    if k not in ("win_x", "win_y", "win_w", "win_h",
+                                 "last_export_dir")}
+            return {"project": self.project.to_state(), "settings": keep}
+
+        def _history_reset(self, label: str):
+            self.history = [{"label": label, "t": time.time(),
+                             "state": self._state_now()}]
+            self.hist_index = 0
+            self._refresh_history()
+
+        def _history_push(self, label: str):
+            """记一步。拖时长会连发几十次，1.2 秒内的同类操作合并成一步。"""
+            if self._hist_lock:
+                return
+            now = time.time()
+            self.history = self.history[:self.hist_index + 1]
+            last = self.history[-1] if self.history else None
+            if (last is not None and last["label"] == label
+                    and now - last["t"] < 1.2):
+                last["state"] = self._state_now()
+                last["t"] = now
+                self._refresh_history()
+                return
+            self.history.append({"label": label, "t": now,
+                                 "state": self._state_now()})
+            if len(self.history) > self._HISTORY_MAX:
+                self.history.pop(0)
+            self.hist_index = len(self.history) - 1
+            self._refresh_history()
+
+        def _refresh_history(self):
+            lst = getattr(self, "hist_list", None)
+            if lst is None:
+                return
+            lst.blockSignals(True)
+            lst.clear()
+            for i, e in enumerate(self.history):
+                lst.addItem(f"{i + 1}. {e['label']}")
+            if 0 <= self.hist_index < lst.count():
+                lst.setCurrentRow(self.hist_index)
+            lst.blockSignals(False)
+            can_undo = self.hist_index > 0
+            can_redo = self.hist_index < len(self.history) - 1
+            for b, on in ((getattr(self, "btn_undo", None), can_undo),
+                          (getattr(self, "btn_redo", None), can_redo),
+                          (getattr(self, "btn_undo_bar", None), can_undo),
+                          (getattr(self, "btn_redo_bar", None), can_redo)):
+                if b is not None:
+                    b.setEnabled(on)
+
+        def _history_apply(self, index: int):
+            if not (0 <= index < len(self.history)):
+                return
+            st = self.history[index]["state"]
+            self.hist_index = index
+            self._hist_lock = True
+            try:
+                self.project.load_state(st["project"])
+                self.settings.data.update(st["settings"])
+                self.settings.save()
+                set_locale(self.settings["lang"])
+                apply_qt_translator(current_locale())
+                self.apply_theme()
+                self.retranslate()
+                self._refresh_history()
+            finally:
+                self._hist_lock = False
+            self._mark_stale()
+
+        def on_undo(self):
+            if self.hist_index > 0:
+                log("undo -> %d" % (self.hist_index - 1))
+                self._history_apply(self.hist_index - 1)
+
+        def on_redo(self):
+            if self.hist_index < len(self.history) - 1:
+                log("redo -> %d" % (self.hist_index + 1))
+                self._history_apply(self.hist_index + 1)
+
+        def on_history_click(self, item):
+            row = self.hist_list.row(item)
+            log("history click -> %d" % row)
+            self._history_apply(row)
 
         # ---------------- 窗口大小 / 位置
         def _restore_geometry(self):
@@ -3155,6 +3308,8 @@ def run_gui() -> int:
             self.btn_up = btn(tr("上移"), lambda: self.on_move(-1))
             self.btn_down = btn(tr("下移"), lambda: self.on_move(1))
             self.btn_remove = btn(tr("删除"), self.on_remove)
+            self.btn_undo_bar = btn(tr("撤回"), self.on_undo, tr("撤销上一步（Ctrl+Z）"))
+            self.btn_redo_bar = btn(tr("还原"), self.on_redo, tr("重做（Ctrl+Shift+Z）"))
             self.btn_settings = btn(
                 tr("设置"), self.on_settings,
                 tr("导出目录、画幅比例、分辨率、帧率、画质、铺底、转场、默认节奏"))
@@ -3212,7 +3367,27 @@ def run_gui() -> int:
             self.list.setContextMenuPolicy(
                 Qt.ContextMenuPolicy.CustomContextMenu)
             self.list.customContextMenuRequested.connect(self.on_list_menu)
-            split.addWidget(self.list)
+            self.left_tabs = QTabWidget()
+            self.left_tabs.addTab(self.list, tr("素材"))
+            hist_page = QWidget()
+            hvp = QVBoxLayout(hist_page)
+            hvp.setContentsMargins(0, 0, 0, 0)
+            hvp.setSpacing(6)
+            self.hist_list = QListWidget()
+            self.hist_list.setAlternatingRowColors(True)
+            self.hist_list.itemClicked.connect(self.on_history_click)
+            hvp.addWidget(self.hist_list, 1)
+            hb = QHBoxLayout()
+            self.btn_undo = QPushButton(tr("撤回"))
+            self.btn_undo.clicked.connect(self.on_undo)
+            self.btn_redo = QPushButton(tr("还原"))
+            self.btn_redo.clicked.connect(self.on_redo)
+            hb.addWidget(self.btn_undo)
+            hb.addWidget(self.btn_redo)
+            hb.addStretch(1)
+            hvp.addLayout(hb)
+            self.left_tabs.addTab(hist_page, tr("历史"))
+            split.addWidget(self.left_tabs)
 
             right = QWidget()
             rv = QVBoxLayout(right)
@@ -3299,6 +3474,14 @@ def run_gui() -> int:
             self.btn_up.setText(tr("上移"))
             self.btn_down.setText(tr("下移"))
             self.btn_remove.setText(tr("删除"))
+            self.btn_undo_bar.setText(tr("撤回"))
+            self.btn_undo_bar.setToolTip(tr("撤销上一步（Ctrl+Z）"))
+            self.btn_redo_bar.setText(tr("还原"))
+            self.btn_redo_bar.setToolTip(tr("重做（Ctrl+Shift+Z）"))
+            self.btn_undo.setText(tr("撤回"))
+            self.btn_redo.setText(tr("还原"))
+            self.left_tabs.setTabText(0, tr("素材"))
+            self.left_tabs.setTabText(1, tr("历史"))
             self.btn_settings.setText(tr("设置"))
             self.btn_settings.setToolTip(
                 tr("导出目录、画幅比例、分辨率、帧率、画质、铺底、转场、默认节奏"))
@@ -3324,9 +3507,11 @@ def run_gui() -> int:
                     tr("预览：改完参数点右上角「刷新预览」"))
             self._apply_ui_mode()
             self._refresh_all()
+            self._refresh_history()
             # 英文/日文文案更长：先让按钮/标签不许缩到文字以下，再按需把窗口拉宽
             self.ensurePolished()
             for w_ in (self.btn_add, self.btn_up, self.btn_down, self.btn_remove,
+                       self.btn_undo_bar, self.btn_redo_bar,
                        self.btn_settings, self.btn_refresh, self.btn_export,
                        self.btn_mode, self.btn_retry, self.lbl_bgm,
                        self.btn_more, self.radio_bgm, self.radio_total,
@@ -3371,6 +3556,8 @@ def run_gui() -> int:
 
         def apply_theme(self):
             """按设置算一套配色，往整个应用上贴 QSS；时间线单独喂一份颜色。"""
+            log("apply_theme %s / %s" % (self.settings["theme"],
+                                         self.settings["accent"]))
             pal = theme.palette(theme.resolve(self.settings["theme"]),
                                 self.settings["accent"])
             self.pal = pal
@@ -3405,6 +3592,7 @@ def run_gui() -> int:
             排序删除改秒数走列表右键菜单，设置走右上角「⋯」。"""
             simple = self.settings["ui"] == "simple"
             for w_ in (self.btn_up, self.btn_down, self.btn_remove,
+                       self.btn_undo_bar, self.btn_redo_bar,
                        self.btn_settings, self.radio_bgm, self.radio_total,
                        self.radio_free, self.spin_total, self.btn_refresh):
                 w_.setVisible(not simple)
@@ -3527,10 +3715,15 @@ def run_gui() -> int:
 
         # ---------------- 设置
         def on_settings(self):
+            log("settings open")
             dlg = SettingsDialog(self.settings, self)
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
             self.settings.save()
+            log("settings saved lang=%s ui=%s theme=%s ratio=%s size=%s" % (
+                self.settings["lang"], self.settings["ui"],
+                self.settings["theme"], self.settings["ratio"],
+                self.settings["width"], self.settings["height"]))
             set_locale(self.settings["lang"])
             apply_qt_translator(current_locale())
             self.apply_theme()
@@ -3547,6 +3740,7 @@ def run_gui() -> int:
                    w=w, h=h, fps=self.settings["fps"]))
             self._follow_audio()
             self.lbl_status.setText(tr("设置已保存"))
+            self._history_push(tr("改设置"))
 
         def _follow_audio(self):
             """预览音频永远走 Windows 当前默认输出，插拔耳机自动跟上。"""
@@ -3585,6 +3779,8 @@ def run_gui() -> int:
                 self.add_images(paths)
 
         def add_images(self, paths):
+            log("add_images n=%d first=%s" % (
+                len(paths), os.path.basename(paths[0]) if paths else ""))
             good = []
             for i, p in enumerate(paths, 1):
                 rd = QImageReader(p)
@@ -3603,6 +3799,7 @@ def run_gui() -> int:
                 self.radio_total.setChecked(self.project.mode == "total")
                 self._refresh_all()
                 self.lbl_status.setText(tr("已加 {n} 张图", n=len(good)))
+                self._history_push(tr("加图片"))
 
         def on_move(self, delta):
             row = self.list.currentRow()
@@ -3610,14 +3807,17 @@ def run_gui() -> int:
                 return
             self.project.move(row, delta)
             self._refresh_all()
+            self._history_push(tr("调整顺序"))
             self.list.setCurrentRow(max(0, min(row + delta, self.list.count() - 1)))
 
         def on_remove(self):
             row = self.list.currentRow()
             if row < 0:
                 return
+            log("remove image row=%d" % row)
             self.project.remove([row])
             self._refresh_all()
+            self._history_push(tr("删除素材"))
 
         def on_edit_dur(self, item):
             row = self.list.row(item)
@@ -3628,8 +3828,10 @@ def run_gui() -> int:
                 self, tr("这张图显示多久"),
                 tr("第 {row} 张（秒）：", row=row + 1), cur, MIN_DUR, 3600, 1)
             if ok:
+                log("duration row=%d %.2f -> %.2f" % (row, cur, val))
                 self.project.set_duration(row, val)
                 self._refresh_all()
+                self._history_push(tr("改时长"))
 
         def on_rows_moved(self, *_a):
             if self._rebuilding:
@@ -3641,6 +3843,7 @@ def run_gui() -> int:
                               float(it.data(Qt.ItemDataRole.UserRole + 1))))
             self.project.reorder(pairs)
             self._refresh_all()
+            self._history_push(tr("调整顺序"))
 
         def on_row_changed(self, row):
             if row < 0:
@@ -3652,6 +3855,7 @@ def run_gui() -> int:
         def on_mode(self, mode):
             set_mode(self.project, mode)
             self._refresh_all()
+            self._history_push(tr("改节奏"))
 
         def on_total_changed(self, value):
             if self.project.mode != "total":
@@ -3659,6 +3863,7 @@ def run_gui() -> int:
             self.project.total_setting = value
             self.project.normalize()
             self._refresh_all()
+            self._history_push(tr("改节奏"))
 
         def on_timeline_pick(self, i):
             if 0 <= i < self.list.count():
@@ -3668,17 +3873,21 @@ def run_gui() -> int:
             self.timeline.set_selection(self.timeline.selected or [i])
 
         def on_timeline_resize(self, i, value):
+            log("timeline resize i=%d -> %.2f" % (i, value))
             self.project.set_duration(i, value)
             self._update_titles()
             self.timeline.update()
             self._mark_stale()
+            self._history_push(tr("改时长"))
             self.lbl_status.setText(
                 tr("{n} 张图 · 总长 {total}", n=self.project.image_count(),
                    total=human_time(self.project.total())))
 
         def on_timeline_move(self, i, pos):
+            log("timeline move i=%d -> %d" % (i, pos))
             self.project.move_to(i, pos)
             self._refresh_all()
+            self._history_push(tr("调整顺序"))
             if 0 <= i < self.list.count():
                 self.list.setCurrentRow(i)
 
@@ -3687,6 +3896,7 @@ def run_gui() -> int:
             path = os.path.normpath(path)
             if not os.path.isfile(path):
                 return
+            log("add audio %s" % os.path.basename(path))
             dur = max(0.2, probe_duration(path) or 3.0)
             pos = min(max(0.0, self.player.position() / 1000.0),
                       max(0.0, self.project.total()))
@@ -3695,6 +3905,7 @@ def run_gui() -> int:
             self._refresh_all()
             self.lbl_status.setText(
                 tr("已加音频 {name}", name=os.path.basename(path)))
+            self._history_push(tr("加音频"))
 
         def on_add_audio(self):
             picked = FileDialog.get_open_files(
@@ -3705,10 +3916,12 @@ def run_gui() -> int:
 
         def on_remove_audio(self, k):
             if 0 <= k < len(self.project.audios):
+                log("remove audio k=%d" % k)
                 self.project.audios.pop(k)
                 self.timeline.sel_audio = []
                 self._refresh_all()
                 self._mark_stale()
+                self._history_push(tr("删音频"))
 
         def on_audio_move(self, k, start):
             if not (0 <= k < len(self.project.audios)):
@@ -3716,12 +3929,15 @@ def run_gui() -> int:
             self.project.audios[k].start = max(0.0, float(start))
             self.timeline.update()
             self._mark_stale()
+            self._history_push(tr("移音频"))
 
         def on_audio_volume(self, k, delta):
             self.on_audio_set_volume([k], None, delta)
 
         def on_audio_set_volume(self, rows, value=None, delta=None):
             """把这几条音频的音量改成 value，或者各自加上 delta。"""
+            log("audio volume rows=%s value=%s delta=%s"
+                % (rows, value, delta))
             for k in rows:
                 if not (0 <= k < len(self.project.audios)):
                     continue
@@ -3732,6 +3948,7 @@ def run_gui() -> int:
                     a.volume = max(0.0, min(2.0, value))
             self.timeline.update()
             self._mark_stale()
+            self._history_push(tr("改音量"))
             if rows and 0 <= rows[0] < len(self.project.audios):
                 self.lbl_status.setText(tr("音量 {pct}%", pct=int(round(
                     self.project.audios[rows[0]].volume * 100))))
@@ -3807,6 +4024,7 @@ def run_gui() -> int:
             for i in rows:
                 self.project.clips[i].fade = want
             self._refresh_all()
+            self._history_push(tr("淡入淡出"))
 
         def on_toggle_xfade(self, rows):
             rows = [i for i in rows if 0 <= i < len(self.project.clips)]
@@ -3816,6 +4034,7 @@ def run_gui() -> int:
             for i in rows:
                 self.project.clips[i].xfade = want
             self._refresh_all()
+            self._history_push(tr("淡入淡出"))
 
         def on_ask_volume(self, rows):
             rows = [k for k in rows if 0 <= k < len(self.project.audios)]
@@ -3931,6 +4150,8 @@ def run_gui() -> int:
                 self.tmpdir, f"preview_{self.preview_seq}.mp4")
             if old_preview != self.preview_path and os.path.exists(old_preview):
                 QTimer.singleShot(1500, lambda p=old_preview: _unlink_quiet(p))
+            log("preview start seq=%d clips=%d" % (self.preview_seq,
+                                                   len(self.project.clips)))
             self._rendering(True, "preview")
             self.lbl_status.setText(tr("生成预览…"))
             self.worker = RenderWorker(
@@ -3944,6 +4165,7 @@ def run_gui() -> int:
             self.worker.start()
 
         def on_preview_ok(self, path):
+            log("preview ok %s" % path)
             self._rendering(False)
             self._clean_stale()
             self.player.setSource(QUrl.fromLocalFile(path))
@@ -3957,6 +4179,7 @@ def run_gui() -> int:
             self.lbl_preview.setText(tr("预览：{name}", name=self.preview_name))
 
         def on_preview_bad(self, msg):
+            log("preview failed: %s" % msg)
             self._rendering(False)
             self._preview_pending = False
             self.lbl_status.setText(tr("预览失败"))
@@ -3978,6 +4201,7 @@ def run_gui() -> int:
             if kind_of(url) == "web" and not ytdlp_ready():
                 if not self._offer_ytdlp():
                     return
+            log("fetch start %s" % url[:120])
             self.btn_retry.setEnabled(False)
             self.lbl_status.setText(tr("正在取音轨…"))
             self.fetch_worker = FetchWorker(url, self.tmpdir, self)
@@ -4006,6 +4230,7 @@ def run_gui() -> int:
             return False
 
         def on_fetch_ok(self, path, dur):
+            log("fetch ok dur=%.2f %s" % (dur, path))
             self.project.audio_path = path
             self.project.audio_dur = dur
             self.project.audio_start = float(self.settings["music_start"])
@@ -4017,8 +4242,10 @@ def run_gui() -> int:
             self.lbl_status.setText(
                 tr("BGM 已就绪：{total} · {name}",
                    total=human_time(dur), name=os.path.basename(path)))
+            self._history_push(tr("换背景音乐"))
 
         def on_fetch_bad(self, msg):
+            log("fetch failed: %s" % msg)
             self.btn_retry.setEnabled(True)
             self.lbl_status.setText(tr("取音轨失败"))
             MsgBox.warn(self, tr("取音轨失败"), msg)
@@ -4060,6 +4287,7 @@ def run_gui() -> int:
                 out += ".mp4"
             self.settings["last_export_dir"] = os.path.dirname(out) or base_dir
             self.settings.save()
+            log("export start %s opts=%r" % (out, self._opts()))
             if shot:
                 print("EXPORT_START:", out, flush=True)
             self._rendering(True, "export")
@@ -4075,6 +4303,7 @@ def run_gui() -> int:
             self.worker.start()
 
         def on_export_ok(self, path):
+            log("export ok %s" % path)
             self._rendering(False)
             self.lbl_status.setText(tr("导出完成：{path}", path=path))
             if os.environ.get("PIC2VIDEO_SHOT"):
@@ -4095,6 +4324,7 @@ def run_gui() -> int:
                 subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
 
         def on_export_bad(self, msg):
+            log("export failed: %s" % msg)
             self._rendering(False)
             self.lbl_status.setText(tr("导出失败"))
             if os.environ.get("PIC2VIDEO_SHOT"):
@@ -4112,6 +4342,8 @@ def run_gui() -> int:
             paths = expand_paths([u.toLocalFile()
                                   for u in ev.mimeData().urls()
                                   if u.isLocalFile()])
+            log("drop n=%d %r" % (len(paths), [os.path.basename(p)
+                                               for p in paths[:6]]))
             imgs = [p for p in paths if os.path.splitext(p)[1].lower() in IMG_EXTS]
             audio = [p for p in paths
                      if os.path.splitext(p)[1].lower() in AUDIO_EXTS]
@@ -4160,6 +4392,7 @@ def run_gui() -> int:
 
         def showEvent(self, ev):
             super().showEvent(ev)
+            log("window show %dx%d" % (self.width(), self.height()))
             bar = getattr(self, "titlebar", None)
             if bar is not None:
                 try:
@@ -4177,6 +4410,7 @@ def run_gui() -> int:
             super().changeEvent(ev)
 
         def closeEvent(self, ev):
+            log("window close")
             busy = self.worker is not None and self.worker.isRunning()
             if busy and not os.environ.get("PIC2VIDEO_SHOT"):
                 stay = MsgBox.ask(
@@ -4391,6 +4625,47 @@ def run_gui() -> int:
             QTimer.singleShot(200, app.quit)
             return app.exec()
 
+        # 撤回/还原冒烟：删一条 → 撤回两次 → 还原一次
+        if os.environ.get("PIC2VIDEO_SHOT_UNDO"):
+            def undo_probe():
+                def snap(tag):
+                    print("UNDO %-12s clips=%d index=%d/%d %s" % (
+                        tag, len(w.project.clips), w.hist_index,
+                        len(w.history) - 1,
+                        [e["label"] for e in w.history]), flush=True)
+                snap("start")
+                w.left_tabs.setCurrentIndex(1)
+                w.list.setCurrentRow(0)
+                w.on_remove()
+                snap("after-remove")
+                w.on_undo()
+                snap("undo1")
+                w.on_undo()
+                snap("undo2")
+                w.on_redo()
+                snap("redo1")
+                print("UNDO tabs:", w.left_tabs.tabText(0), "/",
+                      w.left_tabs.tabText(1), "rows:",
+                      w.hist_list.count(), "undo-btn:",
+                      w.btn_undo.isEnabled(), "redo-btn:",
+                      w.btn_redo.isEnabled(), flush=True)
+                QTimer.singleShot(200, app.quit)
+
+            QTimer.singleShot(600, undo_probe)
+            return app.exec()
+
+        # 故意在 Qt 回调里抛异常：验证「未捕获异常会连 traceback 写进日志」
+        if os.environ.get("PIC2VIDEO_SHOT_CRASH"):
+            log("crash probe armed")
+
+            def _boom():
+                log("crash probe firing")
+                raise RuntimeError("crash probe: uncaught in Qt slot")
+
+            QTimer.singleShot(300, _boom)
+            QTimer.singleShot(1500, app.quit)    # 没 abort 的话也退出来
+            return app.exec()
+
         # 「取消」和「窗口记忆」两个冒烟分支，同样只在 PIC2VIDEO_SHOT 下跑
         cancel_after = os.environ.get("PIC2VIDEO_SHOT_CANCEL")
         geo_probe = os.environ.get("PIC2VIDEO_SHOT_GEO")
@@ -4578,40 +4853,82 @@ def run_gui() -> int:
     return app.exec()
 
 
-def _startup_crash_log() -> None:
-    """exe（无控制台）里把 print 与崩溃栈写进 data_dir/crash.log，方便排查。"""
+LOG_NAME = "crash.log"
+LOG_MAX = 1024 * 1024              # 超过就轮转成 crash.log.1，别无限长
+_log_fh = None
+
+
+def log_path() -> str:
+    r"""日志放 %LOCALAPPDATA%\Pic2Video\：发布包里别多出一个日志文件。"""
+    base = os.path.join(os.environ.get("LOCALAPPDATA")
+                        or tempfile.gettempdir(), "Pic2Video")
+    return os.path.join(base, LOG_NAME)
+
+
+def log(msg: str) -> None:
+    """写一行日志：时间 + 线程 + 内容。写日志本身出错一律吞掉，绝不再崩一次。"""
+    fh = globals().get("_log_fh")
+    if fh is None:
+        return
     try:
-        # 放 %LOCALAPPDATA%\Pic2Video\ 里：发布包里别多出一个日志文件
-        base = os.path.join(os.environ.get("LOCALAPPDATA")
-                            or tempfile.gettempdir(), "Pic2Video")
-        os.makedirs(base, exist_ok=True)
-        path = os.path.join(base, "crash.log")
-        if os.path.exists(path) and os.path.getsize(path) > 512 * 1024:
-            os.remove(path)                              # 别无限长
+        fh.write("%s [%s] %s\n" % (time.strftime("%H:%M:%S"),
+                                   threading.current_thread().name, msg))
+        fh.flush()
+    except Exception:
+        pass
+
+
+def _log_traceback(kind: str, exc, tb) -> None:
+    try:
+        import traceback
+        fh = globals().get("_log_fh")
+        if fh is None:
+            return
+        fh.write("\n!!! uncaught %s\n" % kind)
+        # 用 format_exception(type, value, tb) 这个老三参形式；
+        # 3.12 的 print_exception(exc, tb) 会把 tb 当成 value，什么都不打。
+        fh.write("".join(traceback.format_exception(
+            type(exc) if exc is not None else Exception, exc, tb)))
+        fh.flush()
+    except Exception:
+        pass
+
+
+def _start_log() -> None:
+    """全程日志 + 崩溃兜底。窗口版 exe 没有控制台，print 也落到这里。"""
+    global _log_fh
+    try:
+        path = log_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(path) and os.path.getsize(path) > LOG_MAX:
+            os.replace(path, path + ".1")
         fh = open(path, "a", encoding="utf-8", errors="replace", buffering=1)
     except Exception:
         return
-    globals()["_crash_log"] = fh          # 别让它被回收关掉
+    _log_fh = fh                         # 模块级引用，别让它被回收关掉
     try:
-        fh.write("\n=== %s ===\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
-        # 窗口版 exe 没有控制台，print 无处可去；统一写进日志（也避免 None 抛异常）
-        sys.stdout = fh
-        sys.stderr = fh
+        if sys.stdout is None:
+            sys.stdout = fh
+        if sys.stderr is None:
+            sys.stderr = fh
     except Exception:
         pass
-    def _excepthook(kind, exc, tb):
-        try:
-            import traceback
-            fh.write("\n!!! %s\n" % kind)
-            traceback.print_exception(exc, tb, file=fh)
-            fh.flush()
-        except Exception:
-            pass
-
     try:
-        sys.excepthook = lambda exc, tb: _excepthook("sys", exc, tb)
-        import threading
-        threading.excepthook = lambda a: _excepthook(
+        fh.write("\n=== %s  Pic2Video %s ===\n"
+                 % (time.strftime("%Y-%m-%d %H:%M:%S"), APP_VERSION))
+        fh.flush()
+        log("frozen=%s argv=%r" % (bool(getattr(sys, "frozen", False)),
+                                   sys.argv[1:]))
+        log("python=%s platform=%s" % (sys.version.split()[0], sys.platform))
+        log("cwd=%s" % os.getcwd())
+        log("settings=%s" % SETTINGS_PATH)
+    except Exception:
+        pass
+    try:
+        # 注意是三个参数：类型 / 值 / traceback（原来写成两参，真崩时反而报
+        # "Error in sys.excepthook" 把原始栈也吞了）
+        sys.excepthook = lambda _t, exc, tb: _log_traceback("sys", exc, tb)
+        threading.excepthook = lambda a: _log_traceback(
             "thread", a.exc_value, a.exc_traceback)
     except Exception:
         pass
@@ -4620,11 +4937,19 @@ def _startup_crash_log() -> None:
         faulthandler.enable(file=fh, all_threads=True)
     except Exception:
         pass
+    try:
+        from PyQt6.QtCore import qInstallMessageHandler
+
+        def _qt_message(_mode, _ctx, text):
+            log("[qt] %s" % text)
+
+        qInstallMessageHandler(_qt_message)
+    except Exception:
+        pass
 
 
 def main() -> int:
-    if getattr(sys, "frozen", False) or os.environ.get("PIC2VIDEO_DEBUG"):
-        _startup_crash_log()
+    _start_log()                       # 源码运行也记日志，出问题才有据可查
     argv = sys.argv[1:]
     if "--export" in argv:
         return cli_export(argv)

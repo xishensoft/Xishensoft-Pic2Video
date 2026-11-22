@@ -532,7 +532,8 @@ check("子进程不继承 stdin", _src.count("stdin=subprocess.DEVNULL") >= 3,
       _src.count("stdin=subprocess.DEVNULL"))
 check("子进程免开黑窗口", "CREATION_NO_WINDOW = getattr(" in _src
       and _src.count("creationflags=CREATION_NO_WINDOW") >= 3)
-check("exe 里 print 有落处", "sys.stdout = fh" in _src and "sys.stderr = fh" in _src)
+check("exe 里 print 有落处", "if sys.stdout is None:" in _src
+      and "sys.stderr = fh" in _src)
 check("exe 里崩溃写日志", "faulthandler.enable(file=fh" in _src)
 
 # 28 成片要写明颜色范围/色度，否则播放器把 limited 当 full 解释 -> 发灰发暗
@@ -746,6 +747,91 @@ check("音量改到 0..2 之间", "max(0.0, min(2.0, value))" in _src
 check("滚轮一步 5 个百分点", "audioVolume.emit" in _src and "0.05" in _src)
 check("色带能拖播放头", "def mouseMoveEvent" in _src and "seeked.emit" in _src)
 check("色带能拖着换位置", "moved.emit" in _src and "audioMoved.emit" in _src)
+
+# 31 错误日志：闪退了得查得出原因（用户 2026-11-23 说记不清，靠日志兜住）
+check("启动就开日志", "_start_log()" in _src and "_startup_crash_log" not in _src)
+check("日志有路径与轮转", "def log_path" in _src and "LOG_MAX" in _src
+      and 'path + ".1"' in _src)
+check("Qt 消息也进日志", "qInstallMessageHandler" in _src)
+check("设置里有错误日志入口", 'add_row("错误日志"' in _src
+      and "def _open_log" in _src)
+_log_dir = tempfile.mkdtemp(prefix="p2v_log_")
+_old_local = os.environ.get("LOCALAPPDATA")
+os.environ["LOCALAPPDATA"] = _log_dir
+try:
+    p._log_fh = None
+    p._start_log()
+    p.log("hello-log")
+    try:
+        raise ValueError("boom-test")
+    except ValueError:
+        p._log_traceback("sys", *sys.exc_info()[1:])
+    _lp = p.log_path()
+    _txt = open(_lp, encoding="utf-8", errors="replace").read()
+    check("日志落到 LOCALAPPDATA", _lp.startswith(_log_dir), _lp)
+    check("日志记了版本与动作", "Pic2Video" in _txt and "hello-log" in _txt)
+    check("未捕获异常带 traceback", "uncaught sys" in _txt
+          and "boom-test" in _txt and "ValueError" in _txt)
+    # sys.excepthook 是三个参数；写成两参时真崩了只会报 "Error in sys.excepthook"，
+    # 把原始栈一起吞掉（本轮实测踩过）
+    _tb = None
+    try:
+        raise KeyError("three-arg")
+    except KeyError:
+        _tb = sys.exc_info()[2]
+        p.sys.excepthook(KeyError, sys.exc_info()[1], _tb)
+    _txt2 = open(_lp, encoding="utf-8", errors="replace").read()
+    check("excepthook 是三参数签名", "three-arg" in _txt2 and "KeyError" in _txt2)
+    with open(_lp, "a", encoding="utf-8") as _fh:
+        _fh.write("x" * (p.LOG_MAX + 10))
+    p._log_fh.close()
+    p._start_log()
+    check("超过上限会轮转", os.path.exists(_lp + ".1"))
+finally:
+    try:
+        if p._log_fh:
+            p._log_fh.close()
+    except Exception:
+        pass
+    p._log_fh = None
+    if _old_local is None:
+        os.environ.pop("LOCALAPPDATA", None)
+    else:
+        os.environ["LOCALAPPDATA"] = _old_local
+    import shutil as _sh
+    _sh.rmtree(_log_dir, ignore_errors=True)
+
+# ---------------- 32 撤回 / 还原
+pr = p.Project()
+pr.add_images(IMG)
+pr.audios.append(p.AudioClip(os.path.join(FIXTURES, "tone6.m4a"), 6.0, 1.5, 0.8))
+pr.mode = "total"
+pr.total_setting = 9.0
+st = pr.to_state()
+q = p.Project()
+q.load_state(st)
+check("快照能还原素材",
+      [c.path for c in q.clips] == [x.path for x in pr.clips]
+      and abs(q.clips[0].dur - pr.clips[0].dur) < 1e-9)
+check("快照能还原音频",
+      len(q.audios) == 1 and abs(q.audios[0].volume - 0.8) < 1e-9
+      and abs(q.audios[0].start - 1.5) < 1e-9)
+check("快照带节奏设置", q.mode == "total" and abs(q.total_setting - 9.0) < 1e-9)
+q.load_state({"clips": []})
+check("空快照不炸", q.clips == [] and q.audios == [])
+
+src = open(os.path.join(ROOT, "pic2video.py"), encoding="utf-8").read()
+check("历史栈有上限", "_HISTORY_MAX = 120" in src)
+check("快镜头合并成一步", 'now - last["t"] < 1.2' in src)
+check("撤回/还原快捷键", '"Ctrl+Z"' in src and '"Ctrl+Shift+Z"' in src)
+check("素材/历史两页", 'self.left_tabs.addTab(self.list, tr("素材"))' in src
+      and 'self.left_tabs.addTab(hist_page, tr("历史"))' in src)
+check("历史列表能点回去", "def on_history_click" in src
+      and "self._history_apply(row)" in src)
+check("重放时不再记步骤", "self._hist_lock = True" in src
+      and 'self.project.load_state(st["project"])' in src)
+check("各操作都记历史", src.count("self._history_push(") >= 14,
+      src.count("self._history_push("))
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
