@@ -725,6 +725,21 @@ class Project:
                 out.append(path)
         return out
 
+    def relink_media(self, old: str, new: str) -> int:
+        """把登记成 old 的素材全换成 new（挪了文件之后重新指过去），返回换了几条。"""
+        if not old or not new or old == new:
+            return 0
+        n = 0
+        for clip in self.clips:
+            if clip.path == old:
+                clip.path = new
+                n += 1
+        for audio in self.audios:
+            if audio.path == old:
+                audio.path = new
+                n += 1
+        return n
+
     # -- 片段分类 ------------------------------------------------------
     def images(self) -> list[Clip]:
         return [c for c in self.clips if not c.is_video]
@@ -3695,10 +3710,35 @@ def run_gui() -> int:
         def _warn_missing(self, missing: list[str]):
             names = "、".join(os.path.basename(p) for p in missing[:6])
             more = (tr(" 等 %d 个") % len(missing)) if len(missing) > 6 else ""
-            MsgBox.warn(
+            picked = MsgBox.choose(
                 self, tr("有素材找不到了"),
                 tr("下面这些素材不在了，成片里会缺画面：\n%s%s\n"
-                   "把它们放回原来的位置，或者重新导入。") % (names, more))
+                   "把它们放回原来的位置，或者重新导入。") % (names, more),
+                [(tr("重新定位…"), "primary"), (tr("先不管"), "plain")], "warn")
+            if picked == 0:
+                self._relink_missing(missing)
+
+        def _relink_missing(self, missing: list[str]):
+            """挨个问新位置；同一条素材被引用几次就一起换掉。"""
+            changed = False
+            for old in missing:
+                if os.path.exists(old):
+                    continue
+                ext = os.path.splitext(old)[1].lower()
+                filt = tr("同一类文件 (*%s)") % ext if ext else ""
+                new, _f = QFileDialog.getOpenFileName(
+                    self, tr("重新定位：%s") % os.path.basename(old),
+                    os.path.dirname(old) or self._project_dir(), filt)
+                if not new:
+                    continue          # 这一个先跳过，条目原样留着
+                if self.project.relink_media(old, new):
+                    changed = True
+            if changed:
+                self._mark_dirty()
+                self._refresh_all()
+            left = self.project.missing_media()
+            if left:
+                self._warn_missing(left)
 
         def on_save_project(self, _checked=False) -> bool:
             if not self.project_path:

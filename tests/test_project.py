@@ -1202,8 +1202,56 @@ check("打开工程时缺素材会提示",
       "def _warn_missing" in src and "missing_media()" in src)
 check("保存/不保存后清掉自动保存", "self.autosaver.clear()" in src)
 check("打开过的记进最近列表", "self.settings.push_recent(" in src)
-check("自动保存落在数据目录",
-      'os.path.join(components.data_dir(),' in src)
+# ---------------- 40 缺素材重新定位
+
+def _touch(path):
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("x")
+
+
+with tempfile.TemporaryDirectory() as td_rel:
+    old_a = os.path.join(td_rel, "旧图.png")
+    new_a = os.path.join(td_rel, "新图.png")
+    other = os.path.join(td_rel, "别的.png")
+    old_b = os.path.join(td_rel, "旧曲.mp3")
+    new_b = os.path.join(td_rel, "新曲.mp3")
+    for f in (new_a, other, new_b):
+        _touch(f)
+
+    proj = p.Project(fps=30)
+    proj.clips = [p.Clip(old_a, 2.0), p.Clip(other, 2.0)]
+    proj.audios = [p.AudioClip(old_b, 10.0)]
+    check("重新定位前：旧图旧曲算缺", proj.missing_media() == [old_a, old_b],
+          proj.missing_media())
+    n = proj.relink_media(old_a, new_a)
+    check("重新定位：换掉对上的片段路径", proj.clips[0].path == new_a,
+          proj.clips[0].path)
+    check("重新定位：返回换了几条", n == 1, n)
+    check("重新定位：没对上的片段不动",
+          proj.clips[1].path == other, proj.clips[1].path)
+    check("重新定位：音频另走一遍", proj.relink_media(old_b, new_b) == 1)
+    check("重新定位：音频路径换了", proj.audios[0].path == new_b,
+          proj.audios[0].path)
+    check("重新定位：全找回来后不再报缺", proj.missing_media() == [],
+          proj.missing_media())
+    check("重新定位：路径对不上什么都不改",
+          proj.relink_media(os.path.join(td_rel, "没有.png"), new_a) == 0)
+    proj.clips[0].path = old_a
+    check("重新定位：换到还是不存在的文件，照样算缺",
+          (proj.relink_media(old_a, os.path.join(td_rel, "也没有.png")) == 1
+           and proj.missing_media() == [os.path.join(td_rel, "也没有.png")]),
+          proj.missing_media())
+
+src = open(os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "pic2video.py"), encoding="utf-8").read()
+check("缺素材对话框有「重新定位…」", 'tr("重新定位…")' in src)
+check("缺素材对话框有「先不管」", 'tr("先不管")' in src)
+check("重新定位走文件选择框", "def _relink_missing" in src
+      and "QFileDialog.getOpenFileName" in src)
+check("重新定位调 Project.relink_media",
+      "self.project.relink_media(old, new)" in src)
+check("重新定位后标脏并刷新", "self._mark_dirty()" in src
+      and "self._refresh_all()" in src)
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")

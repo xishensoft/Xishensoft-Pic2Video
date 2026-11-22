@@ -2033,3 +2033,35 @@ _TR_EXTRA25 = {
 for _k, _trs in _TR_EXTRA25.items():
     for _lang, _v in _trs.items():
         TR[_lang].setdefault(_k, _v)
+
+
+_TR_EXTRA26 = {
+    '重新定位…': {
+        'zh-TW': '重新定位…',
+        'en': 'Locate…',
+        'ja': '再指定…',
+        'ko': '위치 지정…',
+    },
+    '先不管': {
+        'zh-TW': '先不管',
+        'en': 'Not now',
+        'ja': 'あとで',
+        'ko': '나중에',
+    },
+    '同一类文件 (*%s)': {
+        'zh-TW': '同類檔案 (*%s)',
+        'en': 'Same kind (*%s)',
+        'ja': '同じ種類 (*%s)',
+        'ko': '같은 종류 (*%s)',
+    },
+    '重新定位：%s': {
+        'zh-TW': '重新定位：%s',
+        'en': 'Locate: %s',
+        'ja': '再指定：%s',
+        'ko': '위치 지정: %s',
+    },
+}
+
+for _k, _trs in _TR_EXTRA26.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)
