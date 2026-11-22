@@ -535,6 +535,37 @@ check("子进程免开黑窗口", "CREATION_NO_WINDOW = getattr(" in _src
 check("exe 里 print 有落处", "sys.stdout = fh" in _src and "sys.stderr = fh" in _src)
 check("exe 里崩溃写日志", "faulthandler.enable(file=fh" in _src)
 
+# 28 成片要写明颜色范围/色度，否则播放器把 limited 当 full 解释 -> 发灰发暗
+_g = p.build_graph([60, 60], 4.0, 640, 360, fps=30, fit="cover", fade_in=0.0,
+                    fade_out=0.0, transition="none", transition_sec=0.3)
+check("filtergraph 结尾写颜色标记",
+      "setparams=range=tv:colorspace=bt709" in _g, _g[-90:])
+check("颜色标记在 concat 之后",
+      _g.index("concat=n=2") < _g.index("setparams"), "order")
+check("出片命令仍带 -color_range tv", '"-color_range", "tv"' in _src)
+_range_out = os.path.join(tempfile.gettempdir(), "p2v_test_range.mp4")
+_aud = os.path.join(FIXTURES, "tone6.m4a")
+if os.path.isfile(_aud):
+    _pr = p.Project(); _pr.mode = "free"; _pr.add_images([IMG[0]], 1.0)
+    p.render(_pr.clips, _pr.frame_counts(), _aud, _range_out, w=320, h=180,
+             crf=35, preset="ultrafast", fps=30, fit="cover", fade_in=0.0,
+             fade_out=0.0, transition="none", transition_sec=0.3)
+    _probe = subprocess.run(
+        [p.FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=color_range,color_space,color_primaries,color_transfer",
+         "-of", "default=nw=1", _range_out],
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    _txt = _probe.stdout or ""
+    check("成片 ffprobe 报 tv 范围", "color_range=tv" in _txt, _txt.replace("\n", " "))
+    check("成片 ffprobe 报 bt709", "color_space=bt709" in _txt
+          and "color_primaries=bt709" in _txt, _txt.replace("\n", " "))
+    try:
+        os.remove(_range_out)
+    except OSError:
+        pass
+else:
+    check("成片 ffprobe 报 tv 范围", False, "缺 fixtures/tone6.m4a")
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

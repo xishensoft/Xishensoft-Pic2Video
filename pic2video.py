@@ -45,6 +45,9 @@ MIN_DUR = 0.2
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 MEDIA_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".flv", ".m4v"}
 FADE_IN, FADE_OUT = 0.5, 1.5
+# 画面是 limited range（16–235）。不写清范围/色度，播放器只能猜：猜成 full 就会发灰、发暗。
+# setparams 把标记写进帧属性，x264 才会把 VUI（color_range/colour_primaries…）写进 mp4。
+COLOR_TAG = "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709"
 
 FFMPEG = os.environ.get("PIC2VIDEO_FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("PIC2VIDEO_FFPROBE", "ffprobe")
@@ -663,7 +666,8 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
                       f",fade=t=out:st={max(0.0, seg - td):.3f}:d={td:.3f}")
         parts.append(chain + f"[v{i}]")
     labels = "".join(f"[v{i}]" for i in range(K))
-    parts.append(f"{labels}concat=n={K}:v=1:a=0[vout]")
+    parts.append(f"{labels}concat=n={K}:v=1:a=0,"
+                 f"{COLOR_TAG}[vout]")
     mstart = max(0.0, float(music_start))
     audio = (f"[{audio_index}:a]atrim=start={mstart:.3f}:"
              f"end={mstart + total:.3f},asetpts=N/SR/TB")
