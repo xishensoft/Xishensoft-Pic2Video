@@ -41,6 +41,7 @@
 - [默认简洁模式 + 深浅主题 + 主色对撞色 + 色环取色](issues/10-默认简洁模式-深浅主题-主色对撞色-色环取色.md)：首次打开进简洁模式；新增 theme.py（跟随系统/浅色/深色三档 + 只挑一个主色，按色环 180° 自动出对撞色，readable_accent 保证按钮文字对比度），设置里改用色环取色；QSS 的下拉/微调箭头改为按配色现画的 PNG（Windows 画不出 border 三角）。
 - [多平台 BGM：抖音/YouTube 等链接与本地文件（yt-dlp 按需装删）](issues/11-多平台-bgm-抖音-youtube-等链接与本地文件-yt-dlp-按需装删.md)：新增 audio_source.py 分 local/bili/web 三种来源——B 站仍走 bili_audio，抖音/YouTube/快手/小红书/微博走 yt-dlp（设置里一键装/删到 tools/，约 21 MB），本地音视频拖进窗口直接当 BGM；命令行 --audio 也收平台链接。
 - [12 v1.0.1 发版：把颜色范围修复带进 exe 并撤下 v1.0.0 下载包](issues/12-v1.0.1-发版-颜色范围修复带进-exe-并撤下-v1.0.0-下载包.md)：build.bat 重打包，跑 exe 验到 ffprobe 报 `tv / bt709`（单测 216 条全过）；发 v1.0.1 并标 Latest，zip 48,134,812 B、线上 digest 与本地 sha256 一致，顶层 `Pic2Video\` 解压即用；v1.0.0 的 asset 撤下、正文标「已被 v1.0.1 取代」，标签留作历史。
+- [13 所有窗口自绘边框：去掉系统标题栏](issues/13-所有窗口自绘边框-去掉系统标题栏.md)：主窗口与所有弹窗改 `FramelessWindowHint` + 自绘标题栏，拖动/双击最大化/八向拉伸走 `WM_NCHITTEST`（边缘 6 px，按 devicePixelRatio 折算）；消息/进度/数字框与文件框都换自绘版，样式与调色板贴到 QApplication 全局、Qt 内置译文跟界面语言；**PyQt6 里 `nativeEvent` 调 `super()` 会段错误**，未处理时回 `False, 0`；代价是文件框没有系统侧栏（README 已写）。
 
 ## Not yet specified
 
