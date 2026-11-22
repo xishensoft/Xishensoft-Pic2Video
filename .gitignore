@@ -17,3 +17,5 @@ tests/shot_*.png
 tests/out_*.mp4
 tests/*.mp4
 !tests/fixtures/*
+
+screenshots/shot_*.png
