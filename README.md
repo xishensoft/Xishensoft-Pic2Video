@@ -176,7 +176,7 @@ _internal\       运行时文件，和 exe 放在一起
 **四种情况，四种原因**（看是哪一种，别混在一起）：
 
 1. **整片发灰、白色不白**：成片是 limited range（16–235），v1.0.0 那个包没在文件里写清颜色范围（`ffprobe` 读回来是 `color_range=unknown`），播放器只能猜；猜成 full 就会把 235 当 255 显示，白变成 92%、黑被抬到 16，观感就是发灰。
-   **已经修了**：现在的源码在 filtergraph 结尾加了 `setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709`，重新打包后 `ffprobe` 会如实报 `color_range=tv / color_space=bt709`（有单测盯着）。手里的 v1.0.0 如果看着发灰，换播放器（mpv / VLC）对比一下就能确认是不是猜错了范围。
+   **v1.0.1 已经修了**：源码在 filtergraph 结尾加了 `setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709`，导出包里 `ffprobe` 会如实报 `color_range=tv / color_space=bt709 / color_transfer=bt709 / color_primaries=bt709`（有单测盯着）。用 v1.0.0 觉得发灰的，换成 v1.0.1 重新导出一次就正常——旧版的下载包已经撤下了。
 2. **四周比中间暗**：铺底用的是「原图铺底」+ 背景模糊，四周那张虚化底被故意压暗了 8%（`gblur=sigma=40,eq=brightness=-0.08`）。实测纯橙 #FF8000：主体中心 RGB(253,126,0) 不变，左边缘变 (228,100,0)。**这是设计，不是 bug**。
 3. **图片带透明通道**（PNG 水印、去背景图最常见）：透明部分在成片里是纯黑——实测全透明底的 PNG，出片后透明处 RGB 是 (0,0,0)。
 4. **转场用的是「淡入淡出」**：每张图进、出都淡到黑（默认 0.3 秒），片头片尾最像「黑了几帧」。
