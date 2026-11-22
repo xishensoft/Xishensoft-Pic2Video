@@ -2230,3 +2230,82 @@ _TR_EXTRA29 = {
 for _k, _trs in _TR_EXTRA29.items():
     for _lang, _v in _trs.items():
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA30 = {
+    '交叉淡化': {
+        'zh-TW': '交叉淡化', 'en': 'Cross fade',
+        'ja': 'クロスフェード', 'ko': '크로스 페이드',
+    },
+    '黑场过渡': {
+        'zh-TW': '黑場過渡', 'en': 'Fade through black',
+        'ja': '黒フェード', 'ko': '블랙 페이드',
+    },
+    '向左擦除': {
+        'zh-TW': '向左擦除', 'en': 'Wipe left',
+        'ja': '左ワイプ', 'ko': '왼쪽 와이프',
+    },
+    '向右擦除': {
+        'zh-TW': '向右擦除', 'en': 'Wipe right',
+        'ja': '右ワイプ', 'ko': '오른쪽 와이프',
+    },
+    '向上擦除': {
+        'zh-TW': '向上擦除', 'en': 'Wipe up',
+        'ja': '上ワイプ', 'ko': '위쪽 와이프',
+    },
+    '向下擦除': {
+        'zh-TW': '向下擦除', 'en': 'Wipe down',
+        'ja': '下ワイプ', 'ko': '아래쪽 와이프',
+    },
+    '向左推移': {
+        'zh-TW': '向左推移', 'en': 'Slide left',
+        'ja': '左スライド', 'ko': '왼쪽 슬라이드',
+    },
+    '向右推移': {
+        'zh-TW': '向右推移', 'en': 'Slide right',
+        'ja': '右スライド', 'ko': '오른쪽 슬라이드',
+    },
+    '圆形展开': {
+        'zh-TW': '圓形展開', 'en': 'Circle open',
+        'ja': '円形オープン', 'ko': '원형 확장',
+    },
+    '圆形收拢': {
+        'zh-TW': '圓形收攏', 'en': 'Circle close',
+        'ja': '円形クローズ', 'ko': '원형 축소',
+    },
+    '径向旋转': {
+        'zh-TW': '徑向旋轉', 'en': 'Radial',
+        'ja': '放射状', 'ko': '방사형',
+    },
+    '马赛克': {
+        'zh-TW': '馬賽克', 'en': 'Pixelize',
+        'ja': 'モザイク', 'ko': '모자이크',
+    },
+    '转场': {
+        'zh-TW': '轉場', 'en': 'Transition',
+        'ja': 'トランジション', 'ko': '전환',
+    },
+    '转场时长': {
+        'zh-TW': '轉場時長', 'en': 'Transition length',
+        'ja': 'トランジションの長さ', 'ko': '전환 길이',
+    },
+    '无（硬切）': {
+        'zh-TW': '無（硬切）', 'en': 'None (hard cut)',
+        'ja': 'なし（ハードカット）', 'ko': '없음 (하드 컷)',
+    },
+    '跟随设置': {
+        'zh-TW': '跟隨設定', 'en': 'Follow setting',
+        'ja': '設定に従う', 'ko': '설정 따르기',
+    },
+    '{n} 秒': {
+        'zh-TW': '{n} 秒', 'en': '{n} s',
+        'ja': '{n} 秒', 'ko': '{n}초',
+    },
+    '转场放不下': {
+        'zh-TW': '轉場放不下', 'en': 'Transition too long',
+        'ja': 'トランジションが長すぎます', 'ko': '전환이 너무 깁니다',
+    },
+}
+
+for _k, _trs in _TR_EXTRA30.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)

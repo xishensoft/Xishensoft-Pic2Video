@@ -223,6 +223,18 @@ QUALITY = {"高": 18, "标准": 20, "小体积": 23}
 MODE_LABELS = {"bgm": "跟 BGM", "material": "跟素材总长",
                "total": "自设总长", "free": "逐张秒数"}
 MODE_BY_LABEL = {v: k for k, v in MODE_LABELS.items()}
+# 交叉淡化能用的转场：全是 ffmpeg xfade 的内置名，不吃外部文件
+XFADE_NAMES = ("fade", "fadeblack", "wipeleft", "wiperight", "wipeup",
+               "wipedown", "slideleft", "slideright", "circleopen",
+               "circleclose", "radial", "pixelize")
+XFADE_LABELS = {
+    "fade": "交叉淡化", "fadeblack": "黑场过渡", "wipeleft": "向左擦除",
+    "wiperight": "向右擦除", "wipeup": "向上擦除", "wipedown": "向下擦除",
+    "slideleft": "向左推移", "slideright": "向右推移",
+    "circleopen": "圆形展开", "circleclose": "圆形收拢",
+    "radial": "径向旋转", "pixelize": "马赛克",
+}
+XFADE_MIN, XFADE_MAX = 0.1, 3.0   # 单个转场的秒数范围
 MOTIONS = ("none", "in", "out", "inout")          # 画面动效
 MOTION_LABELS = {"none": "静止", "in": "缓慢推近",
                  "out": "缓慢拉远", "inout": "交替推拉"}
@@ -511,16 +523,20 @@ class Clip:
     xfade: 跟下一个元素交叉淡化
     """
 
-    __slots__ = ("path", "dur", "kind", "fade", "xfade", "src_in", "src_out")
+    __slots__ = ("path", "dur", "kind", "fade", "xfade", "xfade_name",
+                 "xfade_dur", "src_in", "src_out")
 
     def __init__(self, path: str, dur: float, kind: str = "image",
                  fade: bool = False, xfade: bool = False,
-                 src_in: float = 0.0, src_out: float | None = None):
+                 src_in: float = 0.0, src_out: float | None = None,
+                 xfade_name: str = "", xfade_dur: float | None = None):
         self.path = path
         self.dur = float(dur)
         self.kind = kind if kind in ("image", "intro", "outro") else "image"
         self.fade = bool(fade)
         self.xfade = bool(xfade)
+        self.xfade_name = xfade_name if xfade_name in XFADE_NAMES else ""
+        self.xfade_dur = None if xfade_dur is None else float(xfade_dur)
         self.src_in = float(src_in)     # 视频：从源的第几秒开始
         self.src_out = None if src_out is None else float(src_out)
 
@@ -538,7 +554,7 @@ class Clip:
 
     def copy(self):
         return Clip(self.path, self.dur, self.kind, self.fade, self.xfade,
-                    self.src_in, self.src_out)
+                    self.src_in, self.src_out, self.xfade_name, self.xfade_dur)
 
     def __repr__(self):
         return f"Clip({os.path.basename(self.path)!r}, {self.dur:.2f}, {self.kind})"
@@ -667,6 +683,7 @@ class Project:
             "total_setting": self.total_setting,
             "clips": [{"path": c.path, "dur": c.dur, "kind": c.kind,
                        "fade": bool(c.fade), "xfade": bool(c.xfade),
+                       "xfade_name": c.xfade_name, "xfade_dur": c.xfade_dur,
                        "src_in": c.src_in, "src_out": c.src_out}
                       for c in self.clips],
             "audios": [{"path": a.path, "dur": a.dur, "start": a.start,
@@ -738,9 +755,16 @@ class Project:
             src_out = min(src_out, dur)
             if src_out <= src_in:
                 src_out = None
+        name = raw.get("xfade_name") or ""
+        if not isinstance(name, str):
+            name = ""
+        raw_xd = raw.get("xfade_dur")
+        xfade_dur = None if raw_xd is None else min(
+            XFADE_MAX, max(XFADE_MIN, _doc_num(raw_xd, 0.3)))
         return Clip(path, dur, kind,
                     bool(raw.get("fade", False)),
-                    bool(raw.get("xfade", False)), src_in, src_out)
+                    bool(raw.get("xfade", False)) or bool(name),
+                    src_in, src_out, name, xfade_dur)
 
     @staticmethod
     def _audio_from_doc(raw) -> AudioClip:
@@ -1499,6 +1523,27 @@ def _motion_chain(chain: str, motion: str, index: int, nf: int,
             f":d=1:s={w}x{h}:fps={fps}")
 
 
+def boundary_xfade(clips, i: int, xfade_sec: float):
+    """第 i 段与第 i+1 段之间的转场：返回 (名字, 秒数)，硬切返回 None。
+
+    谁开了 xfade 就听谁的：前一段开了用前一段的，否则用后一段的；
+    名字空着就是 fade，时长空着跟全局 xfade_sec。
+    """
+    if not clips or i < 0 or i + 1 >= len(clips):
+        return None
+    for c in (clips[i], clips[i + 1]):
+        if not getattr(c, "xfade", False):
+            continue
+        name = getattr(c, "xfade_name", "") or "fade"
+        if name not in XFADE_NAMES:
+            name = "fade"
+        dur = getattr(c, "xfade_dur", None)
+        if dur is None:
+            dur = xfade_sec
+        return name, min(XFADE_MAX, max(0.0, float(dur)))
+    return None
+
+
 def _xfade_plan(clips, counts, fps: int, xfade_sec: float):
     """交叉淡化时每条边界两侧各补一半帧，输出总帧数守恒。
 
@@ -1508,10 +1553,11 @@ def _xfade_plan(clips, counts, fps: int, xfade_sec: float):
     if not clips or len(clips) < 2:
         return counts2, []
     overlaps = [0] * (len(clips) - 1)
-    want = max(1, int(round(max(0.0, float(xfade_sec)) * fps / 2.0)))
     for i in range(len(clips) - 1):
-        if not (clips[i].xfade or clips[i + 1].xfade):
+        hit = boundary_xfade(clips, i, xfade_sec)
+        if not hit:
             continue
+        want = max(1, int(round(hit[1] * fps / 2.0)))
         room = min(counts2[i], counts2[i + 1]) // 2
         half = min(want, room)
         if half < 1:
@@ -1520,6 +1566,35 @@ def _xfade_plan(clips, counts, fps: int, xfade_sec: float):
         counts2[i] += half
         counts2[i + 1] += half
     return counts2, overlaps
+
+
+def xfade_short(clips, counts, fps: int, xfade_sec: float) -> list[dict]:
+    """哪几处转场塞不下：相邻两段都得比转场的两倍还长，否则提示而不是出坏片。"""
+    out = []
+    if not clips or len(counts) < 2:
+        return out
+    for i in range(min(len(clips), len(counts)) - 1):
+        hit = boundary_xfade(clips, i, xfade_sec)
+        if not hit:
+            continue
+        name, want = hit
+        need = 2.0 * want
+        a = counts[i] / float(fps)
+        b = counts[i + 1] / float(fps)
+        if a <= need or b <= need:
+            out.append({"at": i, "name": name, "want": want, "need": need,
+                        "a": a, "b": b})
+    return out
+
+
+def xfade_error_text(items) -> str:
+    """把 xfade_short 的第一条翻成一句人话（导出前的提示）。"""
+    it = items[0]
+    return ("第 %d 段和第 %d 段之间放了 %.2f 秒转场，可这两段只有 "
+            "%.2f / %.2f 秒；转场要求相邻两段各超过 %.2f 秒。"
+            "把转场调短，或者把这两段拉长。"
+            % (it["at"] + 1, it["at"] + 2, it["want"], it["a"], it["b"],
+               it["need"]))
 
 
 def _sec(value: float) -> str:
@@ -1656,7 +1731,9 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
         d = overlaps[i - 1] / fps if overlaps else 0.0
         if d > 0:
             off = max(0.0, acc - d)
-            parts.append(f"{prev}[v{i}]xfade=transition=fade:duration={d:.3f}:"
+            hit = boundary_xfade(clips, i - 1, xfade_sec)
+            name = hit[0] if hit else "fade"
+            parts.append(f"{prev}[v{i}]xfade=transition={name}:duration={d:.3f}:"
                          f"offset={off:.3f}[m{i}]")
             acc += segs[i] - d
         else:
@@ -1783,6 +1860,9 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
     if bad:
         raise RenderError(tr("这张图片读不出来：{name}",
                              name=os.path.basename(bad[0])))
+    short = xfade_short(clips, counts, fps, xfade_sec)
+    if short:
+        raise RenderError(xfade_error_text(short))
     counts2, overlaps = _xfade_plan(clips, counts, fps, xfade_sec)
     total = sum(counts) / fps
     add_bg = fit in BG_MODES
@@ -5312,14 +5392,47 @@ def run_gui() -> int:
                 act.setChecked(bool(fades) and all(fades))
                 act.triggered.connect(
                     lambda _c=False, t=targets: self.on_toggle_fade(t))
-                if len(targets) >= 2:
-                    xfs = [self.project.clips[i].xfade for i in targets
-                           if 0 <= i < len(self.project.clips)]
-                    xact = m.addAction(tr("交叉淡化（与相邻元素）"))
-                    xact.setCheckable(True)
-                    xact.setChecked(bool(xfs) and all(xfs))
-                    xact.triggered.connect(
-                        lambda _c=False, t=targets: self.on_toggle_xfade(t))
+                xm = m.addMenu(tr("转场"))
+                cur_names = [self.project.clips[i].xfade_name
+                             for i in targets
+                             if 0 <= i < len(self.project.clips)
+                             and self.project.clips[i].xfade]
+                on_now = any(0 <= i < len(self.project.clips)
+                             and self.project.clips[i].xfade for i in targets)
+                none_act = xm.addAction(tr("无（硬切）"))
+                none_act.setCheckable(True)
+                none_act.setChecked(not on_now)
+                none_act.triggered.connect(
+                    lambda _c=False, t=targets: self.on_set_transition(t, ""))
+                xm.addSeparator()
+                for name in XFADE_NAMES:
+                    act = xm.addAction(tr(XFADE_LABELS[name]))
+                    act.setCheckable(True)
+                    act.setChecked(on_now and all(
+                        (n or "fade") == name for n in cur_names))
+                    act.setToolTip(name)
+                    act.triggered.connect(
+                        lambda _c=False, t=targets, n=name:
+                        self.on_set_transition(t, n))
+                xm.addSeparator()
+                dm = xm.addMenu(tr("转场时长"))
+                cur_dur = [self.project.clips[i].xfade_dur for i in targets
+                           if 0 <= i < len(self.project.clips)
+                           and self.project.clips[i].xfade]
+                follow = dm.addAction(tr("跟随设置"))
+                follow.setCheckable(True)
+                follow.setChecked(on_now and all(d is None for d in cur_dur))
+                follow.triggered.connect(
+                    lambda _c=False, t=targets:
+                    self.on_set_transition_dur(t, None))
+                for sec in (0.2, 0.3, 0.5, 0.8, 1.0):
+                    act = dm.addAction(tr("{n} 秒", n=sec))
+                    act.setCheckable(True)
+                    act.setChecked(on_now and all(
+                        d is not None and abs(d - sec) < 1e-6 for d in cur_dur))
+                    act.triggered.connect(
+                        lambda _c=False, t=targets, v=sec:
+                        self.on_set_transition_dur(t, v))
                 if (len(targets) == 1 and len(arows) == 1
                         and 0 <= targets[0] < len(self.project.clips)):
                     fill = m.addAction(tr("画面铺满这条音频"))
@@ -5371,15 +5484,43 @@ def run_gui() -> int:
             self._refresh_all()
             self._history_push(tr("淡入淡出"))
 
-        def on_toggle_xfade(self, rows):
+        def on_set_transition(self, rows, name):
+            """给选中的画面元素挑转场；name 空 = 硬切。"""
             rows = [i for i in rows if 0 <= i < len(self.project.clips)]
             if not rows:
                 return
-            want = not all(self.project.clips[i].xfade for i in rows)
             for i in rows:
-                self.project.clips[i].xfade = want
+                c = self.project.clips[i]
+                if name:
+                    c.xfade = True
+                    c.xfade_name = name
+                else:
+                    c.xfade = False
+                    c.xfade_name = ""
+                    c.xfade_dur = None
             self._refresh_all()
-            self._history_push(tr("淡入淡出"))
+            self._history_push(tr("转场"))
+            self._check_transitions()
+
+        def on_set_transition_dur(self, rows, sec):
+            """转场的时长：None = 跟随设置里的默认值。"""
+            rows = [i for i in rows if 0 <= i < len(self.project.clips)]
+            if not rows:
+                return
+            for i in rows:
+                self.project.clips[i].xfade_dur = (None if sec is None
+                                                  else float(sec))
+            self._refresh_all()
+            self._history_push(tr("转场时长"))
+            self._check_transitions()
+
+        def _check_transitions(self):
+            """转场塞不下时当场提醒（不然要到导出才报错）。"""
+            s = self.settings
+            short = xfade_short(self.project.clips, self.project.frame_counts(),
+                                int(s["fps"]), float(s["transition_sec"]))
+            if short:
+                MsgBox.warn(self, tr("转场放不下"), xfade_error_text(short))
 
         def on_fill_audio(self, clip_row, audio_row):
             """让这一个画面元素正好铺满它下面那条音频。"""
@@ -5902,7 +6043,7 @@ def run_gui() -> int:
         if menu_probe:
             outdir = os.path.dirname(shot)
             idx = [i for i, c in enumerate(w.project.clips) if c.kind == "image"]
-            if menu_probe == "video" and idx:
+            if menu_probe in ("video", "transition") and idx:
                 w.timeline.set_selection(idx[:2] if len(idx) >= 2 else idx[:1])
                 menu = w.timeline_menu("video", idx[0])
                 name = "shot_menu_video"
@@ -5910,16 +6051,33 @@ def run_gui() -> int:
                 w.timeline.set_audio_selection([0])
                 menu = w.timeline_menu("audio", 0)
                 name = "shot_menu_audio"
+            # 子菜单单独抓一份（转场那 12 个名字得自己核对一遍）
+            sub = None
+            if menu_probe == "transition" and idx:
+                sub = [a for a in menu.actions()
+                       if a.menu() is not None and a.text() == tr("转场")][0]
+                sub = sub.menu()
             menu.popup(w.mapToGlobal(w.rect().center()))
+            if sub is not None:
+                sub.popup(w.mapToGlobal(w.rect().center()) + QPoint(200, 40))
 
             def grab_menu():
+                if sub is not None:
+                    sub.grab().save(
+                        os.path.join(outdir, "shot_menu_transition" + tag + ".png"))
+                    print("SUBMENU", [a.text() for a in sub.actions()],
+                          flush=True)
+                    sub.close()
+                    menu.close()
+                    app.quit()
+                    return
                 menu.grab().save(os.path.join(outdir, name + tag + ".png"))
                 menu.close()
                 print("MENU", name, [a.text() for a in menu.actions()],
                       flush=True)
                 app.quit()
 
-            QTimer.singleShot(400, grab_menu)
+            QTimer.singleShot(500, grab_menu)
             return app.exec()
 
         # 把各种菜单 / 下拉的弹层挨个抓下来，肉眼核对有没有文字被压

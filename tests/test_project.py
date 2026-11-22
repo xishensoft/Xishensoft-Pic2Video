@@ -737,7 +737,7 @@ check("时间线支持多选与音频轨", "set_selection" in _src
 check("时间线右键发菜单信号", "def on_timeline_menu" in _src
       and "menu = pyqtSignal" in _src)
 check("右键能开关淡入淡出", "def on_toggle_fade" in _src
-      and "def on_toggle_xfade" in _src)
+      and "def on_set_transition" in _src and "def on_set_transition_dur" in _src)
 check("右键能统一改音量", "def on_audio_set_volume" in _src
       and "def on_ask_volume" in _src)
 check("能加/删额外音频", "def add_audio_extra" in _src
@@ -1698,6 +1698,114 @@ check("_opts 里按实际画面高度换算字号",
 check("长 filtergraph 走 filter_complex_script（不是拼错的 -/filter_complex）",
       '"-filter_complex_script", graph_file' in src
       and '"-/filter_complex"' not in src)
+
+# 52 命名转场：12 个内置名 / 逐段时长 / 塞不下要报错
+check("内置转场 12 个", len(p.XFADE_NAMES) == 12 and p.XFADE_NAMES[0] == "fade"
+      and len(set(p.XFADE_NAMES)) == 12, p.XFADE_NAMES)
+check("每个转场都有中文名", all(n in p.XFADE_LABELS for n in p.XFADE_NAMES),
+      [n for n in p.XFADE_NAMES if n not in p.XFADE_LABELS])
+check("中文名不重样", len(set(p.XFADE_LABELS.values())) == 12,
+      list(p.XFADE_LABELS.values()))
+def _two(name="", dur=None):
+    return [p.Clip(IMG[0], 2.0, xfade=True, xfade_name=name, xfade_dur=dur),
+            p.Clip(IMG[1], 2.0)]
+_bad_names = []
+for _n in p.XFADE_NAMES:
+    _cl = _two(_n)
+    _c2, _ov = p._xfade_plan(_cl, [60, 60], 30, 0.3)
+    _g = p.build_graph([60, 60], 4.0, 320, 180, fps=30, clips=_cl,
+                       timeline=[(True, 2.0), (True, 2.0)])
+    if ("xfade=transition=%s:" % _n) not in _g or not any(_ov):
+        _bad_names.append(_n)
+check("12 个转场都能进图", not _bad_names, _bad_names)
+_cl = _two("wipeleft", 0.8)
+_c2, _ov = p._xfade_plan(_cl, [60, 60], 30, 0.3)
+check("逐段时长 0.8 秒盖过全片默认", _ov == [24] and _c2 == [72, 72], (_c2, _ov))
+_g = p.build_graph([60, 60], 4.8, 320, 180, fps=30, clips=_cl,
+                   timeline=[(True, 2.0), (True, 2.0)])
+check("graph 里写逐段名字与时长", "xfade=transition=wipeleft:duration=0.800" in _g,
+      _g[-160:])
+check("转场错开量按覆盖算", "offset=1.600" in _g, _g[-160:])
+check("前一段开的听前一段", p.boundary_xfade(
+    [p.Clip(IMG[0], 2.0, xfade=True, xfade_name="wipeleft"),
+     p.Clip(IMG[1], 2.0, xfade=True, xfade_name="circleopen")], 0, 0.3)[0]
+      == "wipeleft")
+check("后一段开的听后一段", p.boundary_xfade(
+    [p.Clip(IMG[0], 2.0),
+     p.Clip(IMG[1], 2.0, xfade=True, xfade_name="circleopen")], 0, 0.3)[0]
+      == "circleopen")
+check("都没开就是硬切", p.boundary_xfade(
+    [p.Clip(IMG[0], 2.0), p.Clip(IMG[1], 2.0)], 0, 0.3) is None)
+check("边界越界不炸", p.boundary_xfade([], 0, 0.3) is None
+      and p.boundary_xfade([p.Clip(IMG[0], 2.0)], 0, 0.3) is None)
+check("时长空着跟全局", p.boundary_xfade(
+    [p.Clip(IMG[0], 2.0, xfade=True), p.Clip(IMG[1], 2.0)], 0, 0.7)[1] == 0.7)
+_c = p.Clip(IMG[0], 2.0, xfade=True, xfade_name="nope")
+check("认不出的名字回落 fade", _c.xfade_name == ""
+      and p.boundary_xfade([_c, p.Clip(IMG[1], 2.0)], 0, 0.3)[0] == "fade")
+check("离谱时长夹到上限", p.boundary_xfade(
+    [p.Clip(IMG[0], 2.0, xfade=True, xfade_dur=99.0), p.Clip(IMG[1], 2.0)],
+    0, 0.3)[1] == p.XFADE_MAX)
+_short = p.xfade_short(_two("fade", 0.3), [12, 12], 30, 0.3)
+check("塞不下要报出来", len(_short) == 1 and _short[0]["at"] == 0
+      and abs(_short[0]["need"] - 0.6) < 1e-9, _short)
+check("够长就不报", p.xfade_short(_two("fade", 0.3), [60, 60], 30, 0.3) == [])
+_txt = p.xfade_error_text(_short)
+check("提示里带段号与秒数", "第 1 段和第 2 段" in _txt and "0.40 / 0.40" in _txt
+      and "0.60" in _txt, _txt)
+_short_out = os.path.join(tmp, "short_xfade.mp4")
+_raised = False
+try:
+    p.render(_two("fade", 0.3), [12, 12], None, _short_out, w=320, h=180, fps=30,
+             xfade_sec=0.3)
+except p.RenderError as exc:
+    _raised = "转场" in str(exc)
+check("塞不下就不出片", _raised and not os.path.exists(_short_out), _raised)
+_pr = p.Project()
+_pr.add_images([IMG[0], IMG[1]])
+_pr.clips[0].xfade = True
+_pr.clips[0].xfade_name = "radial"
+_pr.clips[0].xfade_dur = 0.5
+_doc = _pr.to_doc()
+check("工程里存了转场名与时长", _doc["clips"][0]["xfade_name"] == "radial"
+      and _doc["clips"][0]["xfade_dur"] == 0.5, _doc["clips"][0])
+_back = p.Project.from_doc(json.loads(json.dumps(_doc)))
+check("转场能原样读回", _back.clips[0].xfade is True
+      and _back.clips[0].xfade_name == "radial"
+      and abs(_back.clips[0].xfade_dur - 0.5) < 1e-9,
+      (_back.clips[0].xfade_name, _back.clips[0].xfade_dur))
+check("硬切段存空名与空时长", _doc["clips"][1]["xfade_name"] == ""
+      and _doc["clips"][1]["xfade_dur"] is None, _doc["clips"][1])
+_oldp = p.Project.from_doc({"version": 1, "clips": [{"path": IMG[0], "dur": 2.0}]})
+check("老工程缺字段 = 空名/None", _oldp.clips[0].xfade_name == ""
+      and _oldp.clips[0].xfade_dur is None and _oldp.clips[0].xfade is False)
+check("读回时转场时长夹在范围内", p.Project.from_doc(
+    {"version": 1, "clips": [{"path": IMG[0], "dur": 2.0, "xfade_dur": 99.0}]
+     }).clips[0].xfade_dur == p.XFADE_MAX)
+check("右键里有转场与时长子菜单", 'xm = m.addMenu(tr("转场"))' in _src
+      and 'dm = xm.addMenu(tr("转场时长"))' in _src)
+check("转场菜单列内置名字并给硬切", "for name in XFADE_NAMES:" in _src
+      and 'on_set_transition(t, "")' in _src and 'tr("无（硬切）")' in _src)
+check("改转场当场查时长", "def _check_transitions" in _src
+      and 'MsgBox.warn(self, tr("转场放不下")' in _src)
+_i18n = {}
+try:
+    import i18n as _I18N
+    _i18n = {k: _I18N.TR[k] for k in ("zh-TW", "en", "ja", "ko")}
+except Exception as exc:      # noqa: BLE001
+    print("  (i18n 载入失败：%s)" % exc)
+_keys30 = (list(p.XFADE_LABELS.values())
+           + ["转场", "转场时长", "无（硬切）", "跟随设置", "{n} 秒", "转场放不下"])
+_miss = [(lang, k) for lang, tbl in _i18n.items() for k in _keys30 if k not in tbl]
+check("转场词条四语齐全", bool(_i18n) and not _miss, _miss[:5])
+if p.missing_tools():
+    print("  (没 ffmpeg，跳过转场名实测)")
+else:
+    _probe = subprocess.run([p.FFMPEG, "-hide_banner", "-h", "filter=xfade"],
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace")
+    _unknown = [n for n in p.XFADE_NAMES if n not in _probe.stdout]
+    check("ffmpeg 认这 12 个名字", not _unknown, (_unknown, _probe.stderr[-120:]))
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
