@@ -50,6 +50,14 @@ class RenderError(RuntimeError):
     pass
 
 
+def _unlink_quiet(path: str) -> None:
+    """删临时文件，删不掉就算了（Windows 上偶尔还被别人握着）。"""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def missing_tools() -> list[str]:
     """ffmpeg / ffprobe 缺哪个（空列表＝都找得到）。"""
     miss = []
@@ -228,8 +236,11 @@ class Settings:
         "accent": theme.DEFAULT_ACCENT,   # 主色（对撞色由它自动算）
         "motion": "none",         # 画面动效：none / in / out / inout
         "music_volume": 1.0,      # 背景音乐音量倍数（0..2）
+        "music_start": 0.0,       # 背景音乐从第几秒开始用
+        "music_len": 0.0,         # 音乐用多长；0 = 一直用到音乐结尾
         "crop_focus": "center",   # 裁切铺满时留中心 / 偏上 / 偏下
-        "open_after_export": True,  # 导出完自动打开所在文件夹
+        "open_after_export": True,   # 导出完自动打开所在文件夹
+        "ask_export_dir": True,      # 导出时先问保存到哪（关掉就直接用默认目录）
         "win_w": 0,               # 窗口大小/位置，0 = 用默认
         "win_h": 0,
         "win_x": -1,
@@ -293,6 +304,8 @@ class Settings:
         except (TypeError, ValueError):
             d["fps"] = 30
         for key, lo, hi in (("music_volume", 0.0, 2.0),
+                            ("music_start", 0.0, 36000.0),
+                            ("music_len", 0.0, 36000.0),
                             ("per_image", MIN_DUR, 3600.0),
                             ("fade_in", 0.0, 10.0),
                             ("fade_out", 0.0, 30.0),
@@ -314,6 +327,8 @@ class Settings:
             d["accent"] = theme.DEFAULT_ACCENT
         if not isinstance(d.get("open_after_export"), bool):
             d["open_after_export"] = True
+        if not isinstance(d.get("ask_export_dir"), bool):
+            d["ask_export_dir"] = True
         if d.get("motion") not in MOTIONS:
             d["motion"] = "none"
         if d.get("crop_focus") not in CROP_FOCUS:
@@ -380,16 +395,28 @@ class Project:
         self.mode = "bgm"
         self.audio_path: str | None = None
         self.audio_dur = 0.0
+        self.audio_start = 0.0        # 从音乐的第几秒开始用
+        self.audio_len = 0.0          # 用多长；0 = 到音乐结尾
         self.total_setting = 10.0
         self.fps = int(fps)
 
     # -- 目标总长 ------------------------------------------------------
+    def music_length(self) -> float:
+        """截取之后这段音乐实际有多长（0 = 没有音乐）。"""
+        if self.audio_dur <= 0:
+            return 0.0
+        start = max(0.0, float(self.audio_start))
+        avail = max(0.1, self.audio_dur - start)
+        if self.audio_len and self.audio_len > 0:
+            return max(0.1, min(avail, float(self.audio_len)))
+        return avail
+
     def target(self) -> float | None:
         n = len(self.clips)
         if n == 0:
             return None
         if self.mode == "bgm" and self.audio_dur > 0:
-            return self.audio_dur
+            return self.music_length()
         if self.mode == "total":
             return max(self.total_setting, MIN_DUR * n)
         return None
@@ -539,7 +566,7 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
                 pad_color: str = "#000000", bg_index: int | None = None,
                 audio_index: int | None = None, motion: str = "none",
                 motion_amount: float = MOTION_AMOUNT, volume: float = 1.0,
-                crop_focus: str = "center") -> str:
+                crop_focus: str = "center", music_start: float = 0.0) -> str:
     """一条 filtergraph：每图按帧数切片 → 拼接 → 音频裁到总长并淡入淡出。
 
     fit: own 原图铺底（bg_blur 决定模糊不模糊）/ color 纯色留白（pad_color）
@@ -612,7 +639,9 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
         parts.append(chain + f"[v{i}]")
     labels = "".join(f"[v{i}]" for i in range(K))
     parts.append(f"{labels}concat=n={K}:v=1:a=0[vout]")
-    audio = f"[{audio_index}:a]atrim=0:{total:.3f},asetpts=N/SR/TB"
+    mstart = max(0.0, float(music_start))
+    audio = (f"[{audio_index}:a]atrim=start={mstart:.3f}:"
+             f"end={mstart + total:.3f},asetpts=N/SR/TB")
     if abs(volume - 1.0) > 0.005:
         audio += f",volume={max(0.0, float(volume)):.3f}"
     if fade_in > 0:
@@ -628,7 +657,7 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
            crf=20, preset="veryfast", fps=FPS, fit="own", fade_in=FADE_IN,
            fade_out=FADE_OUT, transition="none", transition_sec=0.3,
            bg_blur=True, pad_color="#000000", bg_path="", motion="none",
-           volume=1.0, crop_focus="center", on_progress=None,
+           volume=1.0, crop_focus="center", music_start=0.0, on_progress=None,
            proc_holder=None) -> str:
     """一条 filtergraph 渲完；on_progress(0..1) 回调。
 
@@ -653,7 +682,8 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
                         bg_blur=bg_blur, pad_color=pad_color,
                         bg_index=(len(counts) if add_bg else None),
                         audio_index=(len(counts) + (1 if add_bg else 0)),
-                        motion=motion, volume=volume, crop_focus=crop_focus)
+                        motion=motion, volume=volume, crop_focus=crop_focus,
+                        music_start=music_start)
     cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
            "-progress", "pipe:1", "-nostats"]
     for c, nf in zip(clips, counts):
@@ -667,6 +697,8 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
                     f"{total + 1.0:.3f}", "-i", bg_path]
     if audio_path:
         adur = probe_duration(audio_path)
+        if adur > 0:
+            adur = max(0.0, adur - max(0.0, float(music_start)))
         if adur > 0 and adur + 0.05 < total:
             cmd += ["-stream_loop", "-1"]
         cmd += ["-i", audio_path]
@@ -769,6 +801,10 @@ def cli_export(argv: list[str]) -> int:
                     help=tr("裁切铺满时留住哪里：center 居中 / top 偏上 / bottom 偏下"))
     ap.add_argument("--volume", type=int, default=100, metavar="0-200",
                     help=tr("背景音乐音量百分比（默认 100）"))
+    ap.add_argument("--music-start", type=float, default=0.0,
+                    help=tr("背景音乐从第几秒开始用（默认 0）"))
+    ap.add_argument("--music-len", type=float, default=0.0,
+                    help=tr("背景音乐用多长，0 = 一直用到音乐结尾"))
     ap.add_argument("images", nargs="+")
     a = ap.parse_args(argv)
 
@@ -780,6 +816,8 @@ def cli_export(argv: list[str]) -> int:
               transition=a.transition, bg_path=a.bg, pad_color=a.pad_color,
               bg_blur=not a.no_bg_blur, motion=a.motion,
               music_volume=max(0.0, min(2.0, a.volume / 100.0)),
+              music_start=max(0.0, a.music_start),
+              music_len=max(0.0, a.music_len),
               crop_focus=a.crop_focus)
     w, h = st.size()
     opts = dict(w=w, h=h, fps=int(st["fps"]), fit=st["fit"], crf=st.crf(),
@@ -788,6 +826,7 @@ def cli_export(argv: list[str]) -> int:
                 transition=st["transition"],
                 transition_sec=float(st["transition_sec"]),
                 motion=st["motion"], volume=float(st["music_volume"]),
+                music_start=float(st["music_start"]),
                 crop_focus=st["crop_focus"],
                 fade_in=float(st["fade_in"]), fade_out=float(st["fade_out"]))
 
@@ -826,6 +865,8 @@ def cli_export(argv: list[str]) -> int:
     if audio:
         pr.audio_path = audio
         pr.audio_dur = probe_duration(audio)
+        pr.audio_start = float(st["music_start"])
+        pr.audio_len = float(st["music_len"])
         pr.normalize()
     print(tr("[2/3] {n} 张图，总长 {total}s，{durs}",
              n=len(pr.clips), total=f"{pr.total():.2f}",
@@ -870,7 +911,8 @@ def run_gui() -> int:
     from PyQt6.QtWidgets import (
         QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QColorDialog,
         QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
-        QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
+        QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+        QListWidget,
         QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar,
         QPushButton, QRadioButton, QSizePolicy, QSpinBox, QSplitter,
         QVBoxLayout, QWidget)
@@ -1285,7 +1327,27 @@ def run_gui() -> int:
                     self._pro_fields.append(field)
                 return field
 
-            # 语言 + 导出
+            def add_sep(text, pro=False):
+                """一组设置的小标题 + 分隔线（简洁模式也靠它分块）。"""
+                line = QFrame()
+                line.setObjectName("sep")
+                line.setFrameShape(QFrame.Shape.HLine)
+                line.setFrameShadow(QFrame.Shadow.Plain)
+                box = QWidget()
+                v = QVBoxLayout(box)
+                v.setContentsMargins(0, 9, 0, 3)
+                v.setSpacing(3)
+                lab = QLabel(tr(text))
+                lab.setObjectName("sectitle")
+                v.addWidget(lab)
+                v.addWidget(line)
+                form.addRow(box)
+                if pro:
+                    self._pro_fields.append(box)
+                return box
+
+            # 外观 / 导出 / 画面 / 音乐 / 节奏 / 其它：每组一条分隔线
+            add_sep("外观")
             self.cmb_lang = QComboBox()
             self.cmb_lang.addItem(language_label(SYSTEM), SYSTEM)
             for code in LOCALES:
@@ -1308,9 +1370,10 @@ def run_gui() -> int:
             add_row("主色", self.btn_accent)
             self._sync_accent()
 
+            add_sep("导出")
             self.edit_dir = QLineEdit(settings["export_dir"])
             self.edit_dir.setPlaceholderText(
-                tr("留空 = 每张图所在目录（每次导出还会弹框确认）"))
+                tr("留空 = 每张图所在目录（关掉「先问我」时就用这里）"))
             browse = QPushButton(tr("浏览…"))
             browse.clicked.connect(self._browse_dir)
             row = QHBoxLayout()
@@ -1321,11 +1384,15 @@ def run_gui() -> int:
             wrap.setLayout(row)
             add_row("默认导出目录", wrap)
 
+            self.chk_ask = QCheckBox(tr("导出时先问我保存到哪（关掉就直接存默认目录）"))
+            self.chk_ask.setChecked(bool(settings["ask_export_dir"]))
+            form.addRow(self.chk_ask)   # 自带文字，不需要左边标签
+
             self.chk_open = QCheckBox(tr("导出完自动打开所在文件夹"))
             self.chk_open.setChecked(bool(settings["open_after_export"]))
             form.addRow(self.chk_open)   # 自带文字，不需要左边标签
 
-            # 画面
+            add_sep("画面")
             self._syncing = True
             self.cmb_ratio = QComboBox()
             for r in RATIOS:
@@ -1403,22 +1470,31 @@ def run_gui() -> int:
             self.chk_bg_blur.setChecked(bool(settings["bg_blur"]))
             add_row("背景处理", self.chk_bg_blur, pro=True)
 
-            # 节奏
-            self.cmb_mode = QComboBox()
-            for k in ("bgm", "total", "free"):
-                self.cmb_mode.addItem(mode_label(k), k)
-            self.cmb_mode.setCurrentIndex(("bgm", "total", "free").index(settings["mode"]))
-            add_row("默认节奏", self.cmb_mode, pro=True)
+            self.cmb_crop = QComboBox()
+            for key in CROP_FOCUS:
+                self.cmb_crop.addItem(tr(CROP_LABELS[key]), key)
+            self.cmb_crop.setCurrentIndex(
+                max(0, list(CROP_FOCUS).index(settings["crop_focus"])))
+            add_row("裁切位置", self.cmb_crop, pro=True)
 
-            self.spin_per_image = QDoubleSpinBox()
-            self.spin_per_image.setRange(MIN_DUR, 3600.0)
-            self.spin_per_image.setDecimals(1)
-            self.spin_per_image.setSingleStep(0.5)
-            self.spin_per_image.setSuffix(tr(" 秒"))
-            self.spin_per_image.setValue(float(settings["per_image"]))
-            add_row("逐张模式默认", self.spin_per_image, pro=True)
+            add_sep("音乐", pro=True)
+            self.spin_mstart = QDoubleSpinBox()
+            self.spin_mstart.setRange(0.0, 36000.0)
+            self.spin_mstart.setDecimals(1)
+            self.spin_mstart.setSingleStep(1.0)
+            self.spin_mstart.setSuffix(tr(" 秒"))
+            self.spin_mstart.setValue(float(settings["music_start"]))
+            add_row("音乐起点", self.spin_mstart, pro=True)
 
-            # 声音
+            self.spin_mlen = QDoubleSpinBox()
+            self.spin_mlen.setRange(0.0, 36000.0)
+            self.spin_mlen.setDecimals(1)
+            self.spin_mlen.setSingleStep(1.0)
+            self.spin_mlen.setSuffix(tr(" 秒"))
+            self.spin_mlen.setSpecialValueText(tr("整首"))
+            self.spin_mlen.setValue(float(settings["music_len"]))
+            add_row("音乐长度", self.spin_mlen, pro=True)
+
             self.spin_fin = QDoubleSpinBox()
             self.spin_fin.setRange(0.0, 10.0)
             self.spin_fin.setDecimals(1)
@@ -1435,19 +1511,27 @@ def run_gui() -> int:
             self.spin_fout.setValue(float(settings["fade_out"]))
             add_row("音乐淡出", self.spin_fout, pro=True)
 
-            self.cmb_crop = QComboBox()
-            for key in CROP_FOCUS:
-                self.cmb_crop.addItem(tr(CROP_LABELS[key]), key)
-            self.cmb_crop.setCurrentIndex(
-                max(0, list(CROP_FOCUS).index(settings["crop_focus"])))
-            add_row("裁切位置", self.cmb_crop, pro=True)
-
             self.spin_vol = QSpinBox()
             self.spin_vol.setRange(0, 200)
             self.spin_vol.setSingleStep(5)
             self.spin_vol.setSuffix("%")
             self.spin_vol.setValue(int(round(float(settings["music_volume"]) * 100)))
             add_row("音乐音量", self.spin_vol, pro=True)
+
+            add_sep("节奏与动效", pro=True)
+            self.cmb_mode = QComboBox()
+            for k in ("bgm", "total", "free"):
+                self.cmb_mode.addItem(mode_label(k), k)
+            self.cmb_mode.setCurrentIndex(("bgm", "total", "free").index(settings["mode"]))
+            add_row("默认节奏", self.cmb_mode, pro=True)
+
+            self.spin_per_image = QDoubleSpinBox()
+            self.spin_per_image.setRange(MIN_DUR, 3600.0)
+            self.spin_per_image.setDecimals(1)
+            self.spin_per_image.setSingleStep(0.5)
+            self.spin_per_image.setSuffix(tr(" 秒"))
+            self.spin_per_image.setValue(float(settings["per_image"]))
+            add_row("逐张模式默认", self.spin_per_image, pro=True)
 
             self.cmb_motion = QComboBox()
             for key in MOTIONS:
@@ -1471,6 +1555,7 @@ def run_gui() -> int:
             self.spin_trans.setValue(float(settings["transition_sec"]))
             add_row("转场时长", self.spin_trans, pro=True)
 
+            add_sep("其它", pro=True)
             # 音源组件（抖音 / YouTube 等要用，按需下载、按需删除）
             self._ydlp = None
             self.lbl_ytdlp = QLabel()
@@ -1640,6 +1725,7 @@ def run_gui() -> int:
                 accent=self._accent,
                 export_dir=self.edit_dir.text().strip(),
                 open_after_export=bool(self.chk_open.isChecked()),
+                ask_export_dir=bool(self.chk_ask.isChecked()),
                 ratio=self.cmb_ratio.currentData(),
                 width=even(self.spin_w.value()),
                 height=even(self.spin_h.value()),
@@ -1656,6 +1742,8 @@ def run_gui() -> int:
                 transition=self.cmb_trans.currentData(),
                 motion=self.cmb_motion.currentData(),
                 music_volume=float(self.spin_vol.value()) / 100.0,
+                music_start=float(self.spin_mstart.value()),
+                music_len=float(self.spin_mlen.value()),
                 crop_focus=self.cmb_crop.currentData(),
                 transition_sec=float(self.spin_trans.value()),
             )
@@ -1673,7 +1761,9 @@ def run_gui() -> int:
             self.project = Project(fps=int(self.settings["fps"]))
             self.project.mode = self.settings["mode"]
             self.tmpdir = tempfile.mkdtemp(prefix="pic2video_")
-            self.preview_path = os.path.join(self.tmpdir, "preview.mp4")
+            self.preview_seq = 0
+            self.preview_path = os.path.join(self.tmpdir, "preview_0.mp4")
+            self._preview_pending = False   # 生成中途又点了一次刷新
             self.preview_stale = True
             self.worker = None
             self.fetch_worker = None
@@ -1828,6 +1918,7 @@ def run_gui() -> int:
             self.player.setVideoOutput(self.video)
             self.player.mediaStatusChanged.connect(self.on_media_status)
             self.player.positionChanged.connect(self.on_position)
+            self.player.errorOccurred.connect(self.on_player_error)
             rv.addWidget(self.video, 1)
             self.lbl_preview = QLabel(tr("预览：改完参数点右上角「刷新预览」"))
             self.lbl_preview.setEnabled(False)
@@ -2109,6 +2200,8 @@ def run_gui() -> int:
             self.apply_theme()
             self.project.mode = self.settings["mode"]
             self.project.fps = int(self.settings["fps"])
+            self.project.audio_start = float(self.settings["music_start"])
+            self.project.audio_len = float(self.settings["music_len"])
             set_mode(self.project, self.project.mode)
             self.retranslate()
             self._mark_stale()
@@ -2143,6 +2236,7 @@ def run_gui() -> int:
                         transition_sec=float(s["transition_sec"]),
                         motion=s["motion"],
                         volume=float(s["music_volume"]),
+                        music_start=float(s["music_start"]),
                         crop_focus=s["crop_focus"])
 
         # ---------------- 动作
@@ -2261,6 +2355,19 @@ def run_gui() -> int:
             self.timeline.play_pos = ms / 1000.0
             self.timeline.update()
 
+        def on_player_error(self, _err, text):
+            """播放器解不开预览文件时，说清楚，并试着重新挂一次。"""
+            if not text:
+                return
+            self.lbl_status.setText(tr("预览播放出错：{msg}", msg=text))
+            src = self.player.source()
+            if not src.isEmpty():
+                def retry():
+                    self.player.setSource(QUrl())
+                    self.player.setSource(src)
+                    self.player.play()
+                QTimer.singleShot(400, retry)
+
         def _rendering(self, on, kind="export"):
             """渲染中：禁用导出/刷新，露出进度条和「取消」。"""
             self.btn_export.setEnabled(not on)
@@ -2299,6 +2406,7 @@ def run_gui() -> int:
 
         def on_render_stopped(self):
             self._rendering(False)
+            self._preview_pending = False
             self.lbl_status.setText(tr("已取消"))
 
         def on_preview(self):
@@ -2306,8 +2414,23 @@ def run_gui() -> int:
                 self.lbl_status.setText(tr("先加图片"))
                 return
             if self.worker is not None and self.worker.isRunning():
+                if self._render_kind == "preview":
+                    self._preview_pending = True   # 跑完自动再来一次
                 return
             self._follow_audio()
+            # 先把播放器松手：Windows 上它握着旧文件时 ffmpeg 写不进去，
+            # 正是「预览有时候显示不出来」的一个来源。
+            try:
+                self.player.stop()
+                self.player.setSource(QUrl())
+            except Exception:                     # noqa: BLE001
+                pass
+            self.preview_seq += 1
+            old_preview = self.preview_path
+            self.preview_path = os.path.join(
+                self.tmpdir, f"preview_{self.preview_seq}.mp4")
+            if old_preview != self.preview_path and os.path.exists(old_preview):
+                QTimer.singleShot(1500, lambda p=old_preview: _unlink_quiet(p))
             self._rendering(True, "preview")
             self.lbl_status.setText(tr("生成预览…"))
             self.worker = RenderWorker(
@@ -2325,6 +2448,9 @@ def run_gui() -> int:
             self._clean_stale()
             self.player.setSource(QUrl.fromLocalFile(path))
             self.player.play()
+            if self._preview_pending:              # 期间又改过东西
+                self._preview_pending = False
+                QTimer.singleShot(200, self.on_preview)
             self.lbl_status.setText(
                 tr("预览已更新（点画面播放/暂停，点色带跳转）"))
             self.preview_name = os.path.basename(path)
@@ -2332,7 +2458,11 @@ def run_gui() -> int:
 
         def on_preview_bad(self, msg):
             self._rendering(False)
+            self._preview_pending = False
             self.lbl_status.setText(tr("预览失败"))
+            if os.environ.get("PIC2VIDEO_SHOT"):
+                print("PREVIEW_FAILED:", msg)
+                return
             QMessageBox.warning(self, tr("预览失败"), msg)
 
         # ---------------- BGM
@@ -2380,6 +2510,8 @@ def run_gui() -> int:
         def on_fetch_ok(self, path, dur):
             self.project.audio_path = path
             self.project.audio_dur = dur
+            self.project.audio_start = float(self.settings["music_start"])
+            self.project.audio_len = float(self.settings["music_len"])
             self.project.normalize()
             self.btn_retry.setEnabled(True)
             self._refresh_all()
@@ -2405,13 +2537,25 @@ def run_gui() -> int:
             if not os.path.isdir(base_dir):
                 base_dir = first_dir
             stem = "slideshow_" + time.strftime("%Y%m%d_%H%M")
+            shot = bool(os.environ.get("PIC2VIDEO_SHOT"))   # 自动化测试绝不弹窗
             out = os.environ.get("PIC2VIDEO_EXPORT_PATH") or ""
-            if not out:
+            if out:
+                pass
+            elif shot:
+                out = os.path.join(tempfile.gettempdir(),
+                                   "p2v_shot_" + time.strftime("%H%M%S") + ".mp4")
+            elif self.settings["ask_export_dir"]:
                 out, _picked = QFileDialog.getSaveFileName(
                     self, tr("导出到…"), os.path.join(base_dir, stem + ".mp4"),
                     tr("视频 (*.mp4)"))
-            if not out:
-                return
+                if not out:
+                    return
+            else:                       # 不问了，直接落到默认目录
+                out = os.path.join(base_dir, stem + ".mp4")
+                i = 2
+                while os.path.exists(out):
+                    out = os.path.join(base_dir, f"{stem}_{i}.mp4")
+                    i += 1
             if not out.lower().endswith(".mp4"):
                 out += ".mp4"
             self.settings["last_export_dir"] = os.path.dirname(out) or base_dir
@@ -2453,6 +2597,9 @@ def run_gui() -> int:
         def on_export_bad(self, msg):
             self._rendering(False)
             self.lbl_status.setText(tr("导出失败"))
+            if os.environ.get("PIC2VIDEO_SHOT"):
+                print("EXPORT_FAILED:", msg)
+                return
             QMessageBox.warning(self, tr("导出失败"), msg)
 
         # ---------------- 拖放
@@ -2628,6 +2775,10 @@ def run_gui() -> int:
 
         def step2():
             _shot("shot_preview")
+            if os.environ.get("PIC2VIDEO_SHOT_REPEAT"):
+                # 连着重渲两次预览：验证旧文件被松手、能正常播放
+                w.on_preview()
+                QTimer.singleShot(300, w.on_preview)
             if audio:
                 w.on_export()
                 QTimer.singleShot(6000, step3)
@@ -2636,6 +2787,11 @@ def run_gui() -> int:
 
         def step3():
             _shot("shot_export")
+            if os.environ.get("PIC2VIDEO_SHOT_REPEAT"):
+                print("PREVIEW SRC:", w.player.source().toLocalFile(), flush=True)
+                print("PREVIEW STATE:", w.player.playbackState().name,
+                      "| err:", w.player.errorString(), flush=True)
+                print("PREVIEW STATUS:", w.lbl_status.text(), flush=True)
             app.quit()
 
         def live_switch():

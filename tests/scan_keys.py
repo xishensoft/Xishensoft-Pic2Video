@@ -11,7 +11,8 @@ for name in ("pic2video.py", "audio_source.py", "theme.py"):
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "tr":
             if n.args and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str):
                 keys.add(n.args[0].value)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "add_row":
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id in ("add_row", "add_sep")):
             if n.args and isinstance(n.args[0], ast.Constant):
                 keys.add(n.args[0].value)
 keys |= {"跟随系统", "浅色", "深色"}

@@ -142,7 +142,8 @@ check("image 背景链", "bgx0" in g and "[2:v]scale" in g and "trim=start=0.000
 g = p.build_graph([90, 90], 6.0, fit="image", bg_index=2, bg_blur=False)
 check("image 关模糊无 gblur", "bgx0" in g and "gblur" not in g)
 g = p.build_graph([90, 90], 6.0, fit="video", bg_index=2, audio_index=3)
-check("video 背景 + 音频下标", "[3:a]atrim=0:6.000" in g and "bgx1" in g, g[-120:])
+check("video 背景 + 音频下标", "[3:a]atrim=start=0.000:end=6.000" in g
+      and "bgx1" in g, g[-120:])
 g = p.build_graph([90, 90], 6.0, transition="fade", transition_sec=0.3)
 check("fade 转场进图", g.count("fade=t=in:st=0:d=0.300") == 2 and "fade=t=out" in g)
 check("硬切不带转场", "fade=t=in:st=0:d=0.300" not in p.build_graph([90], 3.0))
@@ -449,6 +450,55 @@ else:
         r, g, b = center_rgb(dst, f"focus_{focus}")
         ok = (r > g) if which == "红" else (g > r)
         check(f"裁切{focus}留住{which}", ok, (r, g, b))
+
+
+# 23 背景音乐截取
+check("音乐起点默认 0", p.Settings.DEFAULTS["music_start"] == 0.0)
+check("音乐长度默认整首", p.Settings.DEFAULTS["music_len"] == 0.0)
+_pr = mk(3); _pr.audio_dur = 60.0
+check("音乐长度=0 用整首", abs(_pr.music_length() - 60.0) < 1e-6)
+_pr.audio_start = 10.0
+check("起点吃掉开头", abs(_pr.music_length() - 50.0) < 1e-6, _pr.music_length())
+_pr.audio_len = 20.0
+check("长度截断", abs(_pr.music_length() - 20.0) < 1e-6, _pr.music_length())
+_pr.audio_start = 45.0; _pr.audio_len = 20.0
+check("超出剩余长度时夹住", abs(_pr.music_length() - 15.0) < 1e-6,
+      _pr.music_length())
+_pr.audio_start = 999.0; _pr.audio_len = 0.0
+check("起点超过总长也有下限", _pr.music_length() >= 0.1, _pr.music_length())
+_pr.audio_start = 10.0; _pr.audio_len = 20.0
+_pr.mode = "bgm"; _pr.normalize()
+check("跟 BGM 模式总长=截取长度", abs(_pr.total() - 20.0) < 1e-6, _pr.total())
+_g = p.build_graph([30], 1.0, 320, 180, music_start=12.5)
+check("音频链从 music_start 开始", "atrim=start=12.500:end=13.500" in _g,
+      [ln for ln in _g.split(";") if "atrim" in ln][:1])
+_g0 = p.build_graph([30], 1.0, 320, 180)
+check("默认从 0 开始", "atrim=start=0.000:end=1.000" in _g0)
+_sc = p.Settings()
+_sc.data["music_start"] = -5
+_sc.data["music_len"] = 1e9
+_sc._sanitize()
+check("非法音乐起点被夹住", _sc["music_start"] == 0.0, _sc["music_start"])
+check("音乐长度夹在上限内", _sc["music_len"] == 36000.0, _sc["music_len"])
+
+# 24 导出时是否弹保存框
+check("默认导出时先问", p.Settings.DEFAULTS["ask_export_dir"] is True)
+_sc = p.Settings()
+_sc.data["ask_export_dir"] = "yes"
+_sc._sanitize()
+check("非法值回落先问", _sc["ask_export_dir"] is True)
+_sc.data["ask_export_dir"] = False
+_sc._sanitize()
+check("关掉后保持关掉", _sc["ask_export_dir"] is False)
+
+# 25 设置窗口按组分隔（不建窗口，只查源码里的分组标题与分隔线实现）
+_src = open(os.path.join(ROOT, "pic2video.py"), encoding="utf-8").read()
+_seps = [s for s in ("外观", "导出", "画面", "音乐", "节奏与动效", "其它")
+         if f'add_sep("{s}"' in _src]
+check("设置分六组", len(_seps) == 6, _seps)
+check("分隔线控件", 'setObjectName("sep")' in _src)
+check("简洁模式隐藏空组", 'add_sep("音乐", pro=True)' in _src
+      and 'add_sep("其它", pro=True)' in _src)
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")

@@ -233,6 +233,9 @@ QWidget {{ background: {p['window']}; color: {p['text']};
 QMainWindow, QDialog {{ background: {p['window']}; }}
 QLabel {{ background: transparent; }}
 QLabel:disabled {{ color: {p['muted']}; }}
+QLabel#sectitle {{ color: {p['subtext']}; font-weight: 600; }}
+QFrame#sep {{ background: {p['border']}; border: none;
+              min-height: 1px; max-height: 1px; }}
 
 QPushButton {{
     background: {p['panel']}; color: {p['text']};
