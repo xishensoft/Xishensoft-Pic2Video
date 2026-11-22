@@ -253,6 +253,23 @@ QLabel#sectitle {{ color: {p['subtext']}; font-weight: 600; }}
 QFrame#sep {{ background: {p['border']}; border: none;
               min-height: 1px; max-height: 1px; }}
 
+QTabWidget::pane {{
+    border: 1px solid {p['border']}; border-radius: 8px;
+    background: {p['window']}; top: -1px;
+}}
+QTabBar {{ background: transparent; }}
+QTabBar::tab {{
+    background: transparent; color: {p['subtext']};
+    border: 1px solid transparent; border-bottom: none;
+    padding: 6px 14px; margin-right: 2px; margin-bottom: -1px;
+    border-top-left-radius: 7px; border-top-right-radius: 7px;
+}}
+QTabBar::tab:hover:!selected {{ color: {p['text']}; background: {p['hover']}; }}
+QTabBar::tab:selected {{
+    background: {p['window']}; color: {p['text']};
+    border-color: {p['border']}; font-weight: 600;
+}}
+
 QPushButton {{
     background: {p['panel']}; color: {p['text']};
     border: 1px solid {p['border']}; border-radius: 6px;

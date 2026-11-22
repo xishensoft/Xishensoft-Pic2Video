@@ -1233,6 +1233,112 @@ for _lang, _extra14 in _TR_EXTRA14.items():
     TR[_lang].update(_extra14)
 
 
+# ---- 组件按需下载（ffmpeg / yt-dlp）相关 ---------------
+_TR_EXTRA15 = {
+    'ffmpeg 没下成功。检查一下网络再开一次，或者手动装：winget install Gyan.FFmpeg': {
+        'zh-TW': 'ffmpeg 沒下載成功。檢查一下網路再開一次，或手動安裝：winget install Gyan.FFmpeg',
+        'en': 'ffmpeg download failed. Check your network and open again, or install it manually: winget install Gyan.FFmpeg',
+        'ja': 'ffmpeg のダウンロードに失敗しました。ネットワークを確認して開き直すか、手動でインストール：winget install Gyan.FFmpeg',
+        'ko': 'ffmpeg 다운로드에 실패했습니다. 네트워크를 확인해 다시 열거나 직접 설치: winget install Gyan.FFmpeg',
+    },
+    'ffmpeg 装好了但还是找不到，重开一次窗口试试': {
+        'zh-TW': 'ffmpeg 裝好了但還是找不到，重開一次視窗試試',
+        'en': 'ffmpeg is installed but still not found — try opening again',
+        'ja': 'ffmpeg は入りましたが見つかりません。開き直してみてください',
+        'ko': 'ffmpeg 설치했지만 여전히 찾을 수 없습니다. 다시 열어 보세요',
+    },
+    '下载 ffmpeg': {
+        'zh-TW': '下載 ffmpeg',
+        'en': 'Download ffmpeg',
+        'ja': 'ffmpeg をダウンロード',
+        'ko': 'ffmpeg 다운로드',
+    },
+    '下载失败': {
+        'zh-TW': '下載失敗',
+        'en': 'Download failed',
+        'ja': 'ダウンロード失敗',
+        'ko': '다운로드 실패',
+    },
+    '先不用': {
+        'zh-TW': '先不用',
+        'en': 'Not now',
+        'ja': 'あとで',
+        'ko': '나중에',
+    },
+    '先用系统里这份：{path}（想随身带就在这下一份）': {
+        'zh-TW': '先用系統裡這份：{path}（想隨身帶就在這下一份）',
+        'en': 'Using the system copy: {path} (download one here to carry it along)',
+        'ja': 'システムのものを使います：{path}（持ち歩くならここでダウンロード）',
+        'ko': '시스템 것을 사용합니다: {path} (들고 다니려면 여기서 다운로드)',
+    },
+    '出片要靠 ffmpeg（约 90 MB，只下这一次，之后不再问）。\n现在就自动下载吗？': {
+        'zh-TW': '出片要靠 ffmpeg（約 90 MB，只下這一次，之後不再問）。\n現在就自動下載嗎？',
+        'en': 'Exporting needs ffmpeg (about 90 MB, downloaded once).\nDownload it now?',
+        'ja': '書き出しには ffmpeg が必要です（約 90 MB、今回だけ）。\n今すぐダウンロードしますか？',
+        'ko': '출력에는 ffmpeg가 필요합니다(약 90 MB, 이번 한 번만).\n지금 내려받을까요?',
+    },
+    '找不到 yt-dlp，去设置里重新下载': {
+        'zh-TW': '找不到 yt-dlp，去設定裡重新下載',
+        'en': 'yt-dlp not found — download it again in Settings',
+        'ja': 'yt-dlp が見つかりません。設定からもう一度ダウンロードしてください',
+        'ko': 'yt-dlp를 찾을 수 없습니다. 설정에서 다시 다운로드하세요',
+    },
+    '正在下载 ffmpeg…': {
+        'zh-TW': '正在下載 ffmpeg…',
+        'en': 'Downloading ffmpeg…',
+        'ja': 'ffmpeg をダウンロード中…',
+        'ko': 'ffmpeg 다운로드 중…',
+    },
+    '正在下载…': {
+        'zh-TW': '正在下載…',
+        'en': 'Downloading…',
+        'ja': 'ダウンロード中…',
+        'ko': '다운로드 중…',
+    },
+    '没找到 ffmpeg，正在下载（约 90 MB，只下这一次）…': {
+        'zh-TW': '沒找到 ffmpeg，正在下載（約 90 MB，只下這一次）…',
+        'en': 'ffmpeg not found — downloading (about 90 MB, once)…',
+        'ja': 'ffmpeg が見つかりません。ダウンロード中（約 90 MB、今回だけ）…',
+        'ko': 'ffmpeg를 찾을 수 없어 다운로드합니다(약 90 MB, 이번 한 번)…',
+    },
+    '现在下载': {
+        'zh-TW': '現在下載',
+        'en': 'Download now',
+        'ja': '今すぐダウンロード',
+        'ko': '지금 다운로드',
+    },
+    '第一次运行': {
+        'zh-TW': '第一次執行',
+        'en': 'First run',
+        'ja': '初回起動',
+        'ko': '첫 실행',
+    },
+    '还没下载音源组件': {
+        'zh-TW': '還沒下載音源元件',
+        'en': 'The audio component is not downloaded yet',
+        'ja': '音源コンポーネントが未ダウンロードです',
+        'ko': '음원 구성 요소가 아직 없습니다',
+    },
+    '这个平台的链接要靠 yt-dlp 解析（约 25 MB，装在工具目录里，随时可删）。现在下载吗？': {
+        'zh-TW': '這個平台的連結要靠 yt-dlp 解析（約 25 MB，裝在工具目錄裡，隨時可刪）。現在下載嗎？',
+        'en': 'Links from this site need yt-dlp (about 25 MB, stored in the tool folder, deletable anytime). Download now?',
+        'ja': 'このサイトのリンクは yt-dlp で解析します（約 25 MB、ツールフォルダに保存、いつでも削除可）。今ダウンロードしますか？',
+        'ko': '이 사이트 링크는 yt-dlp로 분석합니다(약 25 MB, 도구 폴더에 저장, 언제든 삭제 가능). 지금 내려받을까요?',
+    },
+    '出片引擎，约 90 MB': {
+        'zh-TW': '出片引擎，約 90 MB',
+        'en': 'Export engine, about 90 MB',
+        'ja': '書き出しエンジン（約 90 MB）',
+        'ko': '출력 엔진, 약 90 MB',
+    },
+    '抖音 / YouTube 等链接解析，约 25 MB': {
+        'zh-TW': '抖音 / YouTube 等連結解析，約 25 MB',
+        'en': 'Douyin / YouTube link parsing, about 25 MB',
+        'ja': 'Douyin / YouTube などのリンク解析（約 25 MB）',
+        'ko': '더우인 / YouTube 링크 분석, 약 25 MB',
+    },
+}
 
-
-
+for _k, _trs in _TR_EXTRA15.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)

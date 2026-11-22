@@ -21,10 +21,11 @@ import shutil
 import subprocess
 import sys
 
+import components
 from i18n import tr
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TOOLS_DIR = os.path.join(HERE, "tools")
+TOOLS_DIR = components.tools_dir()      # 兼容旧引用；真正的下载/删除交给 components
 
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus",
               ".wma", ".m4b", ".aiff", ".ape"}
@@ -68,37 +69,23 @@ def kind_of(source: str) -> str:
 
 # ---------------------------------------------------------------- yt-dlp
 
-def _ytdlp_path() -> str:
-    return os.path.join(TOOLS_DIR, "yt_dlp")
-
-
 def ytdlp_ready() -> bool:
-    if os.path.isdir(_ytdlp_path()):
-        return True
-    try:                       # 系统里已经装过也行
-        import yt_dlp  # noqa: F401
-        return True
-    except Exception:
-        return False
-
-
-def _ytdlp_env() -> dict:
-    env = dict(os.environ)
-    if os.path.isdir(_ytdlp_path()):
-        prev = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = _ytdlp_path() + (os.pathsep + prev if prev else "")
-    return env
+    return bool(components.exe("ytdlp"))
 
 
 def _run_ytdlp(args: list, timeout: int = 600, progress=None) -> str:
-    """跑一次 yt-dlp，返回合并输出（失败抛 SourceError）。"""
-    cmd = [sys.executable, "-m", "yt_dlp"] + args
+    """跑一次 yt-dlp（独立的 yt-dlp.exe），返回合并输出（失败抛 SourceError）。"""
+    path = components.exe("ytdlp")
+    if not path:
+        raise SourceError(tr("还没下载音源组件"))
+    cmd = [path] + args
     try:
         p = subprocess.run(cmd, capture_output=True, text=True,
                            encoding="utf-8", errors="replace",
-                           env=_ytdlp_env(), timeout=timeout)
+                           timeout=timeout,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except FileNotFoundError:
-        raise SourceError(tr("找不到 Python，无法调用 yt-dlp"))
+        raise SourceError(tr("找不到 yt-dlp，去设置里重新下载"))
     except subprocess.TimeoutExpired:
         raise SourceError(tr("解析超时（网络太慢或站点限流），稍后再试"))
     out = (p.stdout or "") + "\n" + (p.stderr or "")
@@ -108,47 +95,27 @@ def _run_ytdlp(args: list, timeout: int = 600, progress=None) -> str:
 
 
 def ytdlp_version() -> str:
-    if not ytdlp_ready():
-        return ""
-    try:
-        out = _run_ytdlp(["--version"], timeout=40)
-        return out.strip().splitlines()[0].strip()
-    except Exception:
-        return ""
+    return components.version("ytdlp") if ytdlp_ready() else ""
 
 
 def install_ytdlp(progress=None) -> str:
-    """把 yt-dlp 装到 tools/（不污染系统环境）。返回版本号。"""
-    os.makedirs(TOOLS_DIR, exist_ok=True)
-    if progress:
-        progress(tr("正在下载音源组件（yt-dlp）…"))
-    cmd = [sys.executable, "-m", "pip", "install", "--upgrade",
-           "--no-warn-script-location", "--target", TOOLS_DIR, "yt-dlp"]
+    """下载 yt-dlp.exe 到 tools/（官方单文件版，不污染系统环境）。返回版本号。"""
+    def note(text, pct=0.0):
+        if progress:
+            progress(text if pct <= 0 or pct >= 0.99
+                     else "%s %d%%" % (text, int(pct * 100)))
+
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=600)
-    except subprocess.TimeoutExpired:
-        raise SourceError(tr("下载音源组件超时，检查网络后再试"))
-    if p.returncode != 0:
-        raise SourceError(tr("下载音源组件失败（检查网络 / pip）"),
-                          detail=(p.stdout or "") + (p.stderr or ""))
-    ver = ytdlp_version()
+        ver = components.install("ytdlp", progress=note)
+    except components.ComponentError as exc:
+        raise SourceError(exc.message, detail=exc.detail)
     if progress:
         progress(tr("音源组件已就绪：{v}", v=ver) if ver else tr("音源组件已就绪"))
     return ver
 
 
 def remove_ytdlp() -> None:
-    """删掉 tools/ 下装进去的东西（只删这个目录，别的不动）。"""
-    for name in os.listdir(TOOLS_DIR) if os.path.isdir(TOOLS_DIR) else []:
-        path = os.path.join(TOOLS_DIR, name)
-        if os.path.isdir(path):
-            shutil.rmtree(path, ignore_errors=True)
-        else:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+    components.remove("ytdlp")
 
 
 def _friendly(out: str) -> str:

@@ -21,7 +21,8 @@
    python -m pip install PyQt6
    ```
 
-   还需要 `ffmpeg`、`ffprobe` 在 `PATH` 里（实测 9.0.2）。
+   `ffmpeg`、`ffprobe` 不用自己装：第一次运行时工具会问一句，点了就自动下到 `tools/`（约 90 MB，实测 9.0.2）。
+   系统 PATH 里本来就有 ffmpeg 的话直接用那份，不会再下。
 
 2. 双击 `启动.bat`（它就是 `python pic2video.py`）。
 3. 把图片拖进窗口，或点「加图片」。
@@ -37,7 +38,7 @@
 | 来源 | 需要什么 | 说明 |
 | --- | --- | --- |
 | B 站 | 无 | 不需要登录、不读 Cookie；DASH 音轨里按码率取最高那档 |
-| 抖音 / YouTube / 快手 / 小红书 / 微博 | `yt-dlp` | **按需下载**：设置里点「下载」装进工具目录的 `tools/`（约 21 MB），不用了点「删除」清掉；第一次粘这类链接时也会问一次 |
+| 抖音 / YouTube / 快手 / 小红书 / 微博 | `yt-dlp` | **按需下载**：设置 →「其它」里点「下载」装进工具目录的 `tools/`（约 25 MB），不用了点「删除」清掉；第一次粘这类链接时也会问一次 |
 | 本地文件 | 无 | 音频直接当 BGM；视频自动抽音轨 |
 
 取的是**整条音轨**，不做人声分离。
@@ -58,8 +59,8 @@ python pic2video.py --export 竖屏.mp4 --bili BV... --ratio 9:16 --fps 60 --fit
 
 ![设置（深色）](screenshots/settings-dark.png)
 
-设置页按 **外观 / 导出 / 画面 / 音乐 / 节奏与动效 / 其它** 分块，每块一条分隔线；简洁模式只留其中的必要项，
-空掉的组连标题一起收起来。
+设置页按 **外观 / 导出 / 画面 / 音乐 / 节奏与动效 / 其它** 分块：专业模式每组一页（顶上切页，不用再滚一屏），
+简洁模式仍是一列、组间用细线分开，只留其中的必要项，空掉的组连标题一起收起来。
 
 | 项 | 说明 |
 | --- | --- |
@@ -76,7 +77,8 @@ python pic2video.py --export 竖屏.mp4 --bili BV... --ratio 9:16 --fps 60 --fit
 | 裁切位置 | 裁切铺满时留住居中 / 偏上 / 偏下（人像照片常常要偏上） |
 | 音乐音量 | 0–200%，默认 100% |
 | 导出完自动打开所在文件夹 | 默认开；关掉就只弹完成提示 |
-| 抖音 / YouTube 支持 | yt-dlp 的安装状态，一键下载 / 删除 |
+| ffmpeg | 出片引擎（约 90 MB）。没装过 ffmpeg 时第一次打开会问「现在下载吗」，下完直接用；也能在这删掉、以后重新下 |
+| yt-dlp | 抖音 / YouTube 等平台的解析器（约 25 MB）。显示装没装、一键下载或删除 |
 
 预览音频始终跟随 **Windows 默认输出设备**，插拔耳机自动切，不用重启。
 
@@ -89,10 +91,11 @@ python pic2video.py --export 竖屏.mp4 --bili BV... --ratio 9:16 --fps 60 --fit
 pic2video.py     主程序（窗口 + 命令行）
 bili_audio.py    B 站取音轨（WBI 签名 + playurl）
 audio_source.py  音源判定与 yt-dlp 封装
+components.py    ffmpeg / yt-dlp 的按需下载与删除
 theme.py         主题、主色/对撞色、QSS
 i18n.py          五种语言的词条
 启动.bat          双击开窗口
-tests/           单元检查（148 条）
+tests/           单元检查（216 条）
 docs/            研究笔记、设计记录（wayfinder 票）与原始探针脚本
 screenshots/     README 里的截图
 ```
@@ -103,6 +106,20 @@ screenshots/     README 里的截图
 python tests/test_project.py     # 时间线 / 帧数 / 设置 / filtergraph / 主题 / 音源 / 坏图预检
 python tests/scan_keys.py        # 检查 tr() 的中文都有四种译文
 ```
+
+## 打包成免安装 exe
+
+双击 `build.bat`（需要 python；PyInstaller 没装的话脚本会先帮你装）。跑完在 `dist\Pic2Video\` 下：
+
+```
+Pic2Video.exe    双击就能用
+_internal\       运行时文件，和 exe 放在一起
+```
+
+整个 `dist\Pic2Video\` 文件夹拷给别人就能跑，不用安装（约 115 MB）。
+
+发布包里**不带** ffmpeg 和 yt-dlp：第一次打开时如果系统里没有 ffmpeg，会问一句然后自己下到
+`tools\`（约 90 MB，只下一次）；哪天想省地方，在 设置 → 其它 里能删掉，下次需要还会自己下。
 
 ## 已知限制
 
@@ -117,5 +134,5 @@ python tests/scan_keys.py        # 检查 tr() 的中文都有四种译文
 
 [MIT](LICENSE) © 2026 Xishensoft
 
-用到的第三方组件各有自己的许可：ffmpeg（GPL 构建）、PyQt6（GPL-3.0 / 商业双授权）、yt-dlp（Unlicense）、
-本项目自己的代码是 MIT；如果你要把本项目再分发，注意 ffmpeg 与 PyQt6 的许可是要一并遵守的。
+用到的第三方组件各有自己的许可：ffmpeg（GPL 构建，第一次运行时按需下载，不随仓库分发）、
+PyQt6（GPL-3.0 / 商业双授权）、yt-dlp（Unlicense）、本项目自己的代码是 MIT；如果你要把本项目再分发，注意 ffmpeg 与 PyQt6 的许可是要一并遵守的。

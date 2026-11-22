@@ -499,6 +499,9 @@ check("设置分六组", len(_seps) == 6, _seps)
 check("分隔线控件", 'setObjectName("sep")' in _src)
 check("简洁模式隐藏空组", 'add_sep("音乐", pro=True)' in _src
       and 'add_sep("其它", pro=True)' in _src)
+check("专业模式分页显示", "QTabWidget" in _src and "tabs.addTab" in _src)
+check("简洁模式不分页", "if self.pro:" in _src)
+check("每组一个表单", "self._groups[text] = form" in _src)
 
 # 26 预设配色（各视频站品牌色）
 check("预设配色够多", len(TH.PRESETS) >= 8, len(TH.PRESETS))
@@ -521,6 +524,16 @@ _sc.data["accent"] = "fk-7299"
 _sc._sanitize()
 check("坏主色回落默认", _sc["accent"] == TH.DEFAULT_ACCENT, _sc["accent"])
 check("预设下拉在设置里", "cmb_preset" in _src and "theme.PRESETS" in _src)
+
+# 27 exe（窗口程序、没有控制台）里起子进程的规矩：
+#     继承了无效句柄会让 ffmpeg 崩掉整个进程（实测 0xC0000409 闪退）
+check("ffmpeg 带 -nostdin", '"-nostdin"' in _src)
+check("子进程不继承 stdin", _src.count("stdin=subprocess.DEVNULL") >= 3,
+      _src.count("stdin=subprocess.DEVNULL"))
+check("子进程免开黑窗口", "CREATION_NO_WINDOW = getattr(" in _src
+      and _src.count("creationflags=CREATION_NO_WINDOW") >= 3)
+check("exe 里 print 有落处", "sys.stdout = fh" in _src and "sys.stderr = fh" in _src)
+check("exe 里崩溃写日志", "faulthandler.enable(file=fh" in _src)
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")

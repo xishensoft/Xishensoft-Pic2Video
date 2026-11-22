@@ -27,11 +27,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
+import components
 import theme
 from audio_source import (AUDIO_EXTS, SourceError, fetch_audio, install_ytdlp,
                           kind_of, remove_ytdlp, ytdlp_ready, ytdlp_version)
 from i18n import (LOCALES, LOCALE_LABELS, SYSTEM, bili_message,
                   current_locale, language_label, set_locale, tr)
+
+components.prepend_path()      # tools/ 里的 ffmpeg 优先于系统那份
+
+# exe 是窗口程序，没有控制台：起子进程时别让它继承无效的句柄
+CREATION_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 WIDTH, HEIGHT, FPS = 1920, 1080, 30
 PREVIEW_W, PREVIEW_H = 960, 540
@@ -58,11 +64,26 @@ def _unlink_quiet(path: str) -> None:
         pass
 
 
+def asset_path(name: str) -> str:
+    """找随包的资源（图标之类）：exe 旁边 → 打包解包目录 → 源码目录。"""
+    bases = [components.app_dir(),
+             getattr(sys, "_MEIPASS", components.app_dir()),
+             HERE]
+    for base in bases:
+        cand = os.path.join(base, "assets", name)
+        if os.path.isfile(cand):
+            return cand
+    return ""
+
+
 def missing_tools() -> list[str]:
-    """ffmpeg / ffprobe 缺哪个（空列表＝都找得到）。"""
+    """ffmpeg / ffprobe 缺哪个（空列表＝都找得到；tools/ 里下过就算有）。"""
     miss = []
     for name, exe in (("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)):
-        if not (os.path.isfile(exe) or shutil.which(exe)):
+        found = os.path.isfile(exe) or shutil.which(exe)
+        if not found:
+            found = components.exe(name)
+        if not found:
             miss.append(name)
     return miss
 
@@ -102,7 +123,9 @@ def image_ok(path: str) -> bool:
         r = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "v:0",
                             "-show_entries", "stream=width,height",
                             "-of", "csv=p=0", path],
-                           capture_output=True, text=True, timeout=20)
+                           capture_output=True, text=True, timeout=20,
+                           stdin=subprocess.DEVNULL,
+                           creationflags=CREATION_NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return False
     ok = r.returncode == 0 and bool(r.stdout.strip()) and "N/A" not in r.stdout
@@ -116,7 +139,8 @@ def probe_duration(path: str) -> float:
         p = subprocess.run(
             [FFPROBE, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=nw=1:nk=1", path],
-            capture_output=True, text=True, encoding="utf-8", errors="replace")
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL, creationflags=CREATION_NO_WINDOW)
         return float((p.stdout or "0").strip() or 0)
     except Exception:
         return 0.0
@@ -127,9 +151,10 @@ def extract_audio(src: str, dst: str) -> str:
     folder = os.path.dirname(os.path.abspath(dst)) or "."
     os.makedirs(folder, exist_ok=True)
     p = subprocess.run(
-        [FFMPEG, "-y", "-v", "error", "-i", src, "-vn", "-c:a", "aac",
-         "-b:a", "192k", "-ar", "48000", "-ac", "2", dst],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
+        [FFMPEG, "-y", "-nostdin", "-v", "error", "-i", src, "-vn",
+         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", dst],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL, creationflags=CREATION_NO_WINDOW)
     if p.returncode != 0 or not os.path.exists(dst):
         raise RenderError(tr("从本地文件抽音轨失败：{msg}",
                              msg=(p.stderr or "")[-300:]))
@@ -152,7 +177,7 @@ def unique_path(directory: str, stem: str, ext: str = ".mp4") -> str:
 
 # ---------------------------------------------------------------- 设置
 
-SETTINGS_PATH = os.path.join(HERE, "settings.json")
+SETTINGS_PATH = components.settings_path()   # 打包后跟着 exe 走，目录不可写就放 LOCALAPPDATA
 
 FIT_MODES = ("own", "color", "image", "video", "cover")
 FIT_LABELS = {"own": "原图铺底", "color": "纯色留白",
@@ -684,7 +709,7 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
                         audio_index=(len(counts) + (1 if add_bg else 0)),
                         motion=motion, volume=volume, crop_focus=crop_focus,
                         music_start=music_start)
-    cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+    cmd = [FFMPEG, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
            "-progress", "pipe:1", "-nostats"]
     for c, nf in zip(clips, counts):
         cmd += ["-loop", "1", "-framerate", str(fps), "-t",
@@ -726,9 +751,11 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
     tail: list[str] = []
     ok = False
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True,
-                                encoding="utf-8", errors="replace")
+                                encoding="utf-8", errors="replace",
+                                creationflags=CREATION_NO_WINDOW)
         if proc_holder is not None:
             proc_holder["proc"] = proc
         for raw in proc.stdout:
@@ -767,9 +794,24 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
 
 def cli_export(argv: list[str]) -> int:
     if missing_tools():
-        print(tr("没找到 ffmpeg / ffprobe。\nWindows 上一行装完：winget install Gyan.FFmpeg\n（装好后重开这个窗口）"),
+        print(tr("没找到 ffmpeg，正在下载（约 90 MB，只下这一次）…"),
               file=sys.stderr)
-        return 2
+
+        def _cli_note(text: str, pct: float = 0.0):
+            print("\r%s %3d%%" % (text, int(pct * 100)),
+                  end="", file=sys.stderr, flush=True)
+
+        try:
+            components.install("ffmpeg", progress=_cli_note)
+        except components.ComponentError as e:
+            print("\n" + e.message, file=sys.stderr)
+            return 2
+        print("", file=sys.stderr)
+        components.prepend_path()
+        if missing_tools():
+            print(tr("ffmpeg 装好了但还是找不到，重开一次窗口试试"),
+                  file=sys.stderr)
+            return 2
     import argparse
     ap = argparse.ArgumentParser(description=tr("图片 + BGM 合成视频（无窗口）"))
     ap.add_argument("--export", required=True, help=tr("输出 mp4 路径"))
@@ -900,8 +942,8 @@ def cli_export(argv: list[str]) -> int:
 # ---------------------------------------------------------------- 窗口
 
 def run_gui() -> int:
-    from PyQt6.QtCore import (QPointF, QSize, Qt, QThread, QTimer, QUrl,
-                              pyqtSignal)
+    from PyQt6.QtCore import (QEventLoop, QPointF, QSize, Qt, QThread,
+                              QTimer, QUrl, pyqtSignal)
     from PyQt6.QtGui import (QColor, QConicalGradient, QFont, QIcon,
                             QImageReader, QKeySequence, QLinearGradient,
                             QPainter, QPainterPath, QPalette, QPen, QPixmap,
@@ -914,8 +956,8 @@ def run_gui() -> int:
         QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
         QListWidget,
         QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar,
-        QPushButton, QRadioButton, QSizePolicy, QSpinBox, QSplitter,
-        QVBoxLayout, QWidget)
+        QProgressDialog, QPushButton, QRadioButton, QSizePolicy, QSpinBox,
+        QSplitter, QTabWidget, QVBoxLayout, QWidget)
     from bili_audio import BiliError, bili_audio
 
     class FetchWorker(QThread):
@@ -944,20 +986,31 @@ def run_gui() -> int:
             else:
                 self.ok.emit(path, probe_duration(path))
 
-    class YtdlpWorker(QThread):
-        """在后台装 yt-dlp（装进 tools/，随时可删）。"""
+    class ComponentWorker(QThread):
+        """在后台下载一个组件（ffmpeg / yt-dlp），下完就能用，也能随时删。"""
         done = pyqtSignal(str)
         bad = pyqtSignal(str)
         note = pyqtSignal(str)
 
+        def __init__(self, key: str, parent=None):
+            super().__init__(parent)
+            self.key = key
+
         def run(self):
+            def note(text: str, pct: float = 0.0):
+                if pct <= 0.0 or pct >= 0.99:
+                    self.note.emit(text)
+                else:
+                    self.note.emit("%s %d%%" % (text, int(pct * 100)))
+
             try:
-                ver = install_ytdlp(progress=self.note.emit)
-            except SourceError as e:
+                ver = components.install(self.key, progress=note)
+            except components.ComponentError as e:
                 self.bad.emit(e.message)
             except Exception as e:  # noqa: BLE001
                 self.bad.emit(f"{e}")
             else:
+                components.prepend_path()
                 self.done.emit(ver)
 
     class RenderWorker(QThread):
@@ -1312,13 +1365,14 @@ def run_gui() -> int:
             self.setWindowTitle(tr("设置"))
             self.setMinimumWidth(620)
             self.pro = settings["ui"] != "simple"
-            form = QFormLayout(self)
-            form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-            form.setFieldGrowthPolicy(
-                QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
             self._pro_fields = []   # 简洁模式要藏起来的（标签和控件一起藏）
+            self._groups = {}       # 组名 -> QFormLayout
+            self._order = []
+            self._group = ""
+            self._group_pro = {}
 
             def add_row(text, field, pro=False):
+                form = self._form()
                 form.addRow(tr(text), field)
                 if pro:
                     lab = form.labelForField(field)
@@ -1328,23 +1382,31 @@ def run_gui() -> int:
                 return field
 
             def add_sep(text, pro=False):
-                """一组设置的小标题 + 分隔线（简洁模式也靠它分块）。"""
-                line = QFrame()
-                line.setObjectName("sep")
-                line.setFrameShape(QFrame.Shape.HLine)
-                line.setFrameShadow(QFrame.Shadow.Plain)
-                box = QWidget()
-                v = QVBoxLayout(box)
-                v.setContentsMargins(0, 9, 0, 3)
-                v.setSpacing(3)
-                lab = QLabel(tr(text))
-                lab.setObjectName("sectitle")
-                v.addWidget(lab)
-                v.addWidget(line)
-                form.addRow(box)
-                if pro:
-                    self._pro_fields.append(box)
-                return box
+                """开始新的一组：专业模式下每组自成一页（Tab），简洁模式下用细线连成一列。"""
+                form = QFormLayout()
+                form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+                form.setFieldGrowthPolicy(
+                    QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+                form.setContentsMargins(2, 10, 2, 4)
+                self._order.append(text)
+                self._group_pro[text] = pro
+                self._groups[text] = form
+                self._group = text
+                if not self.pro and len(self._order) > 1:
+                    line = QFrame()
+                    line.setObjectName("sep")
+                    line.setFrameShape(QFrame.Shape.HLine)
+                    line.setFrameShadow(QFrame.Shadow.Plain)
+                    lab = QLabel(tr(text))
+                    lab.setObjectName("sectitle")
+                    box = QWidget()
+                    v = QVBoxLayout(box)
+                    v.setContentsMargins(0, 9, 0, 3)
+                    v.setSpacing(3)
+                    v.addWidget(lab)
+                    v.addWidget(line)
+                    form.addRow(box)
+                return form
 
             # 外观 / 导出 / 画面 / 音乐 / 节奏 / 其它：每组一条分隔线
             add_sep("外观")
@@ -1398,11 +1460,11 @@ def run_gui() -> int:
 
             self.chk_ask = QCheckBox(tr("导出时先问我保存到哪（关掉就直接存默认目录）"))
             self.chk_ask.setChecked(bool(settings["ask_export_dir"]))
-            form.addRow(self.chk_ask)   # 自带文字，不需要左边标签
+            self._form().addRow(self.chk_ask)   # 自带文字，不需要左边标签
 
             self.chk_open = QCheckBox(tr("导出完自动打开所在文件夹"))
             self.chk_open.setChecked(bool(settings["open_after_export"]))
-            form.addRow(self.chk_open)   # 自带文字，不需要左边标签
+            self._form().addRow(self.chk_open)   # 自带文字，不需要左边标签
 
             add_sep("画面")
             self._syncing = True
@@ -1568,19 +1630,26 @@ def run_gui() -> int:
             add_row("转场时长", self.spin_trans, pro=True)
 
             add_sep("其它", pro=True)
-            # 音源组件（抖音 / YouTube 等要用，按需下载、按需删除）
-            self._ydlp = None
-            self.lbl_ytdlp = QLabel()
-            self.btn_ytdlp = QPushButton(tr("下载"))
-            self.btn_ytdlp.clicked.connect(self._toggle_ytdlp)
-            row_y = QHBoxLayout()
-            row_y.setContentsMargins(0, 0, 0, 0)
-            row_y.addWidget(self.lbl_ytdlp, 1)
-            row_y.addWidget(self.btn_ytdlp)
-            wrap_y = QWidget()
-            wrap_y.setLayout(row_y)
-            add_row("抖音 / YouTube 支持", wrap_y, pro=True)
-            self._sync_ytdlp()
+            # 组件：出片引擎 ffmpeg、音源 yt-dlp —— 按需下载、按需删除
+            self._workers = {}
+            self._comp = {}
+            for key in components.ORDER:
+                spec = components.COMPONENTS[key]
+                lbl = QLabel()
+                lbl.setWordWrap(True)
+                btn = QPushButton(tr("下载"))
+                btn.clicked.connect(
+                    lambda _c=False, k=key: self._toggle_component(k))
+                row = QHBoxLayout()
+                row.setContentsMargins(0, 0, 0, 0)
+                row.setSpacing(8)
+                row.addWidget(lbl, 1)
+                row.addWidget(btn)
+                wrap = QWidget()
+                wrap.setLayout(row)
+                add_row(spec["label"], wrap, pro=True)
+                self._comp[key] = (lbl, btn)
+                self._sync_component(key)
 
             # 音频设备（只读，自动跟随）
             self.lbl_audio = QLabel(device_text())
@@ -1596,15 +1665,42 @@ def run_gui() -> int:
                 QDialogButtonBox.StandardButton.Cancel).setText(tr("取消"))
             buttons.accepted.connect(self.accept)
             buttons.rejected.connect(self.reject)
-            form.addRow(buttons)
 
-            if not self.pro:                      # 简洁模式：只留必要项
+            outer = QVBoxLayout(self)
+            outer.setContentsMargins(10, 8, 10, 8)
+            outer.setSpacing(8)
+            if self.pro:                      # 专业模式：一组一页，省得竖着太长
+                tabs = QTabWidget()
+                for name in self._order:
+                    page = QWidget()
+                    page.setLayout(self._groups[name])
+                    tabs.addTab(page, tr(name))
+                outer.addWidget(tabs, 1)
+            else:                             # 简洁模式：一列，只留必要项
                 for w_ in self._pro_fields:
                     w_.setVisible(False)
+                holder = QWidget()
+                v = QVBoxLayout(holder)
+                v.setContentsMargins(0, 0, 0, 0)
+                v.setSpacing(4)
+                for name in self._order:
+                    form = self._groups[name]
+                    if self._group_pro.get(name):
+                        page = QWidget(self)   # 专业组的控件得有父，挂到隐藏页上
+                        page.setLayout(form)
+                        page.hide()
+                        continue
+                    v.addLayout(form)
+                outer.addWidget(holder, 1)
+            outer.addWidget(buttons)
 
             self._sync_size_label()
             self._sync_fit()
             self._sync_trans()
+
+        def _form(self) -> QFormLayout:
+            """当前这一组的表单（add_row / 直接 form.addRow 都走它）。"""
+            return self._groups[self._group]
 
         def _apply_ratio(self, *_a):
             size = preset_size(self.cmb_ratio.currentData())
@@ -1686,53 +1782,51 @@ def run_gui() -> int:
         def _sync_trans(self, *_a):
             self.spin_trans.setEnabled(self.cmb_trans.currentData() == "fade")
 
-        # -- 音源组件（yt-dlp）--------------------------------------------
-        def _ytdlp_mb(self) -> int:
-            import audio_source as _as
-            total = 0
-            for root, _dirs, files in os.walk(_as.TOOLS_DIR):
-                for n in files:
-                    try:
-                        total += os.path.getsize(os.path.join(root, n))
-                    except OSError:
-                        pass
-            return max(1, int(round(total / 1048576.0)))
-
-        def _sync_ytdlp(self):
-            if ytdlp_ready():
-                ver = ytdlp_version()
-                self.lbl_ytdlp.setText(
-                    tr("已安装 {v} · {mb} MB（占地方可以随时删）",
-                       v=ver or "yt-dlp", mb=self._ytdlp_mb()))
-                self.btn_ytdlp.setText(tr("删除"))
+        # -- 组件（ffmpeg / yt-dlp）：下载与删除 ---------------------------
+        def _sync_component(self, key: str):
+            lbl, btn = self._comp[key]
+            spec = components.COMPONENTS[key]
+            btn.setEnabled(True)
+            if components.have(key):
+                lbl.setText(tr("已安装 {v} · {mb} MB（占地方可以随时删）",
+                               v=components.version(key) or spec["label"],
+                               mb=components.size_mb(key)))
+                btn.setText(tr("删除"))
+                return
+            found = components.exe(key)
+            if found:
+                short = found if len(found) <= 52 else "…" + found[-51:]
+                lbl.setText(tr("先用系统里这份：{path}（想随身带就在这下一份）",
+                               path=short))
             else:
-                self.lbl_ytdlp.setText(
-                    tr("没装：抖音 / YouTube / 快手等要靠它取音轨"))
-                self.btn_ytdlp.setText(tr("下载"))
+                lbl.setText(tr(spec["hint"]))
+            btn.setText(tr("下载"))
 
-        def _toggle_ytdlp(self):
-            if self._ydlp is not None and self._ydlp.isRunning():
+        def _toggle_component(self, key: str):
+            w = self._workers.get(key)
+            if w is not None and w.isRunning():
                 return
-            if ytdlp_ready():
-                remove_ytdlp()
-                self._sync_ytdlp()
+            lbl, btn = self._comp[key]
+            if components.have(key):
+                components.remove(key)
+                components.prepend_path()
+                self._sync_component(key)
                 return
-            self.btn_ytdlp.setEnabled(False)
-            self.lbl_ytdlp.setText(tr("正在下载音源组件…"))
-            self._ydlp = YtdlpWorker(self)
-            self._ydlp.note.connect(self.lbl_ytdlp.setText)
-            self._ydlp.done.connect(self._on_ytdlp_done)
-            self._ydlp.bad.connect(self._on_ytdlp_bad)
-            self._ydlp.start()
+            btn.setEnabled(False)
+            lbl.setText(tr("正在下载…"))
+            w = ComponentWorker(key, self)
+            self._workers[key] = w
+            w.note.connect(lbl.setText)
+            w.done.connect(lambda _v, k=key: self._on_component_done(k))
+            w.bad.connect(lambda m, k=key: self._on_component_bad(k, m))
+            w.start()
 
-        def _on_ytdlp_done(self, ver):
-            self.btn_ytdlp.setEnabled(True)
-            self._sync_ytdlp()
+        def _on_component_done(self, key: str):
+            self._sync_component(key)
 
-        def _on_ytdlp_bad(self, msg):
-            self.btn_ytdlp.setEnabled(True)
-            self._sync_ytdlp()
-            QMessageBox.warning(self, tr("音源组件"), msg)
+        def _on_component_bad(self, key: str, msg: str):
+            self._sync_component(key)
+            QMessageBox.warning(self, components.COMPONENTS[key]["label"], msg)
 
         def _browse_dir(self):
             d = QFileDialog.getExistingDirectory(self, tr("选默认导出目录"),
@@ -2512,7 +2606,7 @@ def run_gui() -> int:
             """非 B 站链接需要音源组件时问一句，点了就后台装。"""
             box = QMessageBox(self)
             box.setWindowTitle(tr("需要音源组件"))
-            box.setText(tr("这个平台的链接要靠 yt-dlp 解析（约 15 MB，"
+            box.setText(tr("这个平台的链接要靠 yt-dlp 解析（约 25 MB，"
                            "装在工具目录里，随时可删）。现在下载吗？"))
             yes = box.addButton(tr("下载并继续"), QMessageBox.ButtonRole.AcceptRole)
             box.addButton(tr("取消"), QMessageBox.ButtonRole.RejectRole)
@@ -2520,7 +2614,7 @@ def run_gui() -> int:
             if box.clickedButton() is not yes:
                 return False
             self.lbl_status.setText(tr("正在下载音源组件…"))
-            worker = YtdlpWorker(self)
+            worker = ComponentWorker("ytdlp", self)
             worker.note.connect(self.lbl_status.setText)
             worker.done.connect(lambda _v: self.start_fetch())
             worker.bad.connect(lambda m: QMessageBox.warning(
@@ -2582,6 +2676,8 @@ def run_gui() -> int:
                 out += ".mp4"
             self.settings["last_export_dir"] = os.path.dirname(out) or base_dir
             self.settings.save()
+            if shot:
+                print("EXPORT_START:", out, flush=True)
             self._rendering(True, "export")
             self.lbl_status.setText(tr("正在导出…"))
             self.worker = RenderWorker(
@@ -2598,6 +2694,7 @@ def run_gui() -> int:
             self._rendering(False)
             self.lbl_status.setText(tr("导出完成：{path}", path=path))
             if os.environ.get("PIC2VIDEO_SHOT"):
+                print("EXPORT_OK:", path, flush=True)
                 return
             if self.settings["open_after_export"]:
                 try:
@@ -2620,7 +2717,7 @@ def run_gui() -> int:
             self._rendering(False)
             self.lbl_status.setText(tr("导出失败"))
             if os.environ.get("PIC2VIDEO_SHOT"):
-                print("EXPORT_FAILED:", msg)
+                print("EXPORT_FAILED:", msg, flush=True)
                 return
             QMessageBox.warning(self, tr("导出失败"), msg)
 
@@ -2669,11 +2766,59 @@ def run_gui() -> int:
             shutil.rmtree(self.tmpdir, ignore_errors=True)
             super().closeEvent(ev)
 
+    def ensure_ffmpeg_gui() -> bool:
+        """缺 ffmpeg 时当场下载（约 90 MB，只下一次），装完直接用。"""
+        if not missing_tools():
+            return True
+        if not os.environ.get("PIC2VIDEO_SHOT"):      # 跑测试时别弹窗等点击
+            box = QMessageBox(
+                QMessageBox.Icon.Question, tr("第一次运行"),
+                tr("出片要靠 ffmpeg（约 90 MB，只下这一次，之后不再问）。"
+                   "\n现在就自动下载吗？"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            box.button(QMessageBox.StandardButton.Yes).setText(tr("现在下载"))
+            box.button(QMessageBox.StandardButton.No).setText(tr("先不用"))
+            if box.exec() != QMessageBox.StandardButton.Yes:
+                return False
+
+        dlg = QProgressDialog(tr("正在下载 ffmpeg…"), tr("取消"), 0, 100)
+        dlg.setWindowTitle(tr("下载 ffmpeg"))
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setValue(0)
+
+        loop = QEventLoop()
+        worker = ComponentWorker("ffmpeg")
+
+        def note(text: str, pct: float = 0.0):
+            dlg.setLabelText(text)
+            dlg.setValue(max(0, min(100, int(pct * 100))))
+
+        worker.note.connect(note)
+        worker.done.connect(lambda _v: loop.quit())
+        worker.bad.connect(lambda _m: loop.quit())
+        dlg.canceled.connect(worker.terminate)
+        dlg.canceled.connect(loop.quit)
+        worker.start()
+        loop.exec()
+        worker.wait(3000)
+        dlg.reset()
+
+        if not components.have("ffmpeg") and missing_tools():
+            QMessageBox.critical(
+                None, tr("下载失败"),
+                tr("ffmpeg 没下成功。检查一下网络再开一次，"
+                   "或者手动装：winget install Gyan.FFmpeg"))
+            return False
+        components.prepend_path()
+        return True
+
     app = QApplication(sys.argv[:1])
-    if missing_tools():
-        QMessageBox.critical(
-            None, tr("缺少依赖"),
-            tr("没找到 ffmpeg / ffprobe。\nWindows 上一行装完：winget install Gyan.FFmpeg\n（装好后重开这个窗口）"))
+    ico = asset_path("icon.ico")
+    if ico:
+        app.setWindowIcon(QIcon(ico))
+    if not ensure_ffmpeg_gui():
         return 1
     w = Window()
 
@@ -2788,6 +2933,16 @@ def run_gui() -> int:
                 QTimer.singleShot(600, grab_wheel)
 
             def grab_dlg():
+                tab_name = os.environ.get("PIC2VIDEO_SHOT_TAB")
+                if tab_name:
+                    tabs = dlg.findChild(QTabWidget)
+                    if tabs is not None:
+                        for i in range(tabs.count()):
+                            if (tabs.tabText(i) == tab_name
+                                    or str(i) == tab_name):
+                                tabs.setCurrentIndex(i)
+                                break
+                        dlg.adjustSize()
                 dlg.grab().save(os.path.join(os.path.dirname(shot),
                                              "shot_settings" + tag + ".png"))
                 preset = os.environ.get("PIC2VIDEO_SHOT_PRESET")
@@ -2880,7 +3035,47 @@ def run_gui() -> int:
     return app.exec()
 
 
+def _startup_crash_log() -> None:
+    """exe（无控制台）里把 print 与崩溃栈写进 data_dir/crash.log，方便排查。"""
+    try:
+        path = os.path.join(components.data_dir(), "crash.log")
+        fh = open(path, "a", encoding="utf-8", errors="replace", buffering=1)
+    except Exception:
+        return
+    globals()["_crash_log"] = fh          # 别让它被回收关掉
+    try:
+        fh.write("\n=== %s ===\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
+        # 窗口版 exe 没有控制台，print 无处可去；统一写进日志（也避免 None 抛异常）
+        sys.stdout = fh
+        sys.stderr = fh
+    except Exception:
+        pass
+    def _excepthook(kind, exc, tb):
+        try:
+            import traceback
+            fh.write("\n!!! %s\n" % kind)
+            traceback.print_exception(exc, tb, file=fh)
+            fh.flush()
+        except Exception:
+            pass
+
+    try:
+        sys.excepthook = lambda exc, tb: _excepthook("sys", exc, tb)
+        import threading
+        threading.excepthook = lambda a: _excepthook(
+            "thread", a.exc_value, a.exc_traceback)
+    except Exception:
+        pass
+    try:
+        import faulthandler
+        faulthandler.enable(file=fh, all_threads=True)
+    except Exception:
+        pass
+
+
 def main() -> int:
+    if getattr(sys, "frozen", False) or os.environ.get("PIC2VIDEO_DEBUG"):
+        _startup_crash_log()
     argv = sys.argv[1:]
     if "--export" in argv:
         return cli_export(argv)
