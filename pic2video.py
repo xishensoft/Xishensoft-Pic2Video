@@ -946,8 +946,9 @@ def cli_export(argv: list[str]) -> int:
 # ---------------------------------------------------------------- 窗口
 
 def run_gui() -> int:
-    from PyQt6.QtCore import (QEventLoop, QPointF, QSize, Qt, QThread,
-                              QTimer, QUrl, pyqtSignal)
+    from PyQt6.QtCore import (QEvent, QEventLoop, QLibraryInfo, QPoint, QPointF,
+                              QSize, Qt, QThread, QTimer, QTranslator, QUrl,
+                              pyqtSignal)
     from PyQt6.QtGui import (QColor, QConicalGradient, QFont, QIcon,
                             QImageReader, QKeySequence, QLinearGradient,
                             QPainter, QPainterPath, QPalette, QPen, QPixmap,
@@ -957,12 +958,466 @@ def run_gui() -> int:
     from PyQt6.QtWidgets import (
         QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QColorDialog,
         QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
-        QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+        QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
         QListWidget,
-        QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar,
-        QProgressDialog, QPushButton, QRadioButton, QSizePolicy, QSpinBox,
-        QSplitter, QTabWidget, QVBoxLayout, QWidget)
+        QListWidgetItem, QMainWindow, QMenu, QProgressBar,
+        QPushButton, QRadioButton, QSizePolicy, QSpinBox,
+        QSplitter, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget)
     from bili_audio import BiliError, bili_audio
+
+    # ------------------------------------------------------------ 自绘边框
+    # Windows 默认那圈蓝边框 + 白色标题栏跟软件配色对不上，所以全部窗口
+    # 自己画：标题栏、按钮、拖动、拉伸都自己来。命中测试借 Win32 的
+    # WM_NCHITTEST（见 hit_test），所以贴边分屏、双击最大化还是系统行为。
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:                      # noqa: BLE001
+        ctypes = None
+        wintypes = None
+
+    HT_CLIENT = 1        # 客户区（按钮自己要收点击）
+    HT_CAPTION = 2       # 标题栏（系统负责拖动/贴边/双击）
+
+    def _win_icon(size: int = 18) -> QIcon:
+        path = asset_path("icon.ico")
+        return QIcon(path) if path else QIcon()
+
+    def _screen_point(lparam: int) -> tuple[int, int]:
+        x = ctypes.c_short(lparam & 0xFFFF).value
+        y = ctypes.c_short((lparam >> 16) & 0xFFFF).value
+        return x, y
+
+    _qt_translators = []
+
+    def apply_qt_translator(code: str) -> None:
+        """界面语言换了，Qt 自带控件的文案（文件框、右键菜单）也跟着换。"""
+        app_ = QApplication.instance()
+        if app_ is None:
+            return
+        for t in _qt_translators:
+            app_.removeTranslator(t)
+        _qt_translators.clear()
+        name = {"zh-CN": "zh_CN", "zh-TW": "zh_TW",
+                "ja": "ja", "ko": "ko"}.get(code)
+        if not name:                      # 英文就是 Qt 的原始语言，不用装
+            return
+        base = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+        qt_tr = QTranslator(app_)
+        if qt_tr.load("qtbase_" + name, base):
+            app_.installTranslator(qt_tr)
+            _qt_translators.append(qt_tr)
+
+    def hit_test(win, bar, event_type, message, *, resize: bool):
+        """WM_NCHITTEST：边缘给系统拉伸，标题栏给系统当标题栏。
+
+        返回 None 表示这条消息不归我管（交回 Qt）。
+        """
+        if wintypes is None or event_type != b"windows_generic_MSG":
+            return None
+        try:
+            msg = wintypes.MSG.from_address(int(message))
+        except Exception:                  # noqa: BLE001
+            return None
+        if msg.message != 0x0084:           # WM_NCHITTEST
+            return None
+        ratio = win.devicePixelRatioF() or 1.0
+        gx, gy = _screen_point(msg.lParam)
+        gx, gy = gx / ratio, gy / ratio     # 系统给的是物理像素
+        r = win.geometry()
+        x, y = gx - r.x(), gy - r.y()
+        w, h = r.width(), r.height()
+        if resize and not win.isMaximized() and not win.isFullScreen():
+            b = 6.0
+            left, right = x < b, x >= w - b
+            top, bottom = y < b, y >= h - b
+            if left and top:
+                return 13                 # HTTOPLEFT
+            if right and top:
+                return 14                 # HTTOPRIGHT
+            if left and bottom:
+                return 16                 # HTBOTTOMLEFT
+            if right and bottom:
+                return 17                 # HTBOTTOMRIGHT
+            if left:
+                return 10                 # HTLEFT
+            if right:
+                return 11                 # HTRIGHT
+            if top:
+                return 12                 # HTTOP
+            if bottom:
+                return 15                 # HTBOTTOM
+        if bar is not None and bar.isVisible():
+            t = bar.mapTo(win, bar.rect().topLeft())
+            if (t.x() <= x < t.x() + bar.width()
+                    and t.y() <= y < t.y() + bar.height()):
+                local = bar.mapFrom(win, QPoint(int(x), int(y)))
+                for btn in bar.buttons():
+                    if btn.isVisible() and btn.geometry().contains(local):
+                        return HT_CLIENT   # 标题栏上的按钮照旧点得动
+                return HT_CAPTION
+        return HT_CLIENT
+
+    class TitleBar(QWidget):
+        """自绘标题栏：图标 + 标题 + 最小化 / 最大化 / 关闭。"""
+
+        def __init__(self, win, title: str = "", *, maximize: bool = False):
+            super().__init__(win)
+            self.setObjectName("titlebar")
+            self.setFixedHeight(34)
+            self.win = win
+            self._drag = None
+            row = QHBoxLayout(self)
+            row.setContentsMargins(10, 0, 6, 0)
+            row.setSpacing(8)
+            self.lbl_icon = QLabel()
+            ico = _win_icon()
+            if ico.isNull():
+                self.lbl_icon.hide()
+            else:
+                self.lbl_icon.setPixmap(ico.pixmap(18, 18))
+            row.addWidget(self.lbl_icon)
+            self.lbl_title = QLabel(title)
+            self.lbl_title.setObjectName("wintitle")
+            row.addWidget(self.lbl_title)
+            row.addStretch(1)
+            self.btn_min = self._button("–", tr("最小化"))
+            self.btn_min.clicked.connect(win.showMinimized)
+            self.btn_max = self._button("□", tr("最大化"))
+            self.btn_max.clicked.connect(self.toggle_max)
+            self.btn_close = self._button("✕", tr("关闭"))
+            self.btn_close.setObjectName("winclose")
+            self.btn_close.clicked.connect(win.close)
+            for b in (self.btn_min, self.btn_max, self.btn_close):
+                row.addWidget(b)
+            if not maximize:
+                self.btn_min.hide()
+                self.btn_max.hide()
+
+        @staticmethod
+        def _button(text: str, tip: str) -> QPushButton:
+            b = QPushButton(text)
+            b.setObjectName("winbtn")
+            b.setFixedSize(32, 24)
+            b.setToolTip(tip)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.setCursor(Qt.CursorShape.ArrowCursor)
+            return b
+
+        def buttons(self):
+            return (self.btn_min, self.btn_max, self.btn_close)
+
+        def set_title(self, text: str):
+            self.lbl_title.setText(text)
+
+        def sync_max(self):
+            if not self.btn_max.isVisible():
+                return
+            maxed = self.win.isMaximized()
+            self.btn_max.setText("❐" if maxed else "□")
+            self.btn_max.setToolTip(tr("还原") if maxed else tr("最大化"))
+
+        def toggle_max(self):
+            if self.win.isMaximized():
+                self.win.showNormal()
+            else:
+                self.win.showMaximized()
+            self.sync_max()
+
+        # 系统命中测试生效时这些事件收不到；收得到就自己拖，双保险
+        def mousePressEvent(self, ev):
+            if ev.button() == Qt.MouseButton.LeftButton:
+                self._drag = (ev.globalPosition().toPoint()
+                              - self.win.frameGeometry().topLeft())
+                ev.accept()
+
+        def mouseMoveEvent(self, ev):
+            if (self._drag is not None
+                    and ev.buttons() & Qt.MouseButton.LeftButton):
+                self.win.move(ev.globalPosition().toPoint() - self._drag)
+                ev.accept()
+
+        def mouseReleaseEvent(self, ev):
+            self._drag = None
+            ev.accept()
+
+        def mouseDoubleClickEvent(self, ev):
+            if self.btn_max.isVisible():
+                self.toggle_max()
+            ev.accept()
+
+    class FramelessDialog(QDialog):
+        """自己画的对话框：自绘标题栏、能拖、Esc 关闭。"""
+
+        def __init__(self, parent=None, title: str = "", *,
+                     maximize: bool = False):
+            super().__init__(parent)
+            self.setWindowTitle(title)          # 任务栏 / 读屏还能读到
+            self.setObjectName("frame")         # 配 QSS 那一圈细边
+            self.setWindowIcon(_win_icon(32))
+            self.setWindowFlags(self.windowFlags()
+                                | Qt.WindowType.FramelessWindowHint)
+            self.titlebar = TitleBar(self, title, maximize=maximize)
+            outer = QVBoxLayout(self)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(0)
+            outer.addWidget(self.titlebar)
+            body = QWidget()
+            self.body = QVBoxLayout(body)
+            self.body.setContentsMargins(12, 10, 12, 12)
+            self.body.setSpacing(10)
+            outer.addWidget(body, 1)
+
+        def nativeEvent(self, event_type, message):
+            bar = getattr(self, "titlebar", None)
+            try:
+                hit = hit_test(self, bar, event_type, message, resize=False)
+            except Exception:             # noqa: BLE001
+                return False, 0   # 别调 super()：PyQt6 在这里调会崩掉整个进程
+            if hit is None:
+                return False, 0   # 别调 super()：PyQt6 在这里调会崩掉整个进程
+            return True, hit
+
+    class MsgBox(FramelessDialog):
+        """自己画的消息框（替掉 QMessageBox，边框和软件一个样）。"""
+
+        GLYPH = {"info": "ⓘ", "warn": "⚠", "crit": "✕",
+                 "ask": "?"}
+
+        def __init__(self, parent, title: str, text: str, actions,
+                     icon: str = "info"):
+            super().__init__(parent, title)
+            self._picked = -1
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            glyph = QLabel(self.GLYPH.get(icon, "ⓘ"))
+            glyph.setObjectName("msgicon")
+            glyph.setFixedWidth(24)
+            glyph.setAlignment(Qt.AlignmentFlag.AlignTop
+                               | Qt.AlignmentFlag.AlignHCenter)
+            row.addWidget(glyph)
+            lbl = QLabel(text)
+            lbl.setWordWrap(True)
+            lbl.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse)
+            row.addWidget(lbl, 1)
+            self.body.addLayout(row)
+            btns = QHBoxLayout()
+            btns.addStretch(1)
+            for i, (label, style) in enumerate(actions):
+                b = QPushButton(label)
+                b.clicked.connect(
+                    lambda _c=False, idx=i: self._pick(idx))
+                if style == "primary":
+                    b.setDefault(True)
+                elif style == "danger":
+                    b.setProperty("danger", True)
+                btns.addWidget(b)
+            self.body.addSpacing(2)
+            self.body.addLayout(btns)
+            self.setMinimumWidth(400)
+            self.setMaximumWidth(720)
+
+        def _pick(self, index: int):
+            self._picked = index
+            self.accept()
+
+        @classmethod
+        def choose(cls, parent, title: str, text: str, actions,
+                   icon: str = "info") -> int:
+            box = cls(parent, title, text, actions, icon=icon)
+            box.exec()
+            return box._picked
+
+        @classmethod
+        def info(cls, parent, title: str, text: str):
+            cls.choose(parent, title, text, [(tr("好"), "primary")], "info")
+
+        @classmethod
+        def warn(cls, parent, title: str, text: str):
+            cls.choose(parent, title, text, [(tr("好"), "primary")], "warn")
+
+        @classmethod
+        def crit(cls, parent, title: str, text: str):
+            cls.choose(parent, title, text, [(tr("好"), "primary")], "crit")
+
+        @classmethod
+        def ask(cls, parent, title: str, text: str, yes: str, no: str,
+                *, danger: bool = False) -> bool:
+            picked = cls.choose(
+                parent, title, text,
+                [(yes, "danger" if danger else "primary"), (no, "plain")],
+                "ask")
+            return picked == 0
+
+    class NumberDialog(FramelessDialog):
+        """要一个数字的输入框（改每张图显示多久用）。"""
+
+        def __init__(self, parent, title: str, label: str, value: float,
+                     minimum: float, maximum: float, decimals: int = 1):
+            super().__init__(parent, title)
+            lab = QLabel(label)
+            self.body.addWidget(lab)
+            self.spin = QDoubleSpinBox()
+            self.spin.setRange(minimum, maximum)
+            self.spin.setDecimals(decimals)
+            self.spin.setSingleStep(0.5)
+            self.spin.setSuffix(tr(" 秒"))
+            self.spin.setValue(value)
+            self.spin.selectAll()
+            self.body.addWidget(self.spin)
+            row = QHBoxLayout()
+            row.addStretch(1)
+            ok = QPushButton(tr("好"))
+            ok.setDefault(True)
+            ok.clicked.connect(self.accept)
+            cancel = QPushButton(tr("取消"))
+            cancel.clicked.connect(self.reject)
+            row.addWidget(ok)
+            row.addWidget(cancel)
+            self.body.addLayout(row)
+            self.setMinimumWidth(340)
+
+        @classmethod
+        def get_double(cls, parent, title: str, label: str, value: float,
+                       minimum: float, maximum: float,
+                       decimals: int = 1):
+            dlg = cls(parent, title, label, value, minimum, maximum, decimals)
+            ok = dlg.exec() == QDialog.DialogCode.Accepted
+            return float(dlg.spin.value()), bool(ok)
+
+    class ProgressDialog(FramelessDialog):
+        """下载进度框（自绘边框，带取消）。"""
+
+        canceled = pyqtSignal()
+
+        def __init__(self, parent, title: str, label: str, cancel_text: str):
+            super().__init__(parent, title)
+            self.lbl = QLabel(label)
+            self.lbl.setWordWrap(True)
+            self.body.addWidget(self.lbl)
+            self.bar = QProgressBar()
+            self.bar.setRange(0, 100)
+            self.body.addWidget(self.bar)
+            row = QHBoxLayout()
+            row.addStretch(1)
+            self.btn = QPushButton(cancel_text)
+            self.btn.clicked.connect(self.canceled.emit)
+            row.addWidget(self.btn)
+            self.body.addLayout(row)
+            self.setMinimumWidth(380)
+
+        def set_label(self, text: str):
+            self.lbl.setText(text)
+
+        def set_value(self, value: int):
+            self.bar.setValue(max(0, min(100, int(value))))
+
+        def reset(self):
+            pass
+
+    def _arrow_icon(kind: str, color: str, size: int = 18) -> QIcon:
+        """文件框工具栏上的三角图标自己画：系统那套在深色底上几乎看不见。"""
+        pm = QPixmap(size, size)
+        pm.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        if kind == "back":
+            pts = [QPointF(size * 0.68, size * 0.16),
+                   QPointF(size * 0.68, size * 0.84),
+                   QPointF(size * 0.28, size * 0.5)]
+        elif kind == "forward":
+            pts = [QPointF(size * 0.32, size * 0.16),
+                   QPointF(size * 0.32, size * 0.84),
+                   QPointF(size * 0.72, size * 0.5)]
+        else:
+            pts = [QPointF(size * 0.16, size * 0.64),
+                   QPointF(size * 0.84, size * 0.64),
+                   QPointF(size * 0.5, size * 0.24)]
+        painter.drawPolygon(QPolygonF(pts))
+        painter.end()
+        return QIcon(pm)
+
+    class FileDialog(FramelessDialog):
+        """自己画边框的文件框：里面嵌 Qt 的 QFileDialog（不用系统那个）。"""
+
+        def __init__(self, parent, caption: str, directory: str = "",
+                     filters: str = "", mode: str = "open",
+                     multi: bool = False):
+            super().__init__(parent, caption)
+            self.files = []
+            self._inner = QFileDialog(self, caption, directory)
+            self._inner.setOption(
+                QFileDialog.Option.DontUseNativeDialog, True)
+            self._inner.setWindowFlags(Qt.WindowType.Widget)
+            if filters:
+                self._inner.setNameFilters([filters])
+            if mode == "save":
+                self._inner.setAcceptMode(
+                    QFileDialog.AcceptMode.AcceptSave)
+            elif mode == "dir":
+                self._inner.setFileMode(QFileDialog.FileMode.Directory)
+                self._inner.setOption(
+                    QFileDialog.Option.ShowDirsOnly, True)
+            elif multi:
+                self._inner.setFileMode(QFileDialog.FileMode.ExistingFiles)
+            self.body.addWidget(self._inner, 1)
+            self._inner.finished.connect(self._inner_done)
+            self.resize(880, 580)
+
+        def showEvent(self, ev):
+            # 工具栏是 show 的时候才建出来的，等它建好再换图标
+            super().showEvent(ev)
+            QTimer.singleShot(0, self._recolor_toolbar)
+
+        def _recolor_toolbar(self):
+            """把后退 / 前进 / 上一级三个三角换成跟配色一致的图标。"""
+            color = self.palette().color(
+                QPalette.ColorRole.WindowText).name()
+            for name, kind in (("backButton", "back"),
+                               ("forwardButton", "forward"),
+                               ("toParentButton", "up")):
+                btn = self._inner.findChild(QToolButton, name)
+                if btn is not None:
+                    btn.setIcon(_arrow_icon(kind, color))
+                    btn.setIconSize(QSize(16, 16))
+
+        def _inner_done(self, code):
+            if code == QDialog.DialogCode.Accepted:
+                self.files = list(self._inner.selectedFiles())
+                self.accept()
+            else:
+                self.reject()
+
+        @classmethod
+        def get_open_files(cls, parent, caption: str, directory: str = "",
+                           filters: str = "", multi: bool = False):
+            dlg = cls(parent, caption, directory, filters, "open", multi)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                return list(dlg.files)
+            return []
+
+        @classmethod
+        def get_save_file(cls, parent, caption: str, path: str = "",
+                          filters: str = "", suffix: str = "mp4") -> str:
+            directory = os.path.dirname(path)
+            name = os.path.basename(path)
+            dlg = cls(parent, caption, directory, filters, "save")
+            dlg._inner.setDefaultSuffix(suffix)
+            if name:
+                dlg._inner.selectFile(name)
+            if dlg.exec() == QDialog.DialogCode.Accepted and dlg.files:
+                return dlg.files[0]
+            return ""
+
+        @classmethod
+        def get_dir(cls, parent, caption: str, directory: str = "") -> str:
+            dlg = cls(parent, caption, directory, "", "dir")
+            if dlg.exec() == QDialog.DialogCode.Accepted and dlg.files:
+                return dlg.files[0]
+            return ""
 
     class FetchWorker(QThread):
         """取音源：B 站走自带解析，其它平台走 yt-dlp，本地文件直接用。"""
@@ -1296,14 +1751,13 @@ def run_gui() -> int:
             if ev.buttons() & Qt.MouseButton.LeftButton:
                 self._pick(ev.position())
 
-    class ColorWheelDialog(QDialog):
+    class ColorWheelDialog(FramelessDialog):
         """色环取色 + 自动对撞色预览（留白颜色、主色都用它）。"""
 
         def __init__(self, color: str, title: str, parent=None):
-            super().__init__(parent)
-            self.setWindowTitle(title)
-            self.setMinimumWidth(360)
-            v = QVBoxLayout(self)
+            super().__init__(parent, title)
+            self.setMinimumWidth(380)
+            v = self.body
             self.wheel = ColorWheel(color, self)
             v.addWidget(self.wheel)
             row = QHBoxLayout()
@@ -1356,7 +1810,7 @@ def run_gui() -> int:
             return tr("未检测到输出设备")
         return dev.description() + tr("（跟随 Windows 默认，换设备自动跟）")
 
-    class SettingsDialog(QDialog):
+    class SettingsDialog(FramelessDialog):
         """设置：导出目录、画面规格、铺底、节奏默认值、声音与转场。
 
         预览音频不在这里选：它始终跟随 Windows 当前默认输出设备，
@@ -1364,9 +1818,8 @@ def run_gui() -> int:
         """
 
         def __init__(self, settings: Settings, parent=None):
-            super().__init__(parent)
+            super().__init__(parent, tr("设置"))
             self.s = settings
-            self.setWindowTitle(tr("设置"))
             self.setMinimumWidth(620)
             self.pro = settings["ui"] != "simple"
             self._pro_fields = []   # 简洁模式要藏起来的（标签和控件一起藏）
@@ -1670,9 +2123,7 @@ def run_gui() -> int:
             buttons.accepted.connect(self.accept)
             buttons.rejected.connect(self.reject)
 
-            outer = QVBoxLayout(self)
-            outer.setContentsMargins(10, 8, 10, 8)
-            outer.setSpacing(8)
+            outer = self.body
             if self.pro:                      # 专业模式：一组一页，省得竖着太长
                 tabs = QTabWidget()
                 for name in self._order:
@@ -1778,10 +2229,10 @@ def run_gui() -> int:
             cap = tr("选背景视频") if video else tr("选背景图片")
             flt = (tr("视频 (*.mp4 *.mov *.mkv *.webm)") if video
                    else tr("图片 (*.jpg *.jpeg *.png *.bmp *.webp)"))
-            path, _ = QFileDialog.getOpenFileName(self, cap,
-                                                  self.edit_bg.text() or "", flt)
-            if path:
-                self.edit_bg.setText(path)
+            picked = FileDialog.get_open_files(
+                self, cap, self.edit_bg.text() or "", flt)
+            if picked:
+                self.edit_bg.setText(picked[0])
 
         def _sync_trans(self, *_a):
             self.spin_trans.setEnabled(self.cmb_trans.currentData() == "fade")
@@ -1830,11 +2281,11 @@ def run_gui() -> int:
 
         def _on_component_bad(self, key: str, msg: str):
             self._sync_component(key)
-            QMessageBox.warning(self, components.COMPONENTS[key]["label"], msg)
+            MsgBox.warn(self, components.COMPONENTS[key]["label"], msg)
 
         def _browse_dir(self):
-            d = QFileDialog.getExistingDirectory(self, tr("选默认导出目录"),
-                                                 self.edit_dir.text() or "")
+            d = FileDialog.get_dir(self, tr("选默认导出目录"),
+                                   self.edit_dir.text() or "")
             if d:
                 self.edit_dir.setText(d)
 
@@ -1869,14 +2320,41 @@ def run_gui() -> int:
             )
             super().accept()
 
+    def app_palette(pal) -> QPalette:
+        """给 Qt 自己画的部件（文件框里的导航图标等）也配一套颜色。"""
+        role = QPalette.ColorRole
+        p = QPalette()
+        p.setColor(role.Window, QColor(pal["window"]))
+        p.setColor(role.WindowText, QColor(pal["text"]))
+        p.setColor(role.Base, QColor(pal["field"]))
+        p.setColor(role.AlternateBase, QColor(pal["row_alt"]))
+        p.setColor(role.Text, QColor(pal["text"]))
+        p.setColor(role.Button, QColor(pal["panel"]))
+        p.setColor(role.ButtonText, QColor(pal["text"]))
+        p.setColor(role.BrightText, QColor(pal["accent_fg"]))
+        p.setColor(role.Highlight, QColor(pal["accent"]))
+        p.setColor(role.HighlightedText, QColor(pal["accent_fg"]))
+        p.setColor(role.ToolTipBase, QColor(pal["panel"]))
+        p.setColor(role.ToolTipText, QColor(pal["text"]))
+        p.setColor(role.PlaceholderText, QColor(pal["muted"]))
+        p.setColor(role.Mid, QColor(pal["border"]))
+        p.setColor(role.Dark, QColor(pal["border"]))
+        p.setColor(role.Light, QColor(pal["hover"]))
+        return p
+
     class Window(QMainWindow):
         def __init__(self):
             super().__init__()
+            self.setWindowFlags(self.windowFlags()
+                                | Qt.WindowType.FramelessWindowHint)
+            self.setWindowIcon(_win_icon(32))
             self.setWindowTitle(tr("图片出片 —— 图片 + B站 BGM → 视频"))
+            self.setObjectName("frame")         # 配 QSS 那一圈细边
             self.resize(1180, 800)
             self.setAcceptDrops(True)
             self.settings = Settings()
             set_locale(self.settings["lang"])
+            apply_qt_translator(current_locale())
             self.preview_name = ""
             self.project = Project(fps=int(self.settings["fps"]))
             self.project.mode = self.settings["mode"]
@@ -1949,9 +2427,17 @@ def run_gui() -> int:
         # ---------------- UI
         def _build_ui(self):
             root = QWidget()
-            v = QVBoxLayout(root)
+            outer = QVBoxLayout(root)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(0)
+            self.titlebar = TitleBar(
+                self, tr("图片出片 —— 图片 + B站 BGM → 视频"), maximize=True)
+            outer.addWidget(self.titlebar)
+            body = QWidget()
+            v = QVBoxLayout(body)
             v.setContentsMargins(10, 8, 10, 8)
             v.setSpacing(8)
+            outer.addWidget(body, 1)
 
             bar = QHBoxLayout()
             def btn(text, slot, tip=""):
@@ -2101,6 +2587,7 @@ def run_gui() -> int:
         def retranslate(self):
             """换语言或换模式后重设文案，不重建窗口。"""
             self.setWindowTitle(tr("图片出片 —— 图片 + B站 BGM → 视频"))
+            self.titlebar.set_title(tr("图片出片 —— 图片 + B站 BGM → 视频"))
             self.btn_add.setText(tr("加图片"))
             self.btn_up.setText(tr("上移"))
             self.btn_down.setText(tr("下移"))
@@ -2176,12 +2663,17 @@ def run_gui() -> int:
             return folder
 
         def apply_theme(self):
-            """按设置算一套配色，往窗口上贴 QSS；时间线单独喂一份颜色。"""
+            """按设置算一套配色，往整个应用上贴 QSS；时间线单独喂一份颜色。"""
             pal = theme.palette(theme.resolve(self.settings["theme"]),
                                 self.settings["accent"])
             self.pal = pal
-            self.setStyleSheet(
-                theme.build_qss(pal, assets=self._theme_assets(pal)))
+            qss = theme.build_qss(pal, assets=self._theme_assets(pal))
+            app_ = QApplication.instance()
+            if app_ is not None:   # 贴到应用上：连 parent 为空的对话框也同款
+                app_.setStyleSheet(qss)
+                app_.setPalette(app_palette(pal))
+            else:
+                self.setStyleSheet(qss)
             self.timeline.set_colors(theme.timeline_colors(pal))
             self.video.setStyleSheet("QVideoWidget{background:#000000;}")
             self.lbl_audio.setStyleSheet(f"color:{pal['muted']};")
@@ -2317,6 +2809,7 @@ def run_gui() -> int:
                 return
             self.settings.save()
             set_locale(self.settings["lang"])
+            apply_qt_translator(current_locale())
             self.apply_theme()
             self.project.mode = self.settings["mode"]
             self.project.fps = int(self.settings["fps"])
@@ -2361,8 +2854,9 @@ def run_gui() -> int:
 
         # ---------------- 动作
         def on_add(self):
-            paths, _ = QFileDialog.getOpenFileNames(
-                self, tr("选图片"), "", tr("图片 (*.jpg *.jpeg *.png *.bmp *.webp)"))
+            paths = FileDialog.get_open_files(
+                self, tr("选图片"), "",
+                tr("图片 (*.jpg *.jpeg *.png *.bmp *.webp)"), multi=True)
             if paths:
                 self.add_images(paths)
 
@@ -2403,9 +2897,9 @@ def run_gui() -> int:
             if not (0 <= row < len(self.project.clips)):
                 return
             cur = self.project.clips[row].dur
-            val, ok = QInputDialog.getDouble(
-                self, tr("这张图显示多久"), tr("第 {row} 张（秒）：", row=row + 1),
-                cur, MIN_DUR, 3600, 1)
+            val, ok = NumberDialog.get_double(
+                self, tr("这张图显示多久"),
+                tr("第 {row} 张（秒）：", row=row + 1), cur, MIN_DUR, 3600, 1)
             if ok:
                 self.project.set_duration(row, val)
                 self._refresh_all()
@@ -2583,7 +3077,7 @@ def run_gui() -> int:
             if os.environ.get("PIC2VIDEO_SHOT"):
                 print("PREVIEW_FAILED:", msg)
                 return
-            QMessageBox.warning(self, tr("预览失败"), msg)
+            MsgBox.warn(self, tr("预览失败"), msg)
 
         # ---------------- BGM
         def on_bgm_typed(self, _text):
@@ -2608,20 +3102,18 @@ def run_gui() -> int:
 
         def _offer_ytdlp(self) -> bool:
             """非 B 站链接需要音源组件时问一句，点了就后台装。"""
-            box = QMessageBox(self)
-            box.setWindowTitle(tr("需要音源组件"))
-            box.setText(tr("这个平台的链接要靠 yt-dlp 解析（约 25 MB，"
-                           "装在工具目录里，随时可删）。现在下载吗？"))
-            yes = box.addButton(tr("下载并继续"), QMessageBox.ButtonRole.AcceptRole)
-            box.addButton(tr("取消"), QMessageBox.ButtonRole.RejectRole)
-            box.exec()
-            if box.clickedButton() is not yes:
+            yes = MsgBox.ask(
+                self, tr("需要音源组件"),
+                tr("这个平台的链接要靠 yt-dlp 解析（约 25 MB，"
+                   "装在工具目录里，随时可删）。现在下载吗？"),
+                tr("下载并继续"), tr("取消"))
+            if not yes:
                 return False
             self.lbl_status.setText(tr("正在下载音源组件…"))
             worker = ComponentWorker("ytdlp", self)
             worker.note.connect(self.lbl_status.setText)
             worker.done.connect(lambda _v: self.start_fetch())
-            worker.bad.connect(lambda m: QMessageBox.warning(
+            worker.bad.connect(lambda m: MsgBox.warn(
                 self, tr("音源组件"), m))
             self._ydlp = worker
             worker.start()
@@ -2642,7 +3134,7 @@ def run_gui() -> int:
         def on_fetch_bad(self, msg):
             self.btn_retry.setEnabled(True)
             self.lbl_status.setText(tr("取音轨失败"))
-            QMessageBox.warning(self, tr("取音轨失败"), msg)
+            MsgBox.warn(self, tr("取音轨失败"), msg)
 
         # ---------------- 导出
         def on_export(self):
@@ -2665,8 +3157,9 @@ def run_gui() -> int:
                 out = os.path.join(tempfile.gettempdir(),
                                    "p2v_shot_" + time.strftime("%H%M%S") + ".mp4")
             elif self.settings["ask_export_dir"]:
-                out, _picked = QFileDialog.getSaveFileName(
-                    self, tr("导出到…"), os.path.join(base_dir, stem + ".mp4"),
+                out = FileDialog.get_save_file(
+                    self, tr("导出到…"),
+                    os.path.join(base_dir, stem + ".mp4"),
                     tr("视频 (*.mp4)"))
                 if not out:
                     return
@@ -2707,14 +3200,11 @@ def run_gui() -> int:
                 except OSError:
                     pass
                 return
-            box = QMessageBox(self)
-            box.setWindowTitle(tr("导出完成"))
-            box.setText(tr("视频已生成：\n{path}", path=path))
-            open_btn = box.addButton(tr("打开所在文件夹"),
-                                     QMessageBox.ButtonRole.ActionRole)
-            box.addButton(tr("好"), QMessageBox.ButtonRole.AcceptRole)
-            box.exec()
-            if box.clickedButton() is open_btn:
+            picked = MsgBox.choose(
+                self, tr("导出完成"),
+                tr("视频已生成：\n{path}", path=path),
+                [(tr("打开所在文件夹"), "plain"), (tr("好"), "primary")])
+            if picked == 0:
                 subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
 
         def on_export_bad(self, msg):
@@ -2723,7 +3213,7 @@ def run_gui() -> int:
             if os.environ.get("PIC2VIDEO_SHOT"):
                 print("EXPORT_FAILED:", msg, flush=True)
                 return
-            QMessageBox.warning(self, tr("导出失败"), msg)
+            MsgBox.warn(self, tr("导出失败"), msg)
 
         # ---------------- 拖放
         def dragEnterEvent(self, ev):
@@ -2749,16 +3239,34 @@ def run_gui() -> int:
             if imgs or audio or media:
                 ev.acceptProposedAction()
 
+        def nativeEvent(self, event_type, message):
+            # 窗口还没装好标题栏时也会收到消息，别在这儿崩
+            bar = getattr(self, "titlebar", None)
+            try:                          # 这里一旦抛异常就是整个进程崩
+                hit = hit_test(self, bar, event_type, message, resize=True)
+            except Exception:             # noqa: BLE001
+                return False, 0   # 别调 super()：PyQt6 在这里调会崩掉整个进程
+            if hit is None:
+                return False, 0   # 别调 super()：PyQt6 在这里调会崩掉整个进程
+            return True, hit
+
+        def changeEvent(self, ev):
+            bar = getattr(self, "titlebar", None)
+            if bar is not None and ev.type() == QEvent.Type.WindowStateChange:
+                try:
+                    bar.sync_max()
+                except Exception:         # noqa: BLE001
+                    pass
+            super().changeEvent(ev)
+
         def closeEvent(self, ev):
             busy = self.worker is not None and self.worker.isRunning()
             if busy and not os.environ.get("PIC2VIDEO_SHOT"):
-                box = QMessageBox(self)
-                box.setWindowTitle(tr("还在导出"))
-                box.setText(tr("视频还在导出，现在关掉会丢掉这次的结果。"))
-                stay = box.addButton(tr("继续导出"), QMessageBox.ButtonRole.AcceptRole)
-                box.addButton(tr("关掉"), QMessageBox.ButtonRole.DestructiveRole)
-                box.exec()
-                if box.clickedButton() is stay:
+                stay = MsgBox.ask(
+                    self, tr("还在导出"),
+                    tr("视频还在导出，现在关掉会丢掉这次的结果。"),
+                    tr("继续导出"), tr("关掉"), danger=True)
+                if stay:
                     ev.ignore()
                     return
             self._save_geometry()
@@ -2775,29 +3283,23 @@ def run_gui() -> int:
         if not missing_tools():
             return True
         if not os.environ.get("PIC2VIDEO_SHOT"):      # 跑测试时别弹窗等点击
-            box = QMessageBox(
-                QMessageBox.Icon.Question, tr("第一次运行"),
+            ok = MsgBox.ask(
+                None, tr("第一次运行"),
                 tr("出片要靠 ffmpeg（约 120 MB，只下这一次，之后不再问）。"
                    "\n现在就自动下载吗？"),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            box.button(QMessageBox.StandardButton.Yes).setText(tr("现在下载"))
-            box.button(QMessageBox.StandardButton.No).setText(tr("先不用"))
-            if box.exec() != QMessageBox.StandardButton.Yes:
+                tr("现在下载"), tr("先不用"))
+            if not ok:
                 return False
 
-        dlg = QProgressDialog(tr("正在下载 ffmpeg…"), tr("取消"), 0, 100)
-        dlg.setWindowTitle(tr("下载 ffmpeg"))
-        dlg.setMinimumDuration(0)
-        dlg.setAutoClose(False)
-        dlg.setAutoReset(False)
-        dlg.setValue(0)
+        dlg = ProgressDialog(None, tr("下载 ffmpeg"),
+                             tr("正在下载 ffmpeg…"), tr("取消"))
 
         loop = QEventLoop()
         worker = ComponentWorker("ffmpeg")
 
         def note(text: str, pct: float = 0.0):
-            dlg.setLabelText(text)
-            dlg.setValue(max(0, min(100, int(pct * 100))))
+            dlg.set_label(text)
+            dlg.set_value(int(pct * 100))
 
         worker.note.connect(note)
         worker.done.connect(lambda _v: loop.quit())
@@ -2810,7 +3312,7 @@ def run_gui() -> int:
         dlg.reset()
 
         if not components.have("ffmpeg") and missing_tools():
-            QMessageBox.critical(
+            MsgBox.crit(
                 None, tr("下载失败"),
                 tr("ffmpeg 没下成功。检查一下网络再开一次，"
                    "或者手动装：winget install Gyan.FFmpeg"))
@@ -2819,6 +3321,7 @@ def run_gui() -> int:
         return True
 
     app = QApplication(sys.argv[:1])
+    app.setStyle("Fusion")        # 统一画法：Qt 自带的图标/控件才跟得上配色
     ico = asset_path("icon.ico")
     if ico:
         app.setWindowIcon(QIcon(ico))
@@ -2836,6 +3339,7 @@ def run_gui() -> int:
         if lang:
             w.settings["lang"] = lang
             set_locale(lang)
+            apply_qt_translator(current_locale())
             tag += "_" + lang
         if ui:
             w.settings["ui"] = ui
@@ -2874,6 +3378,75 @@ def run_gui() -> int:
 
         def _shot(name):
             w.grab().save(os.path.join(os.path.dirname(shot), name + tag + ".png"))
+
+        # 自绘对话框的样子（文件框 / 消息框 / 数字框各截一张）
+        dlg_probe = os.environ.get("PIC2VIDEO_SHOT_DLG")
+        if dlg_probe:
+            outdir = os.path.dirname(shot)
+            fd = FileDialog(w, tr("加图片"), os.path.expanduser("~"),
+                            tr("图片 (*.png *.jpg *.jpeg *.webp *.bmp)"))
+            fd.show()
+
+            def grab_fd():
+                fd.grab().save(os.path.join(outdir,
+                                            "shot_filedlg" + tag + ".png"))
+                fd.close()
+                mb = MsgBox(w, tr("提示"), tr("导出完成，要不要打开文件夹？"),
+                            [(tr("打开所在文件夹"), "plain"), (tr("好"), "primary")],
+                            icon="ask")
+                mb.show()
+
+                def grab_mb():
+                    mb.grab().save(os.path.join(outdir,
+                                                "shot_msgbox" + tag + ".png"))
+                    mb.close()
+                    nd = NumberDialog(w, tr("这张图显示多久"), tr("秒数"), 3.0,
+                                     MIN_DUR, 600.0)
+
+                    def grab_nd():
+                        nd.grab().save(os.path.join(outdir,
+                                                    "shot_number" + tag + ".png"))
+                        nd.close()
+                        print("DLG OK", flush=True)
+                        app.quit()
+
+                    QTimer.singleShot(500, grab_nd)
+
+                QTimer.singleShot(600, grab_mb)
+
+            QTimer.singleShot(700, grab_fd)
+            return app.exec()
+
+        # 自绘边框的命中测试：把 WM_NCHITTEST 直接发给窗口，看回了哪个码
+        # （10 左 / 11 右 / 12 上 / 13 左上 / 14 右上 / 15 下 / 16 左下 / 17 右下 /
+        #   2 标题栏 / 1 客户区）
+        hit_probe = os.environ.get("PIC2VIDEO_SHOT_HIT")
+        if hit_probe:
+            WM_NCHITTEST = 0x0084
+            hwnd = int(w.winId())
+            geo = w.geometry()
+
+            dpr = w.devicePixelRatioF() or 1.0
+
+            def probe(name, x, y):
+                x, y = int(round(x * dpr)), int(round(y * dpr))   # 物理像素
+                lp = ctypes.c_long((y << 16) | (x & 0xFFFF)).value
+                code = int(ctypes.windll.user32.SendMessageW(
+                    wintypes.HWND(hwnd), WM_NCHITTEST, 0, lp))
+                print("HIT %-12s (%d,%d) -> %d" % (name, x, y, code),
+                      flush=True)
+
+            probe("left", geo.x() + 3, geo.y() + geo.height() // 2)
+            probe("right", geo.right() - 1, geo.y() + geo.height() // 2)
+            probe("top", geo.x() + geo.width() // 2, geo.y() + 2)
+            probe("bottom", geo.x() + geo.width() // 2, geo.bottom() - 1)
+            probe("topleft", geo.x() + 2, geo.y() + 2)
+            probe("botright", geo.right() - 1, geo.bottom() - 1)
+            probe("titlebar", geo.x() + geo.width() // 2, geo.y() + 16)
+            probe("closebtn", geo.right() - 20, geo.y() + 17)
+            probe("body", geo.x() + geo.width() // 2, geo.y() + geo.height() - 60)
+            QTimer.singleShot(200, app.quit)
+            return app.exec()
 
         # 「取消」和「窗口记忆」两个冒烟分支，同样只在 PIC2VIDEO_SHOT 下跑
         cancel_after = os.environ.get("PIC2VIDEO_SHOT_CANCEL")
@@ -3004,6 +3577,7 @@ def run_gui() -> int:
             def to_en():
                 w.settings["lang"] = "en"
                 set_locale("en")
+                apply_qt_translator(current_locale())
                 w.retranslate()
                 QTimer.singleShot(600, shot_en)
 
@@ -3011,6 +3585,7 @@ def run_gui() -> int:
                 _shot("shot_live_en")
                 w.settings["lang"] = "ja"
                 set_locale("ja")
+                apply_qt_translator(current_locale())
                 w.retranslate()
                 w.btn_mode.click()          # 真按一次模式开关（含写 settings.json）
                 QTimer.singleShot(600, shot_ja)

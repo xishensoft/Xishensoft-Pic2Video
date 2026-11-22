@@ -250,6 +250,30 @@ QMainWindow, QDialog {{ background: {p['window']}; }}
 QLabel {{ background: transparent; }}
 QLabel:disabled {{ color: {p['muted']}; }}
 QLabel#sectitle {{ color: {p['subtext']}; font-weight: 600; }}
+
+/* 自己画的窗口边框：一圈细边 + 标题栏 + 三个窗口按钮 */
+QMainWindow#frame, QDialog#frame {{
+    background: {p['window']};
+    border: 1px solid {p['border']};
+}}
+QWidget#titlebar {{
+    background: {p['panel']};
+    border-bottom: 1px solid {p['border']};
+}}
+QLabel#wintitle {{ color: {p['subtext']}; font-weight: 600; }}
+QLabel#msgicon {{ color: {p['accent']}; font-size: 16px; font-weight: 700; }}
+QPushButton#winbtn {{
+    background: transparent; border: none; border-radius: 5px;
+    color: {p['subtext']}; padding: 0px; font-size: 12px;
+}}
+QPushButton#winbtn:hover {{ background: {p['hover']}; color: {p['text']}; }}
+QPushButton#winbtn:pressed {{ background: {p['pressed']}; }}
+QPushButton#winclose:hover {{ background: #e81123; color: #ffffff; }}
+QPushButton#winclose:pressed {{ background: #c50f1f; color: #ffffff; }}
+QPushButton[danger="true"] {{
+    background: #e5484d; color: #ffffff; border-color: #e5484d;
+}}
+QPushButton[danger="true"]:hover {{ background: #d93c41; border-color: #d93c41; }}
 QFrame#sep {{ background: {p['border']}; border: none;
               min-height: 1px; max-height: 1px; }}
 

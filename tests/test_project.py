@@ -566,6 +566,27 @@ if os.path.isfile(_aud):
 else:
     check("成片 ffprobe 报 tv 范围", False, "缺 fixtures/tone6.m4a")
 
+# 29 自绘边框：所有窗口都不走系统边框，对话框/文件框统一自绘
+check("主窗口自绘边框", "FramelessWindowHint" in _src
+      and "setObjectName(\"frame\")" in _src)
+check("nativeEvent 不调 super", "super().nativeEvent" not in _src)
+check("nativeEvent 走 hit_test",
+      "hit = hit_test(self, bar, event_type, message, resize=False)" in _src)
+check("标题栏自己画", "class TitleBar" in _src
+      and 'setObjectName("winbtn")' in _src and "def sync_max" in _src)
+check("弹窗自绘", "class FramelessDialog" in _src and "class MsgBox" in _src
+      and "class NumberDialog" in _src and "class ProgressDialog" in _src)
+check("文件框非系统", "class FileDialog" in _src
+      and "DontUseNativeDialog" in _src)
+check("不再用系统弹窗", "QMessageBox(" not in _src
+      and "QProgressDialog" not in _src and "QInputDialog" not in _src)
+check("文件框箭头跟主题", "_arrow_icon" in _src
+      and "toParentButton" in _src and "backButton" in _src)
+check("Qt 自带文案本地化", "QTranslator" in _src
+      and 'qt_tr.load("qtbase_"' in _src and "apply_qt_translator" in _src)
+check("样式贴到全局", "app_.setStyleSheet" in _src
+      and "app_.setPalette(app_palette" in _src)
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

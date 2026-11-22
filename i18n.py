@@ -1342,3 +1342,67 @@ _TR_EXTRA15 = {
 for _k, _trs in _TR_EXTRA15.items():
     for _lang, _v in _trs.items():
         TR[_lang].setdefault(_k, _v)
+
+# 自绘标题栏上的三个窗口按钮
+_TR_EXTRA16 = {
+    "最小化": {
+        "zh-TW": "最小化",
+        "en": "Minimize",
+        "ja": "最小化",
+        "ko": "최소화",
+    },
+    "最大化": {
+        "zh-TW": "最大化",
+        "en": "Maximize",
+        "ja": "最大化",
+        "ko": "최대화",
+    },
+    "还原": {
+        "zh-TW": "還原",
+        "en": "Restore",
+        "ja": "元に戻す",
+        "ko": "이전 크기로",
+    },
+    "关闭": {
+        "zh-TW": "關閉",
+        "en": "Close",
+        "ja": "閉じる",
+        "ko": "닫기",
+    },
+}
+
+for _k, _trs in _TR_EXTRA16.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)
+
+
+
+_TR_EXTRA16 = {
+    '图片 (*.png *.jpg *.jpeg *.webp *.bmp)': {
+        'zh-TW': '圖片 (*.png *.jpg *.jpeg *.webp *.bmp)',
+        'en': 'Images (*.png *.jpg *.jpeg *.webp *.bmp)',
+        'ja': '画像 (*.png *.jpg *.jpeg *.webp *.bmp)',
+        'ko': '이미지 (*.png *.jpg *.jpeg *.webp *.bmp)',
+    },
+    '导出完成，要不要打开文件夹？': {
+        'zh-TW': '匯出完成，要不要開啟資料夾？',
+        'en': 'Export finished. Open the folder?',
+        'ja': '書き出し完了。フォルダーを開きますか？',
+        'ko': '내보내기 완료. 폴더를 열까요?',
+    },
+    '提示': {
+        'zh-TW': '提示',
+        'en': 'Notice',
+        'ja': 'お知らせ',
+        'ko': '알림',
+    },
+    '秒数': {
+        'zh-TW': '秒數',
+        'en': 'Seconds',
+        'ja': '秒数',
+        'ko': '초',
+    },
+}
+for _k, _trs in _TR_EXTRA16.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)
