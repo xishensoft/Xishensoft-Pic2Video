@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """时间线/帧数/设置/filtergraph 的单元检查（不碰 GUI；只碰 ffmpeg 的地方用错误路径）。"""
-import os, sys, random, tempfile
+import os, sys, random, subprocess, tempfile
 try:                      # 控制台是 GBK，日/韩文本会炸，统一用 UTF-8 输出
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:         # noqa: BLE001
@@ -342,6 +342,41 @@ for lang in ("zh-TW", "en", "ja", "ko"):
     check(f"{lang} 正在取消文案", bool(I.tr("正在取消…")), I.tr("正在取消…"))
     check(f"{lang} 关窗确认文案", len(I.tr("视频还在导出，现在关掉会丢掉这次的结果。")) > 4)
 I.set_locale("zh-CN")
+
+# 20 画面动效（Ken Burns）
+check("动效默认静止", p.Settings()["motion"] == "none", p.Settings()["motion"])
+_s = p.Settings()
+_s.data["motion"] = "crazy"
+_s._sanitize()
+check("非法动效回落静止", _s["motion"] == "none", _s["motion"])
+check("四种动效都在", p.MOTIONS == ("none", "in", "out", "inout"), p.MOTIONS)
+check("四种动效都有文案", all(k in p.MOTION_LABELS for k in p.MOTIONS))
+
+g_none = p.build_graph([30], 1.0, 320, 180)
+check("静止时没有 zoompan", "zoompan" not in g_none)
+g_in = p.build_graph([30], 1.0, 320, 180, motion="in")
+check("推近有 zoompan", "zoompan" in g_in, g_in[-160:])
+check("推近放大 6%", "1+0.0600*on/29" in g_in, g_in[-200:])
+g_out = p.build_graph([30], 1.0, 320, 180, motion="out")
+check("拉远从放大回到原样", "1+0.0600*(1-on/29)" in g_out, g_out[-200:])
+g_alt = p.build_graph([30, 30], 2.0, 320, 180, motion="inout")
+check("交替：一张推近", "1+0.0600*on/29" in g_alt)
+check("交替：一张拉远", "1+0.0600*(1-on/29)" in g_alt)
+check("单帧不做动效", "zoompan" not in p.build_graph([1], 0.03, 320, 180, motion="in"))
+check("动效不改变总帧数", p.build_graph([45, 15], 2.0, 320, 180, motion="in").count("zoompan") == 2)
+
+if p.missing_tools():
+    print("  (没 ffmpeg，跳过动效出片验证)")
+else:
+    out_zoom = os.path.join(tmp, "zoom.mp4")
+    p.render([p.Clip(IMG[0], 1.0)], [30], None, out_zoom, w=320, h=180,
+             fps=30, motion="in")
+    probe = subprocess.run(
+        [p.FFPROBE, "-v", "error", "-count_frames", "-select_streams", "v:0",
+         "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", out_zoom],
+        capture_output=True, text=True)
+    n = probe.stdout.strip().rstrip(",")
+    check("动效出片帧数不变", n == "30", (n, probe.stderr[-200:]))
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")

@@ -990,3 +990,40 @@ _TR_EXTRA6 = {
 }
 for _lang, _extra6 in _TR_EXTRA6.items():
     TR[_lang].update(_extra6)
+
+_TR_EXTRA7 = {
+    "zh-TW": {
+        "画面动效": "畫面動效",
+        "静止": "靜止",
+        "缓慢推近": "緩慢推近",
+        "缓慢拉远": "緩慢拉遠",
+        "交替推拉": "交替推拉",
+        "画面动效：none 静止 / in 缓慢推近 / out 缓慢拉远 / inout 交替": "畫面動效：none 靜止 / in 緩慢推近 / out 緩慢拉遠 / inout 交替",
+    },
+    "en": {
+        "画面动效": "Motion",
+        "静止": "Still",
+        "缓慢推近": "Slow zoom in",
+        "缓慢拉远": "Slow zoom out",
+        "交替推拉": "Alternate zoom",
+        "画面动效：none 静止 / in 缓慢推近 / out 缓慢拉远 / inout 交替": "Motion: none still / in slow zoom in / out slow zoom out / inout alternate",
+    },
+    "ja": {
+        "画面动效": "映像の動き",
+        "静止": "静止",
+        "缓慢推近": "ゆっくりズームイン",
+        "缓慢拉远": "ゆっくりズームアウト",
+        "交替推拉": "交互ズーム",
+        "画面动效：none 静止 / in 缓慢推近 / out 缓慢拉远 / inout 交替": "映像の動き：none 静止 / in ズームイン / out ズームアウト / inout 交互",
+    },
+    "ko": {
+        "画面动效": "화면 효과",
+        "静止": "정지",
+        "缓慢推近": "천천히 확대",
+        "缓慢拉远": "천천히 축소",
+        "交替推拉": "교차 확대/축소",
+        "画面动效：none 静止 / in 缓慢推近 / out 缓慢拉远 / inout 交替": "화면 효과: none 정지 / in 확대 / out 축소 / inout 교차",
+    },
+}
+for _lang, _extra7 in _TR_EXTRA7.items():
+    TR[_lang].update(_extra7)

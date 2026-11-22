@@ -160,6 +160,10 @@ SHORT_SIDE = 1080  # 选比例时按短边 1080 给出预设尺寸
 QUALITY = {"高": 18, "标准": 20, "小体积": 23}
 MODE_LABELS = {"bgm": "跟 BGM", "total": "自设总长", "free": "逐张秒数"}
 MODE_BY_LABEL = {v: k for k, v in MODE_LABELS.items()}
+MOTIONS = ("none", "in", "out", "inout")          # 画面动效
+MOTION_LABELS = {"none": "静止", "in": "缓慢推近",
+                 "out": "缓慢拉远", "inout": "交替推拉"}
+MOTION_AMOUNT = 0.06                              # 推拉幅度：放大 6%
 
 
 # 界面语言的显示文案（内部值保持中文，只有显示时翻译）
@@ -220,6 +224,7 @@ class Settings:
         "ui": "simple",           # 界面模式：simple 简洁（默认）/ pro 专业
         "theme": "auto",          # 外观：auto 跟随系统 / light / dark
         "accent": theme.DEFAULT_ACCENT,   # 主色（对撞色由它自动算）
+        "motion": "none",         # 画面动效：none / in / out / inout
         "open_after_export": True,  # 导出完自动打开所在文件夹
         "win_w": 0,               # 窗口大小/位置，0 = 用默认
         "win_h": 0,
@@ -304,6 +309,8 @@ class Settings:
             d["accent"] = theme.DEFAULT_ACCENT
         if not isinstance(d.get("open_after_export"), bool):
             d["open_after_export"] = True
+        if d.get("motion") not in MOTIONS:
+            d["motion"] = "none"
         for key, lo, hi in (("win_w", 0, 8000), ("win_h", 0, 8000),
                             ("win_x", -1, 8000), ("win_y", -1, 8000)):
             try:
@@ -491,18 +498,39 @@ def set_mode(project: Project, mode: str) -> None:
 
 # ---------------------------------------------------------------- 出片
 
+def _motion_chain(chain: str, motion: str, index: int, nf: int,
+                  w: int, h: int, fps: int, amount: float) -> str:
+    """在 [s{i}] 之后插一段 zoompan，做成缓慢推近/拉远（Ken Burns）。"""
+    amt = max(0.0, min(0.5, float(amount)))
+    if amt <= 0.001:
+        return chain
+    if motion == "inout":
+        direction = "in" if index % 2 == 0 else "out"
+    else:
+        direction = motion
+    if direction == "out":
+        z = f"1+{amt:.4f}*(1-on/{max(1, nf - 1)})"
+    else:
+        z = f"1+{amt:.4f}*on/{max(1, nf - 1)}"
+    return (chain +
+            f",zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":d=1:s={w}x{h}:fps={fps}")
+
+
 def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT,
                 *, fps: int = FPS, fit: str = "own", fade_in: float = FADE_IN,
                 fade_out: float = FADE_OUT, transition: str = "none",
                 transition_sec: float = 0.3, bg_blur: bool = True,
                 pad_color: str = "#000000", bg_index: int | None = None,
-                audio_index: int | None = None) -> str:
+                audio_index: int | None = None, motion: str = "none",
+                motion_amount: float = MOTION_AMOUNT) -> str:
     """一条 filtergraph：每图按帧数切片 → 拼接 → 音频裁到总长并淡入淡出。
 
     fit: own 原图铺底（bg_blur 决定模糊不模糊）/ color 纯色留白（pad_color）
          / image·video 自定义背景（输入下标 bg_index）+ 原图完整居中
          / cover 裁切铺满
     transition: none 硬切；fade 每张首尾淡黑
+    motion: none 静帧；in 缓慢推近；out 缓慢拉远；inout 一张推近一张拉远
     """
     K = len(counts)
     if audio_index is None:
@@ -556,6 +584,9 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
             parts.append(f"[bgz{i}][fgz{i}]overlay=(W-w)/2:(H-h)/2[s{i}]")
         chain = (f"[s{i}]setsar=1,fps={fps},format=yuv420p,"
                  f"trim=start_frame=0:end_frame={nf},setpts=PTS-STARTPTS")
+        if motion in MOTIONS and motion != "none" and nf > 1:
+            chain = _motion_chain(chain, motion, i, nf, w, h, fps,
+                                  motion_amount)
         td = min(max(0.0, float(transition_sec)), seg / 2.0)
         if transition == "fade" and td > 0.02 and seg > 0.1:
             chain += (f",fade=t=in:st=0:d={td:.3f}"
@@ -576,7 +607,7 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
 def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
            crf=20, preset="veryfast", fps=FPS, fit="own", fade_in=FADE_IN,
            fade_out=FADE_OUT, transition="none", transition_sec=0.3,
-           bg_blur=True, pad_color="#000000", bg_path="",
+           bg_blur=True, pad_color="#000000", bg_path="", motion="none",
            on_progress=None, proc_holder=None) -> str:
     """一条 filtergraph 渲完；on_progress(0..1) 回调。
 
@@ -600,7 +631,8 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
                         transition=transition, transition_sec=transition_sec,
                         bg_blur=bg_blur, pad_color=pad_color,
                         bg_index=(len(counts) if add_bg else None),
-                        audio_index=(len(counts) + (1 if add_bg else 0)))
+                        audio_index=(len(counts) + (1 if add_bg else 0)),
+                        motion=motion)
     cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
            "-progress", "pipe:1", "-nostats"]
     for c, nf in zip(clips, counts):
@@ -710,6 +742,8 @@ def cli_export(argv: list[str]) -> int:
     ap.add_argument("--no-bg-blur", action="store_true", help=tr("背景不模糊"))
     ap.add_argument("--transition", choices=("none", "fade"), default="none",
                     help=tr("图片转场：none 硬切 / fade 淡入淡出"))
+    ap.add_argument("--motion", choices=list(MOTIONS), default="none",
+                    help=tr("画面动效：none 静止 / in 缓慢推近 / out 缓慢拉远 / inout 交替"))
     ap.add_argument("images", nargs="+")
     a = ap.parse_args(argv)
 
@@ -719,13 +753,14 @@ def cli_export(argv: list[str]) -> int:
     st.update(fps=a.fps, fit=FIT_LEGACY.get(a.fit, a.fit), ratio=a.ratio,
               width=a.width or pw, height=a.height or ph,
               transition=a.transition, bg_path=a.bg, pad_color=a.pad_color,
-              bg_blur=not a.no_bg_blur)
+              bg_blur=not a.no_bg_blur, motion=a.motion)
     w, h = st.size()
     opts = dict(w=w, h=h, fps=int(st["fps"]), fit=st["fit"], crf=st.crf(),
                 bg_blur=bool(st["bg_blur"]), pad_color=st["pad_color"],
                 bg_path=st["bg_path"],
                 transition=st["transition"],
                 transition_sec=float(st["transition_sec"]),
+                motion=st["motion"],
                 fade_in=float(st["fade_in"]), fade_out=float(st["fade_out"]))
 
     from bili_audio import BiliError
@@ -1372,6 +1407,13 @@ def run_gui() -> int:
             self.spin_fout.setValue(float(settings["fade_out"]))
             add_row("音乐淡出", self.spin_fout, pro=True)
 
+            self.cmb_motion = QComboBox()
+            for key in MOTIONS:
+                self.cmb_motion.addItem(tr(MOTION_LABELS[key]), key)
+            self.cmb_motion.setCurrentIndex(
+                max(0, MOTIONS.index(settings["motion"])))
+            add_row("画面动效", self.cmb_motion, pro=True)
+
             self.cmb_trans = QComboBox()
             self.cmb_trans.addItem(tr("硬切"), "none")
             self.cmb_trans.addItem(tr("淡入淡出（每张首尾淡黑）"), "fade")
@@ -1570,6 +1612,7 @@ def run_gui() -> int:
                 fade_in=float(self.spin_fin.value()),
                 fade_out=float(self.spin_fout.value()),
                 transition=self.cmb_trans.currentData(),
+                motion=self.cmb_motion.currentData(),
                 transition_sec=float(self.spin_trans.value()),
             )
             super().accept()
@@ -2053,7 +2096,8 @@ def run_gui() -> int:
                         fade_in=float(s["fade_in"]),
                         fade_out=float(s["fade_out"]),
                         transition=s["transition"],
-                        transition_sec=float(s["transition_sec"]))
+                        transition_sec=float(s["transition_sec"]),
+                        motion=s["motion"])
 
         # ---------------- 动作
         def on_add(self):
