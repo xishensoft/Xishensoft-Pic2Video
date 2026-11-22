@@ -500,22 +500,34 @@ class Clip:
     xfade: 跟下一个元素交叉淡化
     """
 
-    __slots__ = ("path", "dur", "kind", "fade", "xfade")
+    __slots__ = ("path", "dur", "kind", "fade", "xfade", "src_in", "src_out")
 
     def __init__(self, path: str, dur: float, kind: str = "image",
-                 fade: bool = False, xfade: bool = False):
+                 fade: bool = False, xfade: bool = False,
+                 src_in: float = 0.0, src_out: float | None = None):
         self.path = path
         self.dur = float(dur)
         self.kind = kind if kind in ("image", "intro", "outro") else "image"
         self.fade = bool(fade)
         self.xfade = bool(xfade)
+        self.src_in = float(src_in)     # 视频：从源的第几秒开始
+        self.src_out = None if src_out is None else float(src_out)
 
     @property
     def is_video(self) -> bool:
         return self.kind in ("intro", "outro")
 
+    @property
+    def span(self) -> float:
+        """这一段在时间线上占多长（视频扣掉入出点之后）。"""
+        if not self.is_video:
+            return max(0.0, self.dur)
+        end = self.dur if self.src_out is None else self.src_out
+        return max(0.0, end - self.src_in)
+
     def copy(self):
-        return Clip(self.path, self.dur, self.kind, self.fade, self.xfade)
+        return Clip(self.path, self.dur, self.kind, self.fade, self.xfade,
+                    self.src_in, self.src_out)
 
     def __repr__(self):
         return f"Clip({os.path.basename(self.path)!r}, {self.dur:.2f}, {self.kind})"
@@ -641,7 +653,8 @@ class Project:
             "audio_len": self.audio_len,
             "total_setting": self.total_setting,
             "clips": [{"path": c.path, "dur": c.dur, "kind": c.kind,
-                       "fade": bool(c.fade), "xfade": bool(c.xfade)}
+                       "fade": bool(c.fade), "xfade": bool(c.xfade),
+                       "src_in": c.src_in, "src_out": c.src_out}
                       for c in self.clips],
             "audios": [{"path": a.path, "dur": a.dur, "start": a.start,
                         "volume": a.volume, "gap": bool(a.gap)}
@@ -690,9 +703,17 @@ class Project:
         kind = raw.get("kind", "image")
         if kind not in ("image", "intro", "outro"):
             raise ProjectFileError("bad-shape", "不认识的素材类型：%r" % (kind,))
-        return Clip(path, max(0.0, _doc_num(raw.get("dur"), 0.0)), kind,
+        dur = max(0.0, _doc_num(raw.get("dur"), 0.0))
+        src_in = max(0.0, _doc_num(raw.get("src_in"), 0.0))
+        raw_out = raw.get("src_out")
+        src_out = None if raw_out is None else _doc_num(raw_out, 0.0)
+        if src_out is not None:
+            src_out = min(src_out, dur)
+            if src_out <= src_in:
+                src_out = None
+        return Clip(path, dur, kind,
                     bool(raw.get("fade", False)),
-                    bool(raw.get("xfade", False)))
+                    bool(raw.get("xfade", False)), src_in, src_out)
 
     @staticmethod
     def _audio_from_doc(raw) -> AudioClip:
@@ -755,7 +776,7 @@ class Project:
 
     def fixed_span(self) -> float:
         """片头 + 片尾占掉的时间（图片段要减掉它）。"""
-        return sum(c.dur for c in self.clips if c.is_video)
+        return sum(c.span for c in self.clips if c.is_video)
 
     # -- 目标总长 ------------------------------------------------------
     def music_length(self) -> float:
@@ -797,7 +818,7 @@ class Project:
             c.dur = per
 
     def total(self) -> float:
-        return sum(c.dur for c in self.clips)
+        return sum(c.span for c in self.clips)
 
     # -- 归一化 --------------------------------------------------------
     def normalize(self):
@@ -864,6 +885,32 @@ class Project:
         if t is not None and imgs:
             room = max(MIN_DUR * len(imgs), t - self.fixed_span())
             self._fix_sum(room)
+
+    def set_src_in(self, index: int, value: float):
+        """拖左边 / 按 I：改入点，最晚到出点前一帧。"""
+        clip = self._video_at(index)
+        if clip is None:
+            return
+        end = clip.dur if clip.src_out is None else clip.src_out
+        room = max(0.0, end - self._min_frame())
+        clip.src_in = max(0.0, min(float(value), room))
+
+    def set_src_out(self, index: int, value: float):
+        """拖右边 / 按 O：改出点，最长到源时长，最短留一帧。"""
+        clip = self._video_at(index)
+        if clip is None:
+            return
+        clip.src_out = max(clip.src_in + self._min_frame(),
+                           min(float(value), clip.dur))
+
+    def _video_at(self, index: int):
+        if not (0 <= index < len(self.clips)):
+            return None
+        clip = self.clips[index]
+        return clip if clip.is_video else None
+
+    def _min_frame(self) -> float:
+        return 1.0 / max(1, int(self.fps))
 
     @staticmethod
     def _fit_others(durs: list[float], fixed: int, target: float):
@@ -961,6 +1008,33 @@ class Project:
                 del self.clips[i]
         self.normalize()
 
+    def split_at(self, t: float) -> bool:
+        """在时间线 t 秒处把一段切成两段；切点太靠边（不足一帧）就不切。
+
+        图片段直接分时长；视频段按入出点切，两段的源区间首尾相接。
+        """
+        self.apply_material()
+        mf = self._min_frame()
+        acc = 0.0
+        for i, c in enumerate(self.clips):
+            span = c.span
+            if t < acc + span - 1e-9:
+                off = t - acc
+                if off < mf - 1e-9 or span - off < mf - 1e-9:
+                    return False
+                if c.is_video:
+                    cut = c.src_in + off
+                    right = Clip(c.path, c.dur, c.kind, c.fade, c.xfade,
+                                 cut, c.src_out)
+                    c.src_out = cut
+                else:
+                    right = Clip(c.path, span - off, c.kind, c.fade, c.xfade)
+                    c.dur = off
+                self.clips.insert(i + 1, right)
+                return True
+            acc += span
+        return False
+
     def move(self, index: int, delta: int):
         j = index + delta
         if 0 <= index < len(self.clips) and 0 <= j < len(self.clips):
@@ -978,10 +1052,10 @@ class Project:
         others = [c for c in self.clips if c is not clip]
         acc, dest = 0.0, len(others)
         for k, c in enumerate(others):
-            if pos < acc + c.dur / 2:
+            if pos < acc + c.span / 2:
                 dest = k
                 break
-            acc += c.dur
+            acc += c.span
         self.clips.remove(clip)
         self.clips.insert(min(dest, len(self.clips)), clip)
         self.normalize()
@@ -992,7 +1066,7 @@ class Project:
         self.apply_material()
         counts, acc, prev = [], 0.0, 0
         for c in self.clips:
-            acc += c.dur
+            acc += c.span
             boundary = int(round(acc * self.fps))
             n = max(1, boundary - prev)
             counts.append(n)
@@ -1227,8 +1301,26 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
     for i, nf in enumerate(counts2):
         seg = segs[i]
         if video_flags[i]:
+            pre = ""
+            src = clips[i] if clips else None
+            if src is not None and src.is_video and (src.src_in > 0
+                                                     or src.src_out is not None):
+                start = src.src_in
+                end = (src.src_out if src.src_out is not None
+                       else src.src_in + src.span)
+                # 交叉淡化要往两边多借半截，借的帧得从源里真取出来，
+                # 否则 trim 卡在出点上、段短一截，成片比计划短
+                head = overlaps[i - 1] // 2 if i > 0 and i - 1 < len(overlaps) else 0
+                tail = overlaps[i] // 2 if i < len(overlaps) else 0
+                if head:
+                    start = max(0.0, start - min(head / fps, start))
+                if tail:
+                    room = max(0.0, src.dur - end)
+                    end += min(tail / fps, room)
+                pre = (f"trim=start={start:.4f}:end={end:.4f},"
+                       f"setpts=PTS-STARTPTS,")
             parts.append(
-                f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=increase:"
+                f"[{i}:v]{pre}scale={w}:{h}:force_original_aspect_ratio=increase:"
                 f"in_range=full:out_range=tv,{crop_expr(w, h, crop_focus)}[s{i}]")
         elif fit == "cover":
             parts.append(
@@ -1721,7 +1813,8 @@ def run_gui() -> int:
         QFormLayout, QFrame, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit,
         QListWidget,
         QListWidgetItem, QMainWindow, QMenu, QProgressBar,
-        QPushButton, QRadioButton, QSizePolicy, QSpinBox,
+        QPlainTextEdit, QPushButton, QRadioButton, QSizePolicy, QSpinBox,
+        QTextEdit,
         QSplitter, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget)
     from bili_audio import BiliError, bili_audio
 
@@ -2345,6 +2438,7 @@ def run_gui() -> int:
         seeked = pyqtSignal(float)
         picked = pyqtSignal(int)
         resized = pyqtSignal(int, float)
+        trimmed = pyqtSignal(int, str, float)
         moved = pyqtSignal(int, float)
         audioMoved = pyqtSignal(int, float)
         audioVolume = pyqtSignal(int, float)
@@ -2380,12 +2474,12 @@ def run_gui() -> int:
             return top, max(16, self.height() - top - 4)
 
         def _total(self) -> float:
-            return sum(c.dur for c in self.project.clips) or 1.0
+            return sum(c.span for c in self.project.clips) or 1.0
 
         def _spans(self):
             total = self._total()
             x, spans = 0.0, []
-            for d in (c.dur for c in self.project.clips):
+            for d in (c.span for c in self.project.clips):
                 w = self.width() * d / total
                 spans.append((x, x + w, d))
                 x += w
@@ -2543,8 +2637,20 @@ def run_gui() -> int:
                 spans, total = self._spans()
                 x0, x1, d = spans[i]
                 clip = self.project.clips[i]
-                if (not clip.is_video) and abs(x - x1) <= 5:
-                    self._drag = ("resize", i, x, d)
+                near_left = abs(x - x0) <= 5
+                near_right = abs(x - x1) <= 5
+                if near_left and near_right:      # 段太窄，离哪边近算哪边
+                    near_left = (x - x0) < (x1 - x)
+                    near_right = not near_left
+                if near_left:
+                    self._drag = ("trimL", i, x, clip.span)
+                    self.setCursor(Qt.CursorShape.SizeHorCursor)
+                    return
+                if near_right:
+                    if not clip.is_video:
+                        self._drag = ("resize", i, x, d)
+                    else:
+                        self._drag = ("trimR", i, x, clip.span)
                     self.setCursor(Qt.CursorShape.SizeHorCursor)
                     return
                 multi = bool(ev.modifiers() & (Qt.KeyboardModifier.ShiftModifier
@@ -2558,7 +2664,7 @@ def run_gui() -> int:
                 else:
                     self.selected = [i]
                 self.picked.emit(i)
-                start = sum(c.dur for c in self.project.clips[:i])
+                start = sum(c.span for c in self.project.clips[:i])
                 self.seeked.emit(start)
                 self.play_pos = start
                 self._drag = ("clip", i, x, x0)
@@ -2592,9 +2698,12 @@ def run_gui() -> int:
         def mouseMoveEvent(self, ev):
             x, y = ev.position().x(), ev.position().y()
             if not self._drag:
-                i, edge_x = self._hit_video(x, y)
-                near = (i >= 0 and not self.project.clips[i].is_video
-                        and abs(x - edge_x) <= 5)
+                i, _edge_x = self._hit_video(x, y)
+                near = False
+                if i >= 0:
+                    spans, _t = self._spans()
+                    x0, x1, _d = spans[i]
+                    near = min(abs(x - x0), abs(x - x1)) <= 5
                 self.setCursor(Qt.CursorShape.SizeHorCursor if near
                                else Qt.CursorShape.PointingHandCursor)
                 return
@@ -2604,6 +2713,13 @@ def run_gui() -> int:
                 self.play_pos = total * x / max(1, self.width())
                 self.seeked.emit(self.play_pos)
                 self.update()
+                return
+            if kind in ("trimL", "trimR"):
+                _k, i, x0, _span0 = self._drag
+                _spans, total = self._spans()
+                delta = (x - x0) * total / max(1, self.width())
+                self.trimmed.emit(i, "left" if kind == "trimL" else "right",
+                                  delta)
                 return
             if kind == "resize":
                 _k, i, x0, d0 = self._drag
@@ -3574,7 +3690,10 @@ def run_gui() -> int:
             for seq, slot in (("Ctrl+N", self.on_new_project),
                               ("Ctrl+O", self.on_open_project),
                               ("Ctrl+S", self.on_save_project),
-                              ("Ctrl+Shift+S", self.on_save_project_as)):
+                              ("Ctrl+Shift+S", self.on_save_project_as),
+                              ("I", self.on_mark_in),
+                              ("O", self.on_mark_out),
+                              ("Ctrl+K", self.on_split_at)):
                 sc = QShortcut(QKeySequence(seq), self)
                 sc.activated.connect(slot)
                 self._shortcuts.append(sc)
@@ -4123,6 +4242,7 @@ def run_gui() -> int:
             self.timeline.seeked.connect(self.seek)
             self.timeline.picked.connect(self.on_timeline_pick)
             self.timeline.resized.connect(self.on_timeline_resize)
+            self.timeline.trimmed.connect(self.on_timeline_trim)
             self.timeline.moved.connect(self.on_timeline_move)
             self.timeline.audioMoved.connect(self.on_audio_move)
             self.timeline.audioVolume.connect(self.on_audio_volume)
@@ -4386,7 +4506,7 @@ def run_gui() -> int:
                 head = {"intro": tr("片头"),
                         "outro": tr("片尾")}.get(c.kind, f"{i + 1}.")
                 it.setText(tr("{i}.  {dur} 秒   {name}", i=head,
-                              dur=f"{c.dur:.1f}",
+                              dur=f"{c.span:.1f}",
                               name=os.path.basename(c.path)))
 
         def _thumb(self, path, kind="image"):
@@ -4622,6 +4742,91 @@ def run_gui() -> int:
             self.timeline.update()
             self._mark_stale()
             self._history_push(tr("改时长"))
+            self.lbl_status.setText(
+                tr("{n} 张图 · 总长 {total}", n=self.project.image_count(),
+                   total=human_time(self.project.total())))
+
+        def on_timeline_trim(self, i, edge, delta):
+            """拖片段左右边：视频改入出点，图片改自己的时长。"""
+            if not (0 <= i < len(self.project.clips)):
+                return
+            clip = self.project.clips[i]
+            if clip.is_video:
+                if edge == "left":
+                    self.project.set_src_in(i, clip.src_in + delta)
+                else:
+                    self.project.set_src_out(i, clip.src_in + clip.span + delta)
+            else:
+                self.project.set_duration(
+                    i, clip.dur - delta if edge == "left" else clip.dur + delta)
+            self._update_titles()
+            self.timeline.update()
+            self._mark_stale()
+            self._history_push(tr("改时长"))
+            self.lbl_status.setText(
+                tr("{n} 张图 · 总长 {total}", n=self.project.image_count(),
+                   total=human_time(self.project.total())))
+
+        def _clip_at(self, t: float, edge: bool = False):
+            """时间线 t 秒落在第几段、段里第几秒；edge=True 时段尾算本段。"""
+            acc = 0.0
+            for i, c in enumerate(self.project.clips):
+                end = acc + c.span
+                if (t <= end + 1e-9) if edge else (t < end - 1e-9):
+                    return i, max(0.0, t - acc)
+                acc = end
+            return -1, 0.0
+
+        def _playhead(self) -> float:
+            return max(0.0, self.player.position() / 1000.0)
+
+        def _text_focused(self) -> bool:
+            fw = QApplication.focusWidget()
+            return isinstance(fw, (QLineEdit, QTextEdit, QPlainTextEdit))
+
+        def on_mark_in(self):
+            if self._text_focused():
+                return
+            i, off = self._clip_at(self._playhead(), edge=True)
+            if i < 0:
+                return
+            clip = self.project.clips[i]
+            if not clip.is_video:
+                self.lbl_status.setText(tr("图片段没有入点，只有片头片尾能裁"))
+                return
+            self.project.set_src_in(i, clip.src_in + off)
+            self._after_trim(tr("设入点"))
+
+        def on_mark_out(self):
+            if self._text_focused():
+                return
+            i, off = self._clip_at(self._playhead(), edge=True)
+            if i < 0:
+                return
+            clip = self.project.clips[i]
+            if not clip.is_video:
+                self.lbl_status.setText(tr("图片段没有出点，只有片头片尾能裁"))
+                return
+            self.project.set_src_out(i, clip.src_in + off)
+            self._after_trim(tr("设出点"))
+
+        def on_split_at(self):
+            """Ctrl+K：在播放头把当前段切一刀。"""
+            t = self._playhead()
+            if not self.project.split_at(t):
+                self.lbl_status.setText(tr("这里切不了：离段首或段尾太近"))
+                return
+            self._refresh_all()
+            self._history_push(tr("切一刀"))
+            self.lbl_status.setText(
+                tr("{n} 张图 · 总长 {total}", n=self.project.image_count(),
+                   total=human_time(self.project.total())))
+
+        def _after_trim(self, action: str):
+            self._update_titles()
+            self.timeline.update()
+            self._mark_stale()
+            self._history_push(action)
             self.lbl_status.setText(
                 tr("{n} 张图 · 总长 {total}", n=self.project.image_count(),
                    total=human_time(self.project.total())))
@@ -5578,7 +5783,7 @@ def run_gui() -> int:
                 QTimer.singleShot(200, app.quit)
 
             QTimer.singleShot(600, undo_probe)
-            return app.exec()
+
 
         # 快捷键冒烟：改成自定义键后重绑，打印实际绑上的序列
         if os.environ.get("PIC2VIDEO_SHOT_KEYS"):

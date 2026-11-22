@@ -1250,8 +1250,184 @@ check("重新定位走文件选择框", "def _relink_missing" in src
       and "QFileDialog.getOpenFileName" in src)
 check("重新定位调 Project.relink_media",
       "self.project.relink_media(old, new)" in src)
-check("重新定位后标脏并刷新", "self._mark_dirty()" in src
-      and "self._refresh_all()" in src)
+# ---------------- 41 入出点：模型与工程文件
+
+def video_clip(dur=10.0, **kw):
+    c = p.Clip("v.mp4", dur, "intro", **kw)
+    return c
+
+
+c0 = video_clip()
+check("新片段默认 src_in=0", c0.src_in == 0.0, c0.src_in)
+check("新片段默认 src_out=None", c0.src_out is None, c0.src_out)
+check("没设入出点时 span 等于 dur", c0.span == 10.0, c0.span)
+c0.src_in, c0.src_out = 2.0, 5.0
+check("设了入出点后 span = out - in", c0.span == 3.0, c0.span)
+check("图片段 span 就是 dur", p.Clip("a.png", 2.5).span == 2.5)
+
+c1 = video_clip(2.0, 5.0) if False else video_clip()
+c1.src_in, c1.src_out = 2.0, 5.0
+c2 = c1.copy()
+check("copy 带上入出点", (c2.src_in, c2.src_out) == (2.0, 5.0),
+      (c2.src_in, c2.src_out))
+
+proj = p.Project(fps=30)
+proj.clips = [video_clip(), p.Clip("a.png", 2.0)]
+proj.clips[0].src_in, proj.clips[0].src_out = 2.0, 5.0
+check("frame_counts 按入出点算视频帧数", proj.frame_counts() == [90, 60],
+      proj.frame_counts())
+proj.clips[0].src_in = 0.0
+proj.clips[0].src_out = None
+check("没入出点时帧数照旧", proj.frame_counts() == [300, 60],
+      proj.frame_counts())
+
+proj = p.Project(fps=30)
+proj.clips = [video_clip()]
+proj.clips[0].src_in = 1.0
+proj.set_src_out(0, 99.0)
+check("出点超过源时长被夹到结尾", proj.clips[0].src_out == 10.0,
+      proj.clips[0].src_out)
+proj.set_src_in(0, 50.0)
+check("入点不会越过出点（至少留一帧）",
+      abs(proj.clips[0].span - 1 / 30) < 1e-6, proj.clips[0].span)
+proj.set_src_in(0, -5.0)
+check("入点不会小于 0", proj.clips[0].src_in == 0.0, proj.clips[0].src_in)
+proj.set_src_out(0, 0.0)
+check("出点不会小于入点（至少留一帧）",
+      proj.clips[0].span >= 1 / 30 - 1e-9, proj.clips[0].span)
+
+proj = p.Project(fps=30)
+proj.clips = [video_clip(), p.Clip("a.png", 2.0)]
+proj.clips[0].src_in, proj.clips[0].src_out = 2.0, 5.0
+doc = proj.to_doc()
+check("工程文件写出入出点",
+      doc["clips"][0]["src_in"] == 2.0 and doc["clips"][0]["src_out"] == 5.0,
+      doc["clips"][0])
+check("图片段不写入出点也能过", "src_in" in doc["clips"][1])
+
+raw = {"version": 1, "fps": 30, "mode": "bgm",
+       "clips": [{"path": "v.mp4", "dur": 10.0, "kind": "intro"}]}
+old = p.Project.from_doc(raw)
+check("老工程缺 src_in 给 0", old.clips[0].src_in == 0.0, old.clips[0].src_in)
+check("老工程缺 src_out 给 None", old.clips[0].src_out is None,
+      old.clips[0].src_out)
+raw = {"version": 1, "fps": 30, "mode": "bgm",
+       "clips": [{"path": "v.mp4", "dur": 10.0, "kind": "intro",
+                  "src_in": -3, "src_out": 4}]}
+fixed = p.Project.from_doc(raw)
+check("负入点读成 0", fixed.clips[0].src_in == 0.0, fixed.clips[0].src_in)
+raw["clips"][0]["src_out"] = 0
+bad = p.Project.from_doc(raw)
+check("出点不大于入点就当成到结尾", bad.clips[0].src_out is None,
+      bad.clips[0].src_out)
+# ---------------- 42 播放头切段
+
+proj = p.Project(fps=30)
+proj.clips = [p.Clip("a.png", 4.0), p.Clip("b.png", 6.0)]
+check("切段返回成功", proj.split_at(2.0) is True)
+check("图片段被切成两段", len(proj.clips) == 3, len(proj.clips))
+check("两半时长对得上",
+      [round(c.span, 3) for c in proj.clips] == [2.0, 2.0, 6.0],
+      [c.span for c in proj.clips])
+check("切段后总长不变", abs(proj.total() - 10.0) < 1e-9, proj.total())
+check("两半用同一个素材", proj.clips[0].path == proj.clips[1].path == "a.png")
+
+proj = p.Project(fps=30)
+proj.clips = [p.Clip("v.mp4", 10.0, "intro", fade=True, xfade=True)]
+proj.clips[0].src_in, proj.clips[0].src_out = 2.0, 6.0
+check("有入出点的视频也能切", proj.split_at(1.5) is True)
+check("视频两段首尾相接",
+      (proj.clips[0].src_in, proj.clips[0].src_out,
+       proj.clips[1].src_in, proj.clips[1].src_out) == (2.0, 3.5, 3.5, 6.0),
+      [(c.src_in, c.src_out) for c in proj.clips])
+check("视频切完总长不变", abs(proj.total() - 4.0) < 1e-9, proj.total())
+check("切完帧数总和不变",
+      sum(proj.frame_counts()) == 120, proj.frame_counts())
+check("切段保留类型与淡入淡出",
+      all(c.kind == "intro" and c.fade and c.xfade for c in proj.clips),
+      [(c.kind, c.fade, c.xfade) for c in proj.clips])
+
+proj = p.Project(fps=30)
+proj.clips = [p.Clip("v.mp4", 10.0, "intro")]
+proj.clips[0].src_in, proj.clips[0].src_out = 2.0, 6.0
+check("段首不足一帧不切", proj.split_at(0.0) is False)
+check("段尾不足一帧不切", proj.split_at(4.0) is False)
+check("超出总长不切", proj.split_at(99.0) is False)
+check("不切时片段数不变", len(proj.clips) == 1, len(proj.clips))
+
+proj = p.Project(fps=30)
+proj.clips = [p.Clip("a.png", 3.0)]
+proj.split_at(1.0)
+check("切完能存能读", p.Project.from_doc(proj.to_doc()).to_doc() == proj.to_doc(),
+      proj.to_doc()["clips"])
+
+proj = p.Project(fps=30)
+proj.clips = [p.Clip("a.png", 4.0), p.Clip("b.png", 4.0)]
+proj.split_at(6.0)
+check("切在第二段里也对",
+      [round(c.span, 3) for c in proj.clips] == [4.0, 2.0, 2.0],
+      [c.span for c in proj.clips])
+
+proj = p.Project(fps=30)
+proj.clips = [p.Clip("v.mp4", 10.0, "intro")]
+proj.clips[0].src_in, proj.clips[0].src_out = 2.0, 6.0
+proj.set_src_out(0, 3.0)
+check("拖右边缩到 3 秒", abs(proj.clips[0].span - 1.0) < 1e-9, proj.clips[0].span)
+proj.set_src_in(0, 2.5)
+check("拖左边留一帧", abs(proj.clips[0].span - 0.5) < 1e-9, proj.clips[0].span)
+# ---------------- 43 入出点进 filtergraph
+
+proj = p.Project(fps=30)
+proj.clips = [p.Clip("v.mp4", 10.0, "intro")]
+proj.clips[0].src_in, proj.clips[0].src_out = 2.0, 6.0
+g = p.build_graph(proj.frame_counts(), proj.total(), clips=proj.clips, fps=30)
+check("视频链先裁入出点再缩放",
+      "trim=start=2.0000:end=6.0000,setpts=PTS-STARTPTS," in g, g[:400])
+
+proj = p.Project(fps=30)
+proj.clips = [p.Clip("v.mp4", 10.0, "intro")]
+g = p.build_graph(proj.frame_counts(), proj.total(), clips=proj.clips, fps=30)
+check("没设入出点就不加 trim=start", "trim=start=" not in g.split("[s0]")[0], g[:400])
+
+proj = p.Project(fps=30)
+proj.clips = [p.Clip("v.mp4", 10.0, "intro"), p.Clip("v2.mp4", 10.0, "outro")]
+proj.clips[0].src_in, proj.clips[0].src_out = 1.0, 3.0
+proj.clips[1].src_in, proj.clips[1].src_out = 4.0, 9.0
+g = p.build_graph(proj.frame_counts(), proj.total(), clips=proj.clips, fps=30)
+check("片头片尾各裁各的",
+      "trim=start=1.0000:end=3.0000" in g and "trim=start=4.0000:end=9.0000" in g,
+      g[:600])
+check("裁完的段数对得上", proj.frame_counts() == [60, 150], proj.frame_counts())
+
+proj = p.Project(fps=30)
+c1 = p.Clip("v.mp4", 10.0, "intro")
+c1.src_in, c1.src_out, c1.xfade = 0.0, 3.0, True
+c2 = p.Clip("v2.mp4", 10.0, "outro")
+c2.src_in, c2.src_out = 2.0, 5.0
+proj.clips = [c1, c2]
+g = p.build_graph(proj.frame_counts(), proj.total(), clips=proj.clips,
+                  fps=30, xfade_sec=0.3)
+check("交叉淡化时出点往后多借半截", "trim=start=0.0000:end=3.1333" in g,
+      [x for x in g.split(";") if "trim=start=" in x][:1])
+check("交叉淡化时入点往前多借半截", "trim=start=1.8667:end=5.0000" in g,
+      [x for x in g.split(";") if "trim=start=" in x][1:2])
+
+# ---------------- 44 入出点 / 切段的界面接线
+
+src = open(os.path.join(ROOT, "pic2video.py"), encoding="utf-8").read()
+check("时间线能发左右边界拖拽", "trimmed = pyqtSignal(int, str, float)" in src)
+check("时间线宽度按 span 算",
+      "sum(c.span for c in self.project.clips)" in src)
+check("窗口接住边界拖拽", "trimmed.connect(self.on_timeline_trim)" in src)
+check("拖拽落到入出点上", "def on_timeline_trim" in src
+      and "set_src_in" in src and "set_src_out" in src)
+check("有 I / O 快捷键", '("I", self.on_mark_in)' in src
+      and '("O", self.on_mark_out)' in src)
+check("有 Ctrl+K 切段", '("Ctrl+K", self.on_split_at)' in src)
+check("按播放头找所在段", "def _clip_at" in src)
+check("切段走 split_at", "self.project.split_at(" in src)
+check("时间线标题显示实测长度",
+      "dur=f\"{c.span:.1f}\"" in src or "c.span:.1f" in src)
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")

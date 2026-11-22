@@ -2065,3 +2065,52 @@ _TR_EXTRA26 = {
 for _k, _trs in _TR_EXTRA26.items():
     for _lang, _v in _trs.items():
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA27 = {
+    '切一刀': {
+        'zh-TW': '切一刀',
+        'en': 'Split here',
+        'ja': 'ここで分割',
+        'ko': '여기서 분할',
+    },
+    '设入点': {
+        'zh-TW': '設入點',
+        'en': 'Set in point',
+        'ja': 'イン点を設定',
+        'ko': '인점 설정',
+    },
+    '设出点': {
+        'zh-TW': '設出點',
+        'en': 'Set out point',
+        'ja': 'アウト点を設定',
+        'ko': '아웃점 설정',
+    },
+    '改时长': {
+        'zh-TW': '改時長',
+        'en': 'Change duration',
+        'ja': '長さを変更',
+        'ko': '길이 변경',
+    },
+    '图片段没有入点，只有片头片尾能裁': {
+        'zh-TW': '圖片段沒有入點，只有片頭片尾能裁',
+        'en': 'Images have no in point; only intro/outro video can be trimmed',
+        'ja': '画像にはイン点がありません（トリムできるのはOP/ED動画のみ）',
+        'ko': '이미지에는 인점이 없습니다 (앞/뒤 영상만 자를 수 있음)',
+    },
+    '图片段没有出点，只有片头片尾能裁': {
+        'zh-TW': '圖片段沒有出點，只有片頭片尾能裁',
+        'en': 'Images have no out point; only intro/outro video can be trimmed',
+        'ja': '画像にはアウト点がありません（トリムできるのはOP/ED動画のみ）',
+        'ko': '이미지에는 아웃점이 없습니다 (앞/뒤 영상만 자를 수 있음)',
+    },
+    '这里切不了：离段首或段尾太近': {
+        'zh-TW': '這裡切不了：離段首或段尾太近',
+        'en': "Can't split here: too close to the start or end of a segment",
+        'ja': 'ここでは分割できません（区間の端に近すぎます）',
+        'ko': '여기서는 분할할 수 없습니다 (구간 끝에 너무 가까움)',
+    },
+}
+
+for _k, _trs in _TR_EXTRA27.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)
