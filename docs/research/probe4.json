@@ -1,0 +1,385 @@
+{
+ "season_raw": "{\"code\":0,\"message\":\"success\",\"result\":{\"activity\":{\"head_bg_url\":\"\",\"id\":0,\"title\":\"\"},\"actors\":\"江户川柯南：李世荣\\n毛利兰：季冠霖\\n毛利小五郎：张遥函\\n工藤新一：张杰\\n灰原哀（雪莉）：阎萌萌\\n阿笠博士：郭政建\\n吉田步美：山新\\n圆谷光彦：刘校妤\\n小岛元太：张磊\\n铃木园子：佟心竹\\n服部平次：赵毅\\n远山和叶：沈念如\\n目暮十三：张闻天\\n高木涉：张圣\\n佐藤美和子：杨希\\n黑田兵卫：刘琮\\n白鸟任三郎：吴凌云\\n千叶和伸：张磊\\n安室透（降谷零、波本）：藤新\\n风见裕也：皇贞季\\n中森银三：赵铭洲\\n妃英理：刘芊含\\n工藤优作：张震\\n工藤有希子：张喆\\n赤井秀一（黑麦）：宋明\\n琴酒：冯盛\\n伏特加：郝祥海\\n苦艾酒：张凯\\n科伦：郭盛\\n怪盗基德/黑羽快斗：张杰\",\"alias\":\"\",\"areas\":[{\"id\":2,\"name\":\"日本\"}],\"bkg_cover\":\"\",\"cover\":\"http://i0.hdslb.com/bfs/bangumi/image/38e2a273f528fd01c34f1fc4df0f69c64487efad.png\",\"delivery_fragment_video\":false,\"enable_vt\":false,\"ep",
+ "season_ep_raw": "{\"code\":0,\"message\":\"success\",\"result\":{\"activity\":{\"head_bg_url\":\"\",\"id\":0,\"title\":\"\"},\"actors\":\"イシュトヴァーン：浅沼晋太郎\\nレムス：代永翼\\nリンダ：中原麻衣\\nグイン：堀内賢雄\\nブルク：御園行洋\\nモーリス：利根健太朗\\nビウィス：橋詰知久\\nヌヌス：タンゲリヌス：高橋研二\\n\",\"alias\":\"\",\"areas\":[{\"id\":2,\"name\":\"日本\"}],\"bkg_cover\":\"\",\"cover\":\"http://i0.hdslb.com/bfs/bangumi/a0d7811",
+ "search_items": [
+  {
+   "bvid": "BV1qx3965Epc",
+   "title": "【<em class=\"keyword\">充电专属</em>】",
+   "author": "思莞-求首胜版",
+   "description": "【充电专属】"
+  },
+  {
+   "bvid": "BV1KVy3zuEqp",
+   "title": "134双色球<em class=\"keyword\">充电专属</em>（昨天没发成功补发一下）",
+   "author": "幸运小胖子持恒",
+   "description": ""
+  },
+  {
+   "bvid": "BV12y3Q6WEhh",
+   "title": "宝宝们要求的<em class=\"keyword\">充电专属</em>来啦/无遮挡版",
+   "author": "我们叫XY",
+   "description": "-"
+  },
+  {
+   "bvid": "",
+   "title": "舞蹈教程合集+<em class=\"keyword\">充电专属</em>+基本功大全（持续更新）",
+   "author": "小姨妈舞蹈教学",
+   "description": ""
+  },
+  {
+   "bvid": "BV11UWE6REJc",
+   "title": "<em class=\"keyword\">充电</em>权益🎁在百度网盘～",
+   "author": "小狗子管理员",
+   "description": "-"
+  },
+  {
+   "bvid": "BV1DRNR6QEnD",
+   "title": "如何开通<em class=\"keyword\">充电</em>功能？自定义<em class=\"keyword\">充电</em>和包月<em class=\"keyword\">充电</em>的区别",
+   "author": "一优美",
+   "description": ""
+  },
+  {
+   "bvid": "BV1qf4y1G7MM",
+   "title": "[ 本 视 频 为 付 费 内 容 ]",
+   "author": "幼儿园里我最_帅",
+   "description": "-"
+  },
+  {
+   "bvid": "BV1gcE5z9E6C",
+   "title": "<em class=\"keyword\">充电</em>查看我的视频",
+   "author": "小狗耶鲁特",
+   "description": "-"
+  },
+  {
+   "bvid": "BV1k4Nu65EYw",
+   "title": "未满18禁止观看",
+   "author": "神秘的小空",
+   "description": "未满18禁止观看的，对吧"
+  },
+  {
+   "bvid": "",
+   "title": "<em class=\"keyword\">充电</em>视频第一期",
+   "author": "槿烟-助眠声控",
+   "description": ""
+  },
+  {
+   "bvid": "BV15rxXzxEEK",
+   "title": "啪啪啪直播",
+   "author": "用户125945311",
+   "description": "-"
+  },
+  {
+   "bvid": "BV13JYLzaE11",
+   "title": "【<em class=\"keyword\">充电专属</em>】16分钟完整版 888号美女小姐姐为你服务",
+   "author": "倩小酱来了",
+   "description": ""
+  }
+ ],
+ "checks": [
+  {
+   "bvid": "BV1qx3965Epc",
+   "view_code": 0,
+   "view_msg": "OK",
+   "rights": {
+    "pay": 0,
+    "ugc_pay": 0,
+    "is_charging_arc": null,
+    "arc_pay": 0,
+    "free_watch": 0,
+    "pay_free_watch": null
+   },
+   "play_code": 0,
+   "play_msg": "OK",
+   "play_data_keys": [
+    "from",
+    "result",
+    "message",
+    "quality",
+    "format",
+    "timelength",
+    "accept_format",
+    "accept_description",
+    "accept_quality",
+    "video_codecid",
+    "seek_param",
+    "seek_type",
+    "dash",
+    "support_formats",
+    "high_format",
+    "last_play_time",
+    "last_play_cid",
+    "view_info",
+    "play_conf",
+    "cur_language",
+    "cur_production_type",
+    "auto_qn_resp"
+   ],
+   "dash_dur": 53,
+   "video_dur": 53
+  },
+  {
+   "bvid": "BV1KVy3zuEqp",
+   "view_code": 0,
+   "view_msg": "OK",
+   "rights": {
+    "pay": 0,
+    "ugc_pay": 0,
+    "is_charging_arc": null,
+    "arc_pay": 0,
+    "free_watch": 0,
+    "pay_free_watch": null
+   },
+   "play_code": 0,
+   "play_msg": "OK",
+   "play_data_keys": [
+    "from",
+    "result",
+    "message",
+    "quality",
+    "format",
+    "timelength",
+    "accept_format",
+    "accept_description",
+    "accept_quality",
+    "video_codecid",
+    "seek_param",
+    "seek_type",
+    "durl",
+    "support_formats",
+    "high_format",
+    "last_play_time",
+    "last_play_cid",
+    "view_info",
+    "play_conf",
+    "cur_language",
+    "cur_production_type",
+    "auto_qn_resp"
+   ],
+   "dash_dur": null,
+   "video_dur": 65
+  },
+  {
+   "bvid": "BV12y3Q6WEhh",
+   "view_code": 0,
+   "view_msg": "OK",
+   "rights": {
+    "pay": 0,
+    "ugc_pay": 0,
+    "is_charging_arc": null,
+    "arc_pay": 0,
+    "free_watch": 0,
+    "pay_free_watch": null
+   },
+   "play_code": 0,
+   "play_msg": "OK",
+   "play_data_keys": [
+    "from",
+    "result",
+    "message",
+    "quality",
+    "format",
+    "timelength",
+    "accept_format",
+    "accept_description",
+    "accept_quality",
+    "video_codecid",
+    "seek_param",
+    "seek_type",
+    "durl",
+    "support_formats",
+    "high_format",
+    "last_play_time",
+    "last_play_cid",
+    "view_info",
+    "play_conf",
+    "cur_language",
+    "cur_production_type",
+    "auto_qn_resp"
+   ],
+   "dash_dur": null,
+   "video_dur": 1539
+  },
+  {
+   "bvid": "",
+   "view_code": -400,
+   "view_msg": "请求错误",
+   "rights": {
+    "pay": null,
+    "ugc_pay": null,
+    "is_charging_arc": null,
+    "arc_pay": null,
+    "free_watch": null,
+    "pay_free_watch": null
+   },
+   "play_code": null,
+   "play_msg": null,
+   "play_data_keys": null,
+   "dash_dur": null,
+   "video_dur": null
+  },
+  {
+   "bvid": "BV11UWE6REJc",
+   "view_code": 0,
+   "view_msg": "OK",
+   "rights": {
+    "pay": 0,
+    "ugc_pay": 0,
+    "is_charging_arc": null,
+    "arc_pay": 0,
+    "free_watch": 0,
+    "pay_free_watch": null
+   },
+   "play_code": 0,
+   "play_msg": "OK",
+   "play_data_keys": [
+    "from",
+    "result",
+    "message",
+    "quality",
+    "format",
+    "timelength",
+    "accept_format",
+    "accept_description",
+    "accept_quality",
+    "video_codecid",
+    "seek_param",
+    "seek_type",
+    "dash",
+    "support_formats",
+    "high_format",
+    "last_play_time",
+    "last_play_cid",
+    "view_info",
+    "play_conf",
+    "cur_language",
+    "cur_production_type",
+    "auto_qn_resp"
+   ],
+   "dash_dur": 12,
+   "video_dur": 12
+  },
+  {
+   "bvid": "BV1DRNR6QEnD",
+   "view_code": 0,
+   "view_msg": "OK",
+   "rights": {
+    "pay": 0,
+    "ugc_pay": 0,
+    "is_charging_arc": null,
+    "arc_pay": 0,
+    "free_watch": 0,
+    "pay_free_watch": null
+   },
+   "play_code": 0,
+   "play_msg": "OK",
+   "play_data_keys": [
+    "from",
+    "result",
+    "message",
+    "quality",
+    "format",
+    "timelength",
+    "accept_format",
+    "accept_description",
+    "accept_quality",
+    "video_codecid",
+    "seek_param",
+    "seek_type",
+    "dash",
+    "support_formats",
+    "high_format",
+    "last_play_time",
+    "last_play_cid",
+    "view_info",
+    "play_conf",
+    "cur_language",
+    "cur_production_type",
+    "auto_qn_resp"
+   ],
+   "dash_dur": 183,
+   "video_dur": 183
+  },
+  {
+   "bvid": "BV1qf4y1G7MM",
+   "view_code": 0,
+   "view_msg": "OK",
+   "rights": {
+    "pay": 0,
+    "ugc_pay": 0,
+    "is_charging_arc": null,
+    "arc_pay": 0,
+    "free_watch": 0,
+    "pay_free_watch": null
+   },
+   "play_code": 0,
+   "play_msg": "OK",
+   "play_data_keys": [
+    "from",
+    "result",
+    "message",
+    "quality",
+    "format",
+    "timelength",
+    "accept_format",
+    "accept_description",
+    "accept_quality",
+    "video_codecid",
+    "seek_param",
+    "seek_type",
+    "dash",
+    "support_formats",
+    "high_format",
+    "last_play_time",
+    "last_play_cid",
+    "view_info",
+    "play_conf",
+    "cur_language",
+    "cur_production_type",
+    "auto_qn_resp"
+   ],
+   "dash_dur": 64,
+   "video_dur": 64
+  },
+  {
+   "bvid": "BV1gcE5z9E6C",
+   "view_code": 0,
+   "view_msg": "OK",
+   "rights": {
+    "pay": 0,
+    "ugc_pay": 0,
+    "is_charging_arc": null,
+    "arc_pay": 0,
+    "free_watch": 0,
+    "pay_free_watch": null
+   },
+   "play_code": 0,
+   "play_msg": "OK",
+   "play_data_keys": [
+    "from",
+    "result",
+    "message",
+    "quality",
+    "format",
+    "timelength",
+    "accept_format",
+    "accept_description",
+    "accept_quality",
+    "video_codecid",
+    "seek_param",
+    "seek_type",
+    "durl",
+    "support_formats",
+    "high_format",
+    "last_play_time",
+    "last_play_cid",
+    "view_info",
+    "play_conf",
+    "cur_language",
+    "cur_production_type",
+    "auto_qn_resp"
+   ],
+   "dash_dur": null,
+   "video_dur": 15
+  }
+ ]
+}

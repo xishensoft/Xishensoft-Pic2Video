@@ -1,0 +1,558 @@
+{
+ "nav_code": -101,
+ "multi_candidate": {
+  "bvid": "BV1NDsS6UE8D",
+  "title": "【侠盗猎车手6】4K 最高画质 全网首发 全任务 全剧情流程通关攻略 开放世界冒险游戏 GTA6 - Grand Theft Auto VI",
+  "videos": 69
+ },
+ "multi_view": {
+  "code": 0,
+  "bvid": "BV1NDsS6UE8D",
+  "videos": 69,
+  "cid": 43721230307,
+  "pages": [
+   {
+    "page": 1,
+    "cid": 43721230307,
+    "part": "开幕",
+    "dur": 399
+   },
+   {
+    "page": 2,
+    "cid": 43719068751,
+    "part": "第1期：仿若天堂",
+    "dur": 670
+   },
+   {
+    "page": 3,
+    "cid": 43723591490,
+    "part": "第2期：垂钓",
+    "dur": 1711
+   },
+   {
+    "page": 4,
+    "cid": 43814814049,
+    "part": "第3期：杰森的家",
+    "dur": 1552
+   }
+  ]
+ },
+ "multi_p2_playurl": {
+  "code": 0,
+  "message": "OK",
+  "quality": 64,
+  "accept_quality": [
+   120,
+   116,
+   80,
+   64,
+   32,
+   16
+  ],
+  "duration": 670,
+  "timelength": 669482,
+  "audio": [
+   {
+    "id": 30232,
+    "bw": 99262,
+    "sr": null
+   },
+   {
+    "id": 30280,
+    "bw": 170323,
+    "sr": null
+   },
+   {
+    "id": 30216,
+    "bw": 65682,
+    "sr": null
+   }
+  ],
+  "has_durl": false,
+  "durl": [],
+  "result_keys": [],
+  "requested_cid": 43719068751
+ },
+ "multi_p1_playurl": {
+  "code": 0,
+  "message": "OK",
+  "quality": 64,
+  "accept_quality": [
+   120,
+   116,
+   80,
+   64,
+   32,
+   16
+  ],
+  "duration": 399,
+  "timelength": 398272,
+  "audio": [
+   {
+    "id": 30232,
+    "bw": 99965,
+    "sr": null
+   },
+   {
+    "id": 30280,
+    "bw": 181335,
+    "sr": null
+   },
+   {
+    "id": 30216,
+    "bw": 65706,
+    "sr": null
+   }
+  ],
+  "has_durl": false,
+  "durl": [],
+  "result_keys": [],
+  "requested_cid": 43721230307
+ },
+ "bangumi_rank": {
+  "code": 0,
+  "message": "success",
+  "seasons": [
+   {
+    "season_id": 33415,
+    "title": "名侦探柯南（中配）",
+    "badge": "大会员",
+    "new_ep": "更新至第1281话"
+   },
+   {
+    "season_id": 6422,
+    "title": "黑色四叶草",
+    "badge": "大会员",
+    "new_ep": "全171话"
+   },
+   {
+    "season_id": 6262,
+    "title": "蜡笔小新 第二季（中文）",
+    "badge": "大会员",
+    "new_ep": "全873话"
+   },
+   {
+    "season_id": 38157,
+    "title": "银魂",
+    "badge": "大会员",
+    "new_ep": "全200话"
+   },
+   {
+    "season_id": 28324,
+    "title": "犬夜叉",
+    "badge": "限时免费",
+    "new_ep": "全167话"
+   },
+   {
+    "season_id": 34430,
+    "title": "咒术回战",
+    "badge": "大会员",
+    "new_ep": "全24话"
+   }
+  ]
+ },
+ "bangumi_playurls": [
+  {
+   "season_id": 33415,
+   "title": "名侦探柯南（中配）",
+   "areas": [
+    "日本"
+   ],
+   "rights": {
+    "area_limit": 328,
+    "allow_download": 0,
+    "is_preview": 1,
+    "ban_area_show": 1
+   },
+   "ep_count": 1281,
+   "ep_badges": [
+    "",
+    "会员"
+   ],
+   "picked": {
+    "ep_id": 323835,
+    "badge": "会员",
+    "title": "751",
+    "long_title": "迫近灰原秘密的黑影（上集）",
+    "duration": 1488000
+   },
+   "playurl": {
+    "code": 0,
+    "message": "success",
+    "quality": 32,
+    "accept_quality": null,
+    "duration": null,
+    "timelength": null,
+    "audio": [],
+    "has_durl": true,
+    "durl": [
+     {
+      "size": 40877544,
+      "length": 360126
+     }
+    ],
+    "result_keys": [
+     "accept_format",
+     "code",
+     "seek_param",
+     "is_preview",
+     "fnval",
+     "video_project",
+     "fnver",
+     "type",
+     "bp",
+     "seek_type",
+     "result",
+     "from"
+    ],
+    "result_type": "result",
+    "is_preview": 1
+   }
+  },
+  {
+   "season_id": 6422,
+   "title": "黑色四叶草",
+   "areas": [
+    "日本"
+   ],
+   "rights": {
+    "area_limit": 328,
+    "allow_download": 0,
+    "is_preview": 1,
+    "ban_area_show": 1
+   },
+   "ep_count": 171,
+   "ep_badges": [
+    "会员"
+   ],
+   "picked": {
+    "ep_id": 114966,
+    "badge": "会员",
+    "title": "1",
+    "long_title": "亚斯塔与尤诺",
+    "duration": 1434005
+   },
+   "playurl": {
+    "code": 0,
+    "message": "success",
+    "quality": 32,
+    "accept_quality": null,
+    "duration": null,
+    "timelength": null,
+    "audio": [],
+    "has_durl": true,
+    "durl": [
+     {
+      "size": 8530287,
+      "length": 180179
+     }
+    ],
+    "result_keys": [
+     "accept_format",
+     "code",
+     "seek_param",
+     "is_preview",
+     "fnval",
+     "video_project",
+     "fnver",
+     "type",
+     "bp",
+     "seek_type",
+     "result",
+     "from"
+    ],
+    "result_type": "result",
+    "is_preview": 1
+   }
+  },
+  {
+   "season_id": 6262,
+   "title": "蜡笔小新 第二季（中文）",
+   "areas": [
+    "日本"
+   ],
+   "rights": {
+    "area_limit": 328,
+    "allow_download": 0,
+    "is_preview": 1,
+    "ban_area_show": 1
+   },
+   "ep_count": 873,
+   "ep_badges": [
+    "",
+    "会员"
+   ],
+   "picked": {
+    "ep_id": 109736,
+    "badge": "会员",
+    "title": "6",
+    "long_title": "吃尾牙真辛苦",
+    "duration": 424693
+   },
+   "playurl": {
+    "code": 0,
+    "message": "success",
+    "quality": 16,
+    "accept_quality": null,
+    "duration": null,
+    "timelength": null,
+    "audio": [],
+    "has_durl": true,
+    "durl": [
+     {
+      "size": 1368016,
+      "length": 60160
+     }
+    ],
+    "result_keys": [
+     "accept_format",
+     "code",
+     "seek_param",
+     "is_preview",
+     "fnval",
+     "video_project",
+     "fnver",
+     "type",
+     "bp",
+     "seek_type",
+     "result",
+     "from"
+    ],
+    "result_type": "result",
+    "is_preview": 1
+   }
+  }
+ ],
+ "charge_search": {
+  "code": 0,
+  "message": "OK",
+  "items": [
+   {
+    "bvid": "BV1qx3965Epc",
+    "title": "【充电专属】"
+   },
+   {
+    "bvid": "BV1KVy3zuEqp",
+    "title": "134双色球充电专属（昨天没发成功补发一下）"
+   },
+   {
+    "bvid": "BV12y3Q6WEhh",
+    "title": "宝宝们要求的充电专属来啦/无遮挡版"
+   },
+   {
+    "bvid": "",
+    "title": "舞蹈教程合集+充电专属+基本功大全（持续更新）"
+   },
+   {
+    "bvid": "BV11UWE6REJc",
+    "title": "充电权益🎁在百度网盘～"
+   },
+   {
+    "bvid": "BV1qf4y1G7MM",
+    "title": "[ 本 视 频 为 付 费 内 容 ]"
+   },
+   {
+    "bvid": "BV1DRNR6QEnD",
+    "title": "如何开通充电功能？自定义充电和包月充电的区别"
+   },
+   {
+    "bvid": "BV1gcE5z9E6C",
+    "title": "充电查看我的视频"
+   }
+  ]
+ },
+ "charge_views": [
+  {
+   "bvid": "BV1qx3965Epc",
+   "code": 0,
+   "message": "OK",
+   "rights": {
+    "pay": 0,
+    "ugc_pay": 0,
+    "is_charging_arc": null,
+    "arc_pay": 0,
+    "pay_free_watch": null,
+    "free_watch": 0
+   },
+   "cid": 40533361108,
+   "duration": 53,
+   "playurl": {
+    "code": 0,
+    "message": "OK",
+    "quality": 64,
+    "accept_quality": [
+     120,
+     112,
+     80,
+     64,
+     32,
+     16
+    ],
+    "duration": 53,
+    "timelength": 52367,
+    "audio": [
+     {
+      "id": 30232,
+      "bw": 106490,
+      "sr": null
+     },
+     {
+      "id": 30280,
+      "bw": 176928,
+      "sr": null
+     },
+     {
+      "id": 30216,
+      "bw": 65826,
+      "sr": null
+     }
+    ],
+    "has_durl": false,
+    "durl": [],
+    "result_keys": []
+   }
+  },
+  {
+   "bvid": "BV1KVy3zuEqp",
+   "code": 0,
+   "message": "OK",
+   "rights": {
+    "pay": 0,
+    "ugc_pay": 0,
+    "is_charging_arc": null,
+    "arc_pay": 0,
+    "pay_free_watch": null,
+    "free_watch": 0
+   },
+   "cid": 43817632546,
+   "duration": 65,
+   "playurl": {
+    "code": 0,
+    "message": "OK",
+    "quality": 64,
+    "accept_quality": [
+     80,
+     64,
+     32,
+     16
+    ],
+    "duration": null,
+    "timelength": 64621,
+    "audio": [],
+    "has_durl": true,
+    "durl": [
+     {
+      "size": 376012,
+      "length": 4993,
+      "host": "upos-sz-estgcos.bilivideo.com"
+     }
+    ],
+    "result_keys": []
+   }
+  },
+  {
+   "bvid": "BV12y3Q6WEhh",
+   "code": 0,
+   "message": "OK",
+   "rights": {
+    "pay": 0,
+    "ugc_pay": 0,
+    "is_charging_arc": null,
+    "arc_pay": 0,
+    "pay_free_watch": null,
+    "free_watch": 0
+   },
+   "cid": 40525891834,
+   "duration": 1539,
+   "playurl": {
+    "code": 0,
+    "message": "OK",
+    "quality": 64,
+    "accept_quality": [
+     120,
+     112,
+     80,
+     64,
+     32,
+     16
+    ],
+    "duration": null,
+    "timelength": 1538020,
+    "audio": [],
+    "has_durl": true,
+    "durl": [
+     {
+      "size": 15421326,
+      "length": 1259985,
+      "host": "upos-sz-estgcos.bilivideo.com"
+     }
+    ],
+    "result_keys": []
+   }
+  },
+  {
+   "bvid": "",
+   "code": -400,
+   "message": "请求错误",
+   "rights": {
+    "pay": null,
+    "ugc_pay": null,
+    "is_charging_arc": null,
+    "arc_pay": null,
+    "pay_free_watch": null,
+    "free_watch": null
+   },
+   "cid": null,
+   "duration": null
+  },
+  {
+   "bvid": "BV11UWE6REJc",
+   "code": 0,
+   "message": "OK",
+   "rights": {
+    "pay": 0,
+    "ugc_pay": 0,
+    "is_charging_arc": null,
+    "arc_pay": 0,
+    "pay_free_watch": null,
+    "free_watch": 0
+   },
+   "cid": 43440802658,
+   "duration": 12,
+   "playurl": {
+    "code": 0,
+    "message": "OK",
+    "quality": 64,
+    "accept_quality": [
+     80,
+     64,
+     32,
+     16
+    ],
+    "duration": 12,
+    "timelength": 12000,
+    "audio": [
+     {
+      "id": 30232,
+      "bw": 101934,
+      "sr": null
+     },
+     {
+      "id": 30280,
+      "bw": 177112,
+      "sr": null
+     },
+     {
+      "id": 30216,
+      "bw": 66726,
+      "sr": null
+     }
+    ],
+    "has_durl": false,
+    "durl": [],
+    "result_keys": []
+   }
+  }
+ ],
+ "durl_probe_bv": "BV1jQst6BEf2"
+}

@@ -1,0 +1,167 @@
+{
+ "b23": [
+  {
+   "url": "https://b23.tv/H4FAqk6",
+   "head": "HTTP/1.1 200 OK\nDate: Sun, 22 Nov 2026 13:53:45 GMT\nContent-Type: application/json; charset=utf-8\nContent-Length: 46\nConnection: keep-alive\nBili-Status-Code: -404\nBili-Trace-Id: 16834746ee6b02f3\nCpu_usage: 39\nX-Bili-Trace-Id: 289de0a48d47a37b16834746ee6b02f3\nExpires: Sun, 22 Nov 2026 13:53:44 GMT\nCache-Control: no-cache\nX-Cache-Webcdn: BYPASS from blzone07",
+   "body": "{\"code\":-404,\"message\":\"啥都木有\",\"ttl\":1}"
+  },
+  {
+   "url": "https://b23.tv/zzzZZZ9",
+   "head": "HTTP/1.1 200 OK\nDate: Sun, 22 Nov 2026 13:53:46 GMT\nContent-Type: application/json; charset=utf-8\nContent-Length: 46\nConnection: keep-alive\nBili-Status-Code: -404\nBili-Trace-Id: 379c90b7816b02f3\nCpu_usage: 52\nX-Bili-Trace-Id: 733c3a7422570a54379c90b7816b02f3\nExpires: Sun, 22 Nov 2026 13:53:45 GMT\nCache-Control: no-cache\nX-Cache-Webcdn: BYPASS from blzone07",
+   "body": "{\"code\":-404,\"message\":\"啥都木有\",\"ttl\":1}"
+  },
+  {
+   "url": "https://b23.tv/BV1bw4t6fET9",
+   "head": "HTTP/1.1 302 Found\nDate: Sun, 22 Nov 2026 13:53:47 GMT\nContent-Type: text/html; charset=utf-8\nContent-Length: 66\nConnection: keep-alive\nBili-Trace-Id: 3b78a20dee6b02f3\nLocation: https://www.bilibili.com/video/BV1bw4t6fET9\nX-Bili-Trace-Id: 38630897e5fb4b023b78a20dee6b02f3\nExpires: Sun, 22 Nov 2026 13:53:46 GMT\nCache-Control: no-cache\nX-Cache-Webcdn: BYPASS from blzone07",
+   "body": "<a href=\"https://www.bilibili.com/video/BV1bw4t6fET9\">Found</a>.\n\n"
+  }
+ ],
+ "av2bv": [
+  {
+   "aid": 170001,
+   "code": 0,
+   "api_bvid": "BV17x411w7KC",
+   "algo": "1VBs0000005A",
+   "match": false
+  },
+  {
+   "aid": 2,
+   "code": 0,
+   "api_bvid": "BV1xx411c7mD",
+   "algo": "1VB00000000w",
+   "match": false
+  },
+  {
+   "aid": 117562180376697,
+   "code": 0,
+   "api_bvid": "BV1bw4t6fET9",
+   "algo": "1VBwV5ud70Tw",
+   "match": false
+  },
+  {
+   "aid": 1,
+   "code": 62002,
+   "api_bvid": null,
+   "algo": "1VB00000000c",
+   "match": false
+  },
+  {
+   "aid": 114514,
+   "code": 62002,
+   "api_bvid": null,
+   "algo": "1VBy000000w0",
+   "match": false
+  }
+ ],
+ "ep": [
+  {
+   "ep_id": 1,
+   "code": -404,
+   "message": "啥都木有",
+   "has_result": false,
+   "quality": null,
+   "is_preview": null,
+   "has_dash": false,
+   "audio": [],
+   "durl_len": []
+  },
+  {
+   "ep_id": 999999999,
+   "code": -404,
+   "message": "啥都木有",
+   "has_result": false,
+   "quality": null,
+   "is_preview": null,
+   "has_dash": false,
+   "audio": [],
+   "durl_len": []
+  },
+  {
+   "ep_id": 323085,
+   "code": 0,
+   "message": "success",
+   "has_result": true,
+   "quality": 32,
+   "is_preview": 0,
+   "has_dash": true,
+   "audio": [
+    30216,
+    30280,
+    30232
+   ],
+   "durl_len": []
+  }
+ ],
+ "dolby": {
+  "bvid": "BV1FkxR6WE58",
+  "cid": 43332734705,
+  "fnval_16": {
+   "code": 0,
+   "quality": 64,
+   "flac": {
+    "display": true,
+    "audio": null
+   },
+   "dolby": {
+    "type": 0,
+    "audio": null
+   },
+   "audio": [
+    {
+     "id": 30232,
+     "bw": 102184,
+     "mime": "audio/mp4",
+     "codecs": "mp4a.40.2"
+    },
+    {
+     "id": 30216,
+     "bw": 65727,
+     "mime": "audio/mp4",
+     "codecs": "mp4a.40.2"
+    },
+    {
+     "id": 30280,
+     "bw": 198607,
+     "mime": "audio/mp4",
+     "codecs": "mp4a.40.2"
+    }
+   ]
+  },
+  "fnval_272": {
+   "code": 0,
+   "quality": 64,
+   "flac": {
+    "display": true,
+    "audio": null
+   },
+   "dolby": {
+    "type": 0,
+    "audio": null
+   },
+   "audio": [
+    {
+     "id": 30232,
+     "bw": 102184,
+     "mime": "audio/mp4",
+     "codecs": "mp4a.40.2"
+    },
+    {
+     "id": 30216,
+     "bw": 65727,
+     "mime": "audio/mp4",
+     "codecs": "mp4a.40.2"
+    },
+    {
+     "id": 30280,
+     "bw": 198607,
+     "mime": "audio/mp4",
+     "codecs": "mp4a.40.2"
+    }
+   ]
+  }
+ },
+ "referer_test": {
+  "no_headers": "206 1024",
+  "with_ua_referer": "206 1024"
+ }
+}

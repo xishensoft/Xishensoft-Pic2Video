@@ -1,0 +1,290 @@
+{
+ "view_BV1ab411c7mD": {
+  "code": 62002,
+  "message": "稿件不可见",
+  "data_type": "empty",
+  "data_keys": [],
+  "quality": null,
+  "has_dash": false,
+  "has_durl": false,
+  "is_preview": null,
+  "durl_len": []
+ },
+ "view_BV1xx411c7mZ": {
+  "code": -404,
+  "message": "啥都木有",
+  "data_type": "empty",
+  "data_keys": [],
+  "quality": null,
+  "has_dash": false,
+  "has_durl": false,
+  "is_preview": null,
+  "durl_len": []
+ },
+ "view_BV1Aa4y1A7Aa": {
+  "code": 0,
+  "message": "OK",
+  "data_type": "dict",
+  "data_keys": [
+   "bvid",
+   "aid",
+   "videos",
+   "tid",
+   "tid_v2",
+   "tname",
+   "tname_v2",
+   "copyright",
+   "pic",
+   "title",
+   "pubdate",
+   "ctime",
+   "desc",
+   "desc_v2",
+   "state",
+   "duration"
+  ],
+  "quality": null,
+  "has_dash": false,
+  "has_durl": false,
+  "is_preview": null,
+  "durl_len": []
+ },
+ "play_BV1Aa4y1A7Aa": {
+  "code": 0,
+  "message": "OK",
+  "data_type": "dict",
+  "data_keys": [
+   "from",
+   "result",
+   "message",
+   "quality",
+   "format",
+   "timelength",
+   "accept_format",
+   "accept_description",
+   "accept_quality",
+   "video_codecid",
+   "seek_param",
+   "seek_type",
+   "dash",
+   "support_formats",
+   "high_format",
+   "last_play_time"
+  ],
+  "quality": 64,
+  "has_dash": true,
+  "has_durl": false,
+  "is_preview": null,
+  "durl_len": []
+ },
+ "view_BV1bw4t6fET9": {
+  "code": 0,
+  "message": "OK",
+  "data_type": "dict",
+  "data_keys": [
+   "bvid",
+   "aid",
+   "videos",
+   "tid",
+   "tid_v2",
+   "tname",
+   "tname_v2",
+   "copyright",
+   "pic",
+   "title",
+   "pubdate",
+   "ctime",
+   "desc",
+   "desc_v2",
+   "state",
+   "duration"
+  ],
+  "quality": null,
+  "has_dash": false,
+  "has_durl": false,
+  "is_preview": null,
+  "durl_len": []
+ },
+ "play_BV1bw4t6fET9": {
+  "code": 0,
+  "message": "OK",
+  "data_type": "dict",
+  "data_keys": [
+   "from",
+   "result",
+   "message",
+   "quality",
+   "format",
+   "timelength",
+   "accept_format",
+   "accept_description",
+   "accept_quality",
+   "video_codecid",
+   "seek_param",
+   "seek_type",
+   "dash",
+   "support_formats",
+   "high_format",
+   "last_play_time"
+  ],
+  "quality": 64,
+  "has_dash": true,
+  "has_durl": false,
+  "is_preview": null,
+  "durl_len": []
+ },
+ "pagelist_BV1bw4t6fET9": {
+  "code": 0,
+  "message": "OK",
+  "ttl": 1,
+  "data": [
+   {
+    "cid": 43344332203,
+    "page": 1,
+    "from": "vupload",
+    "part": "岛上女子失踪，警方却称她平安无事！3个月后，住家附近的发现震惊韩国 ｜ 济州岛张美兰失踪事件",
+    "duration": 1981,
+    "vid": "",
+    "weblink": "",
+    "dimension": {
+     "width": 3840,
+     "height": 2160,
+     "rotate": 0
+    },
+    "first_frame": "http://i1.hdslb.com/bfs/storyff/_00002872td2lsb1cf2qkwlmo7v94tjb_firsti.jpg",
+    "ctime": 1793856867,
+    "asr_language": "cmn"
+   }
+  ]
+ },
+ "pgc_rank": {
+  "code": 0,
+  "message": "success",
+  "n": 100
+ },
+ "pgc_rank_items": [
+  {
+   "title": "名侦探柯南（中配）",
+   "season_id": 33415,
+   "url": "https://www.bilibili.com/bangumi/play/ss33415"
+  },
+  {
+   "title": "黑色四叶草",
+   "season_id": 6422,
+   "url": "https://www.bilibili.com/bangumi/play/ss6422"
+  },
+  {
+   "title": "蜡笔小新 第二季（中文）",
+   "season_id": 6262,
+   "url": "https://www.bilibili.com/bangumi/play/ss6262"
+  }
+ ],
+ "pgc_season_33415": {
+  "code": 0,
+  "message": "success",
+  "title": null,
+  "season_type": null,
+  "episodes": []
+ },
+ "pgc_season_6422": {
+  "code": 0,
+  "message": "success",
+  "title": null,
+  "season_type": null,
+  "episodes": []
+ },
+ "pgc_season_6262": {
+  "code": 0,
+  "message": "success",
+  "title": null,
+  "season_type": null,
+  "episodes": []
+ },
+ "live_play_1": {
+  "code": 0,
+  "message": "OK",
+  "data_type": "dict",
+  "data_keys": [
+   "current_quality",
+   "accept_quality",
+   "current_qn",
+   "quality_description",
+   "durl"
+  ],
+  "quality": null,
+  "has_dash": false,
+  "has_durl": true,
+  "is_preview": null,
+  "durl_len": [
+   0,
+   0
+  ]
+ },
+ "live_play_6": {
+  "code": 0,
+  "message": "OK",
+  "data_type": "dict",
+  "data_keys": [
+   "current_quality",
+   "accept_quality",
+   "current_qn",
+   "quality_description",
+   "durl"
+  ],
+  "quality": null,
+  "has_dash": false,
+  "has_durl": true,
+  "is_preview": null,
+  "durl_len": [
+   0,
+   0
+  ]
+ },
+ "live_play_21452505": {
+  "code": 0,
+  "message": "OK",
+  "data_type": "dict",
+  "data_keys": [
+   "current_quality",
+   "accept_quality",
+   "current_qn",
+   "quality_description",
+   "durl"
+  ],
+  "quality": null,
+  "has_dash": false,
+  "has_durl": true,
+  "is_preview": null,
+  "durl_len": [
+   0,
+   0
+  ]
+ },
+ "search_charging": {
+  "code": 0,
+  "message": "OK",
+  "data_type": "dict",
+  "data_keys": [
+   "seid",
+   "page",
+   "pagesize",
+   "numResults",
+   "numPages",
+   "suggest_keyword",
+   "rqt_type",
+   "exp_list",
+   "is_hit_web_inf",
+   "egg_hit",
+   "result",
+   "show_column",
+   "in_black_key",
+   "in_white_key",
+   "next"
+  ],
+  "quality": null,
+  "has_dash": false,
+  "has_durl": false,
+  "is_preview": null,
+  "durl_len": []
+ }
+}

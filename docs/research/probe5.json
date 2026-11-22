@@ -1,0 +1,247 @@
+{
+ "season": {
+  "code": 0,
+  "title": "名侦探柯南（中配）",
+  "season_type": null,
+  "areas": [
+   "日本"
+  ],
+  "rights": {
+   "is_vip": null,
+   "is_pay": null,
+   "allow_download": 0,
+   "allow_dm": null,
+   "area_limit": 328
+  },
+  "ep_count": 1281,
+  "eps": [
+   {
+    "id": 323085,
+    "cid": 184593713,
+    "aid": 540491915,
+    "badge": "",
+    "pay": null,
+    "duration": 1494000
+   },
+   {
+    "id": 323086,
+    "cid": 184593767,
+    "aid": 251807980,
+    "badge": "",
+    "pay": null,
+    "duration": 1489000
+   },
+   {
+    "id": 323087,
+    "cid": 184593822,
+    "aid": 209270003,
+    "badge": "",
+    "pay": null,
+    "duration": 1494000
+   }
+  ]
+ },
+ "pgc_play_ep16": {
+  "code": 0,
+  "message": "success",
+  "keys": [
+   "accept_format",
+   "code",
+   "seek_param",
+   "is_preview",
+   "fnval",
+   "video_project",
+   "fnver",
+   "type",
+   "bp",
+   "seek_type",
+   "result",
+   "from",
+   "video_codecid",
+   "record_info",
+   "can_watch_reason",
+   "is_drm",
+   "no_rexcode",
+   "format"
+  ],
+  "quality": 32,
+  "has_dash": true,
+  "dash_duration": 1494,
+  "audio": [
+   [
+    30216,
+    68752
+   ],
+   [
+    30280,
+    323176
+   ],
+   [
+    30232,
+    134243
+   ]
+  ],
+  "has_durl": false,
+  "durl_len": [],
+  "is_preview": 0,
+  "result_type": "suee"
+ },
+ "pgc_play_ep1": {
+  "code": 0,
+  "message": "success",
+  "keys": [
+   "accept_format",
+   "code",
+   "seek_param",
+   "is_preview",
+   "fnval",
+   "video_project",
+   "fnver",
+   "type",
+   "bp",
+   "seek_type",
+   "result",
+   "from",
+   "video_codecid",
+   "record_info",
+   "can_watch_reason",
+   "durl",
+   "is_drm",
+   "no_rexcode"
+  ],
+  "quality": 16,
+  "has_dash": false,
+  "dash_duration": null,
+  "audio": [],
+  "has_durl": true,
+  "durl_len": [
+   1493040
+  ],
+  "is_preview": 0,
+  "result_type": "suee"
+ },
+ "ugc_play_ep": {
+  "code": -400,
+  "message": "请求错误",
+  "keys": [],
+  "quality": null,
+  "has_dash": false,
+  "dash_duration": null,
+  "audio": [],
+  "has_durl": false,
+  "durl_len": [],
+  "is_preview": null,
+  "result_type": null
+ },
+ "pgc_search_进击的巨人": {
+  "code": "exception",
+  "msg": "<HTTPError 404: 'Not Found'>",
+  "items": []
+ },
+ "pgc_search_Lycoris Recoil": {
+  "code": "exception",
+  "msg": "<HTTPError 404: 'Not Found'>",
+  "items": []
+ },
+ "pgc_search_莉可丽丝": {
+  "code": "exception",
+  "msg": "<HTTPError 404: 'Not Found'>",
+  "items": []
+ },
+ "pugv_season_101": {
+  "code": 0,
+  "message": "success",
+  "keys": [
+   "abtest_info",
+   "activity_list",
+   "be_subscription",
+   "brief",
+   "consulting",
+   "cooperation",
+   "cooperators",
+   "course_content",
+   "courses",
+   "cover",
+   "ep_catalogue",
+   "ep_count",
+   "episode_page",
+   "episode_sort",
+   "episode_tag",
+   "episodes",
+   "expiry_day",
+   "expiry_info_content"
+  ],
+  "quality": null,
+  "has_dash": false,
+  "dash_duration": null,
+  "audio": [],
+  "has_durl": false,
+  "durl_len": [],
+  "is_preview": null,
+  "result_type": null
+ },
+ "pugv_season_100": {
+  "code": 0,
+  "message": "success",
+  "keys": [
+   "abtest_info",
+   "activity_list",
+   "be_subscription",
+   "brief",
+   "consulting",
+   "cooperation",
+   "cooperators",
+   "course_content",
+   "courses",
+   "cover",
+   "ep_catalogue",
+   "ep_count",
+   "episode_page",
+   "episode_sort",
+   "episode_tag",
+   "episodes",
+   "expiry_day",
+   "expiry_info_content"
+  ],
+  "quality": null,
+  "has_dash": false,
+  "dash_duration": null,
+  "audio": [],
+  "has_durl": false,
+  "durl_len": [],
+  "is_preview": null,
+  "result_type": null
+ },
+ "pugv_season_1": {
+  "code": 0,
+  "message": "success",
+  "keys": [
+   "abtest_info",
+   "activity_list",
+   "be_subscription",
+   "brief",
+   "consulting",
+   "cooperation",
+   "cooperators",
+   "course_content",
+   "courses",
+   "cover",
+   "ep_catalogue",
+   "ep_count",
+   "episode_page",
+   "episode_sort",
+   "episode_tag",
+   "episodes",
+   "expiry_day",
+   "expiry_info_content"
+  ],
+  "quality": null,
+  "has_dash": false,
+  "dash_duration": null,
+  "audio": [],
+  "has_durl": false,
+  "durl_len": [],
+  "is_preview": null,
+  "result_type": null
+ }
+}

@@ -1,0 +1,15 @@
+﻿<!doctype html><meta charset="utf-8"><body><pre id="o"></pre>
+<video id="v" src="http://127.0.0.1:8765/sample_filter.mp4" muted></video>
+<script>
+const v=document.getElementById('v');
+const res={
+ h264: v.canPlayType('video/mp4; codecs="avc1.42E01E"'),
+ aac: v.canPlayType('audio/mp4; codecs="mp4a.40.2"'),
+ mp4: v.canPlayType('video/mp4'),
+ duration: null, readyState: v.readyState, err: null
+};
+v.addEventListener('loadedmetadata',()=>{res.duration=v.duration;res.readyState=v.readyState;done();});
+v.addEventListener('error',()=>{res.err=v.error&&v.error.code;done();});
+function done(){document.getElementById('o').textContent=JSON.stringify(res);}
+setTimeout(()=>{document.getElementById('o').textContent=JSON.stringify(res);},3000);
+</script></body>

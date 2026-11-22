@@ -1,0 +1,371 @@
+{
+ "nav_code": -101,
+ "paid_search": [
+  {
+   "kw": "充电专属",
+   "scanned": 18,
+   "hits": [
+    {
+     "bvid": "BV1qx3965Epc",
+     "title": "【充电专属】",
+     "code": 0,
+     "is_charging_arc": null,
+     "ugc_pay": 0,
+     "pay": 0,
+     "arc_pay": 0,
+     "free_watch": 0,
+     "cid": 40533361108,
+     "duration": 53,
+     "playurl_anyway": {
+      "code": 0,
+      "message": "OK",
+      "quality": 64,
+      "audio": [
+       30232,
+       30216,
+       30280
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "kw": "付费视频",
+   "scanned": 17,
+   "hits": []
+  },
+  {
+   "kw": "仅充电可见",
+   "scanned": 20,
+   "hits": []
+  }
+ ],
+ "hires": [
+  {
+   "bvid": "BV1FkxR6WE58",
+   "title": "【𝐇𝐢-𝐑𝐞𝐬<em class=\"keyword\">无损</em>音质】｜《北",
+   "code": 0,
+   "quality": 64,
+   "flac": true,
+   "dolby_type": 0,
+   "dolby_audio": [],
+   "audio": [
+    {
+     "id": 30232,
+     "bw": 102184
+    },
+    {
+     "id": 30216,
+     "bw": 65727
+    },
+    {
+     "id": 30280,
+     "bw": 198607
+    }
+   ]
+  },
+  {
+   "bvid": "BV1Gjsq6WEVS",
+   "title": "【<em class=\"keyword\">Hi</em>-<em class=\"",
+   "code": 0,
+   "quality": 64,
+   "flac": true,
+   "dolby_type": 0,
+   "dolby_audio": [],
+   "audio": [
+    {
+     "id": 30232,
+     "bw": 126177
+    },
+    {
+     "id": 30216,
+     "bw": 65757
+    },
+    {
+     "id": 30280,
+     "bw": 220776
+    }
+   ]
+  },
+  {
+   "bvid": "BV1i2sU6aEeS",
+   "title": "【<em class=\"keyword\">Hi</em>-<em class=\"",
+   "code": 0,
+   "quality": 64,
+   "flac": null,
+   "dolby_type": 0,
+   "dolby_audio": [],
+   "audio": [
+    {
+     "id": 30232,
+     "bw": 103970
+    },
+    {
+     "id": 30216,
+     "bw": 65722
+    },
+    {
+     "id": 30280,
+     "bw": 103970
+    }
+   ]
+  },
+  {
+   "bvid": "BV1PS4A6DEWc",
+   "title": "【𝐇𝐢-𝐑𝐞𝐬<em class=\"keyword\">无损</em>音质】｜《연",
+   "code": 0,
+   "quality": 64,
+   "flac": true,
+   "dolby_type": 0,
+   "dolby_audio": [],
+   "audio": [
+    {
+     "id": 30232,
+     "bw": 100891
+    },
+    {
+     "id": 30216,
+     "bw": 65737
+    },
+    {
+     "id": 30280,
+     "bw": 211390
+    }
+   ]
+  }
+ ],
+ "qn_effect": {
+  "bvid": "BV1jQst6BEf2",
+  "cid": 43736043019,
+  "runs": [
+   {
+    "qn": 127,
+    "quality": 64,
+    "audio": [
+     {
+      "id": 30232,
+      "bw": 112929
+     },
+     {
+      "id": 30216,
+      "bw": 66358
+     },
+     {
+      "id": 30280,
+      "bw": 232254
+     }
+    ],
+    "video_ids": [
+     32,
+     32,
+     16,
+     16
+    ]
+   },
+   {
+    "qn": 80,
+    "quality": 64,
+    "audio": [
+     {
+      "id": 30232,
+      "bw": 112929
+     },
+     {
+      "id": 30280,
+      "bw": 232254
+     },
+     {
+      "id": 30216,
+      "bw": 66358
+     }
+    ],
+    "video_ids": [
+     32,
+     32,
+     16,
+     16
+    ]
+   },
+   {
+    "qn": 64,
+    "quality": 64,
+    "audio": [
+     {
+      "id": 30232,
+      "bw": 112929
+     },
+     {
+      "id": 30216,
+      "bw": 66358
+     },
+     {
+      "id": 30280,
+      "bw": 232254
+     }
+    ],
+    "video_ids": [
+     32,
+     32,
+     16,
+     16
+    ]
+   },
+   {
+    "qn": 32,
+    "quality": 32,
+    "audio": [
+     {
+      "id": 30216,
+      "bw": 66358
+     },
+     {
+      "id": 30280,
+      "bw": 232254
+     },
+     {
+      "id": 30232,
+      "bw": 112929
+     }
+    ],
+    "video_ids": [
+     32,
+     32,
+     16,
+     16
+    ]
+   },
+   {
+    "qn": 16,
+    "quality": 16,
+    "audio": [
+     {
+      "id": 30216,
+      "bw": 66358
+     },
+     {
+      "id": 30280,
+      "bw": 232254
+     },
+     {
+      "id": 30232,
+      "bw": 112929
+     }
+    ],
+    "video_ids": [
+     32,
+     32,
+     16,
+     16
+    ]
+   },
+   {
+    "qn": 6,
+    "quality": 16,
+    "audio": [
+     {
+      "id": 30280,
+      "bw": 232254
+     },
+     {
+      "id": 30216,
+      "bw": 66358
+     },
+     {
+      "id": 30232,
+      "bw": 112929
+     }
+    ],
+    "video_ids": [
+     32,
+     32,
+     16,
+     16
+    ]
+   }
+  ]
+ },
+ "movie_rank": {
+  "code": 0,
+  "n": 48,
+  "first": [
+   {
+    "season_id": 48411,
+    "title": "水饺皇后",
+    "badge": "大会员"
+   },
+   {
+    "season_id": 105070,
+    "title": "私家侦探",
+    "badge": "大会员"
+   },
+   {
+    "season_id": 95687,
+    "title": "摇滚诗人：未知的传奇",
+    "badge": "大会员"
+   }
+  ]
+ },
+ "movie_playurl": [
+  {
+   "season_id": 48411,
+   "title": "水饺皇后",
+   "ep_id": 1784701,
+   "ep_duration": 7182000,
+   "badge": "会员",
+   "code": 0,
+   "message": "success",
+   "is_preview": 1,
+   "quality": 32,
+   "dash_duration": null,
+   "audio": [],
+   "durl_len": [
+    360708
+   ],
+   "durl_size": [
+    15913220
+   ]
+  },
+  {
+   "season_id": 105070,
+   "title": "私家侦探",
+   "ep_id": 1925721,
+   "ep_duration": 6148000,
+   "badge": "会员",
+   "code": 0,
+   "message": "success",
+   "is_preview": 1,
+   "quality": 32,
+   "dash_duration": null,
+   "audio": [],
+   "durl_len": [
+    360708
+   ],
+   "durl_size": [
+    15281761
+   ]
+  }
+ ],
+ "pugv": {
+  "note": "search-based course lookup skipped; endpoint probed separately"
+ },
+ "cookie_dbs": {
+  "chrome": {
+   "exists": true,
+   "path": "C:\\Users\\XISHENSOFT\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Network\\Cookies"
+  },
+  "edge": {
+   "exists": true,
+   "path": "C:\\Users\\XISHENSOFT\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Network\\Cookies"
+  },
+  "firefox": {
+   "exists": true,
+   "path": "C:\\Users\\XISHENSOFT\\AppData\\Roaming\\Mozilla\\Firefox\\Profiles"
+  },
+  "firefox_profiles": [
+   "59qrifyn.default-release",
+   "5jcy2nuf.default",
+   "m0qbpvla.default-esr",
+   "profiles.log"
+  ]
+ }
+}

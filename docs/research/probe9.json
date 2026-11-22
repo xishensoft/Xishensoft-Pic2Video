@@ -1,0 +1,160 @@
+{
+ "av2bv": [
+  {
+   "aid": 170001,
+   "code": 0,
+   "api_bvid": "BV17x411w7KC",
+   "algo": "BVFFFFFFFFFs5A"
+  },
+  {
+   "aid": 2,
+   "code": 0,
+   "api_bvid": "BV1xx411c7mD",
+   "algo": "BVFFFFFFFFFFFw"
+  },
+  {
+   "aid": 117562180376697,
+   "code": 0,
+   "api_bvid": "BV1bw4t6fET9",
+   "algo": "BVuFF7d5FVFwTw"
+  },
+  {
+   "aid": 1,
+   "code": 62002,
+   "api_bvid": null,
+   "algo": "BVFFFFFFFFFFFc"
+  }
+ ],
+ "p_param": [
+  {
+   "p": 1,
+   "code": 0,
+   "message": "OK",
+   "cid": 43721230307,
+   "part": "开幕"
+  },
+  {
+   "p": 2,
+   "code": 0,
+   "message": "OK",
+   "cid": 43721230307,
+   "part": "第1期：仿若天堂"
+  },
+  {
+   "p": 3,
+   "code": 0,
+   "message": "OK",
+   "cid": 43721230307,
+   "part": "第2期：垂钓"
+  },
+  {
+   "p": 999,
+   "code": 0,
+   "message": "OK",
+   "cid": 43721230307,
+   "part": null
+  }
+ ],
+ "bad_cid": [
+  {
+   "cid": 1,
+   "code": -404,
+   "message": "啥都木有",
+   "data_null": true
+  },
+  {
+   "cid": 99999999999,
+   "code": -404,
+   "message": "啥都木有",
+   "data_null": true
+  }
+ ],
+ "invisible_bv_playurl": {
+  "code": -404,
+  "message": "啥都木有"
+ },
+ "unsigned_old_api": {
+  "code": 0,
+  "message": "OK",
+  "quality": 64,
+  "has_dash": true
+ },
+ "unsigned_wbi_api": {
+  "code": 0,
+  "message": "OK"
+ },
+ "share": [
+  {
+   "url": "https://api.bilibili.com/x/share/click",
+   "bvid": "BV1jQst6BEf2",
+   "code": "exception",
+   "message": "<HTTPError 405: 'Method Not Allowed'>",
+   "short": null
+  },
+  {
+   "url": "https://api.bilibili.com/x/share/click",
+   "bvid": "BV1jQst6BEf2",
+   "code": "exception",
+   "message": "<HTTPError 405: 'Method Not Allowed'>",
+   "short": null
+  },
+  {
+   "url": "https://api.bilibili.com/x/share/click",
+   "bvid": "BV1bw4t6fET9",
+   "code": "exception",
+   "message": "<HTTPError 405: 'Method Not Allowed'>",
+   "short": null
+  },
+  {
+   "url": "https://api.bilibili.com/x/share/click",
+   "bvid": "BV1bw4t6fET9",
+   "code": "exception",
+   "message": "<HTTPError 405: 'Method Not Allowed'>",
+   "short": null
+  }
+ ],
+ "durl_meta": {
+  "code": 0,
+  "quality": 64,
+  "format": "mp4720",
+  "size": [
+   1477237
+  ],
+  "length": [
+   21162
+  ]
+ },
+ "durl_download": {
+  "path": "E:\\deepseek\\FM114.5\\.scratch\\pic2video\\probe\\durl_test.mp4",
+  "bytes": 1477237
+ },
+ "durl_ffprobe": {
+  "programs": [],
+  "stream_groups": [],
+  "streams": [
+   {
+    "index": 0,
+    "codec_name": "h264",
+    "codec_type": "video",
+    "duration": "21.160000",
+    "bit_rate": "321602"
+   },
+   {
+    "index": 1,
+    "codec_name": "aac",
+    "codec_type": "audio",
+    "sample_rate": "48000",
+    "channels": 2,
+    "duration": "21.162667",
+    "bit_rate": "230233"
+   }
+  ]
+ },
+ "durl_ffprobe_format": {
+  "format": {
+   "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+   "duration": "21.162667",
+   "bit_rate": "558431"
+  }
+ }
+}

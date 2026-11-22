@@ -1,0 +1,353 @@
+{
+ "BV1jQst6BEf2": {
+  "bvid": "BV1jQst6BEf2",
+  "dur": 22,
+  "play_code": 0,
+  "dash_dur": 22,
+  "audios": [
+   {
+    "id": 30232,
+    "bandwidth": 112929,
+    "mime": "audio/mp4",
+    "codecs": "mp4a.40.2",
+    "url_host": "xy220x180x77x46xy.mcdn.bilivideo.cn:8082",
+    "probe": {
+     "codec": "aac",
+     "sample_rate": "48000",
+     "channels": 2,
+     "layout": "stereo",
+     "stream_bitrate": "115894",
+     "stream_dur": "21.162667",
+     "fmt_dur": "21.162667",
+     "fmt_bitrate": "112967",
+     "fmt_size": "298837"
+    }
+   },
+   {
+    "id": 30280,
+    "bandwidth": 232254,
+    "mime": "audio/mp4",
+    "codecs": "mp4a.40.2",
+    "url_host": "xy223x242x43x141xy.mcdn.bilivideo.cn:8082",
+    "probe": {
+     "codec": "aac",
+     "sample_rate": "48000",
+     "channels": 2,
+     "layout": "stereo",
+     "stream_bitrate": "227866",
+     "stream_dur": "21.162667",
+     "fmt_dur": "21.162667",
+     "fmt_bitrate": "232292",
+     "fmt_size": "614490"
+    }
+   },
+   {
+    "id": 30216,
+    "bandwidth": 66358,
+    "mime": "audio/mp4",
+    "codecs": "mp4a.40.2",
+    "url_host": "xy223x242x43x224xy.mcdn.bilivideo.cn:8082",
+    "probe": {
+     "codec": "aac",
+     "sample_rate": "48000",
+     "channels": 2,
+     "layout": "stereo",
+     "stream_bitrate": "65462",
+     "stream_dur": "21.162667",
+     "fmt_dur": "21.162667",
+     "fmt_bitrate": "66396",
+     "fmt_size": "175640"
+    }
+   }
+  ],
+  "head_hashes": {
+   "30232": [
+    "441632f0730b6dc357a390d245e6d353",
+    206,
+    "bytes 0-262143/298837"
+   ],
+   "30280": [
+    "18be3f584b6303bc90de97a64746b72b",
+    206,
+    "bytes 0-262143/614490"
+   ],
+   "30216": [
+    "6fbdf071e11415f4026dd0573379716e",
+    200,
+    "bytes 0-175639/175640"
+   ]
+  },
+  "download": {
+   "id": 30280,
+   "rc": 0,
+   "err": "",
+   "size": 613864,
+   "probe": {
+    "codec": "aac",
+    "sample_rate": "48000",
+    "channels": 2,
+    "layout": "stereo",
+    "stream_bitrate": "230233",
+    "stream_dur": "21.162667",
+    "fmt_dur": "21.162667",
+    "fmt_bitrate": "232055",
+    "fmt_size": "613864"
+   }
+  },
+  "to_wav": {
+   "rc": 0,
+   "probe": {
+    "codec": "pcm_s16le",
+    "sample_rate": "16000",
+    "channels": 1,
+    "layout": null,
+    "stream_bitrate": "256000",
+    "stream_dur": "21.162688",
+    "fmt_dur": "21.162688",
+    "fmt_bitrate": "256029",
+    "fmt_size": "677284"
+   }
+  }
+ },
+ "BV1ALs465E2V": {
+  "bvid": "BV1ALs465E2V",
+  "dur": 190,
+  "play_code": 0,
+  "dash_dur": 190,
+  "audios": [
+   {
+    "id": 30232,
+    "bandwidth": 90184,
+    "mime": "audio/mp4",
+    "codecs": "mp4a.40.2",
+    "url_host": "xy220x180x77x46xy.mcdn.bilivideo.cn:8082",
+    "probe": {
+     "codec": "aac",
+     "sample_rate": "48000",
+     "channels": 2,
+     "layout": "stereo",
+     "stream_bitrate": "98966",
+     "stream_dur": "189.376000",
+     "fmt_dur": "189.376000",
+     "fmt_bitrate": "90205",
+     "fmt_size": "2135346"
+    }
+   },
+   {
+    "id": 30216,
+    "bandwidth": 65708,
+    "mime": "audio/mp4",
+    "codecs": "mp4a.40.2",
+    "url_host": "xy223x244x9x57xy.mcdn.bilivideo.cn:8082",
+    "probe": {
+     "codec": "aac",
+     "sample_rate": "48000",
+     "channels": 2,
+     "layout": "stereo",
+     "stream_bitrate": "65619",
+     "stream_dur": "189.376000",
+     "fmt_dur": "189.376000",
+     "fmt_bitrate": "65729",
+     "fmt_size": "1555954"
+    }
+   },
+   {
+    "id": 30280,
+    "bandwidth": 180678,
+    "mime": "audio/mp4",
+    "codecs": "mp4a.40.2",
+    "url_host": "xy114x98x180x246xy.mcdn.bilivideo.cn:8082",
+    "probe": {
+     "codec": "aac",
+     "sample_rate": "48000",
+     "channels": 2,
+     "layout": "stereo",
+     "stream_bitrate": "185963",
+     "stream_dur": "189.376000",
+     "fmt_dur": "189.376000",
+     "fmt_bitrate": "180699",
+     "fmt_size": "4277529"
+    }
+   }
+  ],
+  "head_hashes": {
+   "30232": [
+    "0248c185261c8b4182c6adfb54aba3c2",
+    206,
+    "bytes 0-262143/2135346"
+   ],
+   "30216": [
+    "129e66251b56586726300cf6f06d78e2",
+    206,
+    "bytes 0-262143/1555954"
+   ],
+   "30280": [
+    "1af9d87e155771b4855a8fe118112e37",
+    206,
+    "bytes 0-262143/4277529"
+   ]
+  },
+  "download": {
+   "id": 30280,
+   "rc": 0,
+   "err": "",
+   "size": 4274675,
+   "probe": {
+    "codec": "aac",
+    "sample_rate": "48000",
+    "channels": 2,
+    "layout": "stereo",
+    "stream_bitrate": "179040",
+    "stream_dur": "189.376000",
+    "fmt_dur": "189.376000",
+    "fmt_bitrate": "180579",
+    "fmt_size": "4274675"
+   }
+  },
+  "to_wav": {
+   "rc": 0,
+   "probe": {
+    "codec": "pcm_s16le",
+    "sample_rate": "16000",
+    "channels": 1,
+    "layout": null,
+    "stream_bitrate": "256000",
+    "stream_dur": "189.376000",
+    "fmt_dur": "189.376000",
+    "fmt_bitrate": "256003",
+    "fmt_size": "6060110"
+   }
+  }
+ },
+ "BV13qs46FE9C": {
+  "bvid": "BV13qs46FE9C",
+  "dur": 662,
+  "play_code": 0,
+  "dash_dur": 662,
+  "audios": [
+   {
+    "id": 30232,
+    "bandwidth": 100988,
+    "mime": "audio/mp4",
+    "codecs": "mp4a.40.2",
+    "url_host": "xy223x244x9x57xy.mcdn.bilivideo.cn:8082",
+    "probe": {
+     "codec": "aac",
+     "sample_rate": "48000",
+     "channels": 2,
+     "layout": "stereo",
+     "stream_bitrate": "92571",
+     "stream_dur": "661.376000",
+     "fmt_dur": "661.376000",
+     "fmt_bitrate": "101008",
+     "fmt_size": "8350555"
+    }
+   },
+   {
+    "id": 30280,
+    "bandwidth": 100988,
+    "mime": "audio/mp4",
+    "codecs": "mp4a.40.2",
+    "url_host": "xy220x180x77x45xy.mcdn.bilivideo.cn:8082",
+    "probe": {
+     "codec": "aac",
+     "sample_rate": "48000",
+     "channels": 2,
+     "layout": "stereo",
+     "stream_bitrate": "92571",
+     "stream_dur": "661.376000",
+     "fmt_dur": "661.376000",
+     "fmt_bitrate": "101008",
+     "fmt_size": "8350555"
+    }
+   },
+   {
+    "id": 30216,
+    "bandwidth": 65687,
+    "mime": "audio/mp4",
+    "codecs": "mp4a.40.2",
+    "url_host": "xy114x98x180x246xy.mcdn.bilivideo.cn:8082",
+    "probe": {
+     "codec": "aac",
+     "sample_rate": "48000",
+     "channels": 2,
+     "layout": "stereo",
+     "stream_bitrate": "65384",
+     "stream_dur": "661.376000",
+     "fmt_dur": "661.376000",
+     "fmt_bitrate": "65706",
+     "fmt_size": "5432112"
+    }
+   }
+  ],
+  "head_hashes": {
+   "30232": [
+    "ac6e0a216d8e99e1b578392da900151e",
+    206,
+    "bytes 0-262143/8350555"
+   ],
+   "30280": [
+    "ac6e0a216d8e99e1b578392da900151e",
+    206,
+    "bytes 0-262143/8350555"
+   ],
+   "30216": [
+    "d21b04049d2d17f5650576cefb0ebaeb",
+    206,
+    "bytes 0-262143/5432112"
+   ]
+  },
+  "download": {
+   "id": 30232,
+   "rc": 0,
+   "err": "",
+   "size": 8334801,
+   "probe": {
+    "codec": "aac",
+    "sample_rate": "48000",
+    "channels": 2,
+    "layout": "stereo",
+    "stream_bitrate": "99306",
+    "stream_dur": "661.376000",
+    "fmt_dur": "661.376000",
+    "fmt_bitrate": "100817",
+    "fmt_size": "8334801"
+   }
+  },
+  "to_wav": {
+   "rc": 0,
+   "probe": {
+    "codec": "pcm_s16le",
+    "sample_rate": "16000",
+    "channels": 1,
+    "layout": null,
+    "stream_bitrate": "256000",
+    "stream_dur": "661.376000",
+    "fmt_dur": "661.376000",
+    "fmt_bitrate": "256000",
+    "fmt_size": "21164110"
+   }
+  }
+ },
+ "durl_BV1bw4t6fET9": {
+  "quality": 64,
+  "format": "mp4720",
+  "durl": [
+   {
+    "size": 130968736,
+    "length": 1980970,
+    "probe": {
+     "codec": "h264",
+     "sample_rate": null,
+     "channels": null,
+     "layout": null,
+     "stream_bitrate": "435879",
+     "stream_dur": "1980.960000",
+     "fmt_dur": "1980.970667",
+     "fmt_bitrate": "528907",
+     "fmt_size": "130968736"
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,39 @@
+{
+ "chromium_header_err": "<HTTPError 404: 'Not Found'>",
+ "chrome": {
+  "exists": true,
+  "copy_err": "PermissionError(13, '另一个程序正在使用此文件，进程无法访问。', None, 32, None)"
+ },
+ "edge": {
+  "exists": true,
+  "total": 202,
+  "prefix_counts": [
+   [
+    "7632",
+    202
+   ]
+  ],
+  "bilibili_rows": 17,
+  "bilibili_cookie_names": [
+   "DedeUserID",
+   "DedeUserID__ckMd5",
+   "SESSDATA",
+   "_uuid",
+   "b_nut",
+   "bili_jct",
+   "buvid3",
+   "buvid4",
+   "buvid_fp",
+   "default_sites",
+   "sid"
+  ]
+ },
+ "firefox": {
+  "m0qbpvla.default-esr": {
+   "total": 8,
+   "bilibili_rows": 0,
+   "sessdata_present": false,
+   "sessdata_len": 0
+  }
+ }
+}
