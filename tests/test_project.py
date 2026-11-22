@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """时间线/帧数/设置/filtergraph 的单元检查（不碰 GUI；只碰 ffmpeg 的地方用错误路径）。"""
-import os, sys, random, subprocess, tempfile
+import json, os, sys, random, subprocess, tempfile
 try:                      # 控制台是 GBK，日/韩文本会炸，统一用 UTF-8 输出
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:         # noqa: BLE001
@@ -997,6 +997,214 @@ for _p2 in (_out2, _vid2):
         os.remove(_p2)
     except OSError:
         pass
+
+# ---------------- 34 工程文件：格式与版本号
+_pr34 = p.Project(fps=60)
+_pr34.add_images(IMG[:2], 2.0)
+_pr34.audios.append(p.AudioClip(os.path.join(FIXTURES, "tone6.m4a"), 6.0, 1.5, 0.8))
+_pr34.mode = "total"
+_pr34.total_setting = 9.0
+_doc34 = _pr34.to_doc()
+check("工程格式带版本号", _doc34.get("version") == p.PROJECT_VERSION == 1,
+      _doc34.get("version"))
+check("工程格式：片段是 dict 不是元组",
+      isinstance(_doc34["clips"][0], dict)
+      and {"path", "dur", "kind", "fade", "xfade"} <= set(_doc34["clips"][0]))
+check("工程格式：音频是 dict 不是元组",
+      isinstance(_doc34["audios"][0], dict)
+      and {"path", "dur", "start", "volume", "gap"} <= set(_doc34["audios"][0]))
+check("工程格式能直接 json 化",
+      (lambda d: (json.dumps(d), True)[1])(_doc34))
+_back34 = p.Project.from_doc(_doc34)
+check("往返：素材与时长一致",
+      [c.path for c in _back34.clips] == [c.path for c in _pr34.clips]
+      and [round(c.dur, 6) for c in _back34.clips] == [round(c.dur, 6) for c in _pr34.clips])
+check("往返：音频一致",
+      len(_back34.audios) == 1
+      and abs(_back34.audios[0].start - 1.5) < 1e-9
+      and abs(_back34.audios[0].volume - 0.8) < 1e-9
+      and _back34.audios[0].path == _pr34.audios[0].path)
+check("往返：节奏/总长/fps 一致",
+      _back34.mode == "total" and abs(_back34.total_setting - 9.0) < 1e-9
+      and _back34.fps == 60)
+
+# 缺字段给默认值（老格式/手写文件不该炸）
+_loose34 = p.Project.from_doc({"version": 1, "clips": [
+    {"path": IMG[0], "dur": 2.0}]})
+check("缺字段给默认值",
+      len(_loose34.clips) == 1 and _loose34.clips[0].kind == "image"
+      and _loose34.clips[0].fade is False and _loose34.clips[0].xfade is False
+      and _loose34.mode == "bgm")
+
+def _reason34(doc):
+    try:
+        p.Project.from_doc(doc)
+    except p.ProjectFileError as exc:
+        return exc.reason
+    return ""
+
+check("版本比软件新时拒绝",
+      _reason34({"version": p.PROJECT_VERSION + 1, "clips": []}) == "newer")
+check("不是 dict 就拒绝", _reason34(None) == "bad-shape")
+check("缺版本号就拒绝", _reason34({"clips": []}) == "bad-shape")
+check("clips 不是列表就拒绝",
+      _reason34({"version": 1, "clips": "oops"}) == "bad-shape")
+check("片段缺 path 就拒绝",
+      _reason34({"version": 1, "clips": [{"dur": 1.0}]}) == "bad-shape")
+check("撤销快照仍走同一套格式",
+      _pr34.to_state()["clips"][0]["path"] == _pr34.clips[0].path
+      and _pr34.to_state()["version"] == p.PROJECT_VERSION)
+
+# ---------------- 35 工程文件：存盘 / 读回 / 出错分类
+_dir35 = tempfile.mkdtemp(prefix="p2v_doc_")
+_path35 = os.path.join(_dir35, "我的工程.p2v")
+p.save_project(_pr34, _path35)
+check("存盘后文件在", os.path.isfile(_path35))
+check("存盘不留 .tmp", not os.path.exists(_path35 + ".tmp"))
+_l35 = p.load_project(_path35)
+check("读回来内容一致",
+      [c.path for c in _l35.clips] == [c.path for c in _pr34.clips]
+      and _l35.mode == "total" and abs(_l35.total_setting - 9.0) < 1e-9)
+_cn35 = os.path.join(_dir35, "中文素材.png")
+open(_cn35, "wb").write(b"x")
+_pr35 = p.Project()
+_pr35.clips = [p.Clip(_cn35, 2.0)]
+_cn_doc35 = os.path.join(_dir35, "中文工程.p2v")
+p.save_project(_pr35, _cn_doc35)
+_raw35 = open(_cn_doc35, encoding="utf-8").read()
+check("存盘带版本号", '"version": 1' in _raw35, _raw35[:40])
+check("存盘不转义中文", "中文素材" in _raw35)
+check("中文路径能读回", p.load_project(_cn_doc35).clips[0].path == _cn35)
+
+def _reason35(fn):
+    try:
+        fn()
+    except p.ProjectFileError as exc:
+        return exc.reason
+    return ""
+
+check("打开不存在的文件 -> missing",
+      _reason35(lambda: p.load_project(os.path.join(_dir35, "nope.p2v")))
+      == "missing")
+_bad35 = os.path.join(_dir35, "bad.p2v")
+open(_bad35, "w", encoding="utf-8").write("{oops")
+check("坏 JSON -> bad-json",
+      _reason35(lambda: p.load_project(_bad35)) == "bad-json")
+_new35 = os.path.join(_dir35, "newer.p2v")
+open(_new35, "w", encoding="utf-8").write(
+    json.dumps({"version": p.PROJECT_VERSION + 1, "clips": []}))
+check("更新版本的工程 -> newer",
+      _reason35(lambda: p.load_project(_new35)) == "newer")
+_shape35 = os.path.join(_dir35, "shape.p2v")
+open(_shape35, "w", encoding="utf-8").write(json.dumps([1, 2]))
+check("内容不是对象 -> bad-shape",
+      _reason35(lambda: p.load_project(_shape35)) == "bad-shape")
+check("写到不存在的目录 -> write-failed",
+      _reason35(lambda: p.save_project(
+          _pr34, os.path.join(_dir35, "no", "dir", "x.p2v")))
+      == "write-failed")
+check("新存的能覆盖旧的",
+      (p.save_project(_pr35, _cn_doc35),
+       p.load_project(_cn_doc35).clips[0].path == _cn35)[1])
+
+# ---------------- 36 自动保存
+_dir36 = tempfile.mkdtemp(prefix="p2v_auto_")
+_auto36 = os.path.join(_dir36, "autosave.p2v")
+_t36 = {"now": 1000.0}
+_saver36 = p.AutoSaver(_auto36, interval=15.0, clock=lambda: _t36["now"])
+check("没有改动就不写",
+      _saver36.tick(_pr34) is False and not os.path.exists(_auto36))
+_saver36.mark_dirty()
+_t36["now"] = 1010.0
+check("还没到间隔不写",
+      _saver36.tick(_pr34) is False and not os.path.exists(_auto36))
+_t36["now"] = 1015.0
+check("到点就写一份",
+      _saver36.tick(_pr34) is True and os.path.isfile(_auto36))
+check("写过的能读回",
+      p.load_project(_auto36).clips[0].path == _pr34.clips[0].path)
+check("写完不重复写", _saver36.tick(_pr34) is False)
+check("能认出有残留", p.AutoSaver.restorable(_auto36) is True)
+_t36["now"] = 1100.0
+_saver36.mark_dirty()
+_t36["now"] = 1115.0
+check("又改了会再写", _saver36.tick(_pr34) is True)
+_saver36.clear()
+check("清掉自动保存",
+      _saver36.clear() is None and not os.path.exists(_auto36))
+check("没残留时不提示", p.AutoSaver.restorable(_auto36) is False)
+_bad36 = os.path.join(_dir36, "bad.p2v")
+open(_bad36, "w", encoding="utf-8").write("{oops")
+check("坏残留不提示", p.AutoSaver.restorable(_bad36) is False)
+
+# ---------------- 37 最近打开的工程
+_dir37 = tempfile.mkdtemp(prefix="p2v_recent_")
+_sp37 = os.path.join(_dir37, "settings.json")
+_s37 = p.Settings(_sp37)
+_paths37 = []
+for _i in range(10):
+    _f37 = os.path.join(_dir37, "工程%d.p2v" % _i)
+    open(_f37, "w", encoding="utf-8").write("{}")
+    _paths37.append(_f37)
+for _f37 in _paths37:
+    _s37.push_recent(_f37)
+check("最近打开最多 8 条", len(_s37.recent()) == 8, len(_s37.recent()))
+check("最近打开：新的在前", _s37.recent()[0] == _paths37[-1])
+_s37.push_recent(_paths37[0])
+check("最近打开：重开过的置顶且不重复",
+      _s37.recent()[0] == _paths37[0]
+      and _s37.recent().count(_paths37[0]) == 1
+      and len(_s37.recent()) == 8)
+os.remove(_paths37[3])
+check("最近打开：文件没了就不列", _paths37[3] not in _s37.recent())
+check("最近打开：列出来的都还在",
+      all(os.path.isfile(x) for x in _s37.recent()))
+check("最近打开能跨次启动",
+      p.Settings(_sp37).recent()[:1] == [_paths37[0]])
+check("最近打开不吃空路径",
+      (lambda s: (s.push_recent(""), s.push_recent(None),
+                  s.recent()[0] == _paths37[0])[2])(p.Settings(_sp37)))
+
+# ---------------- 38 缺素材
+_miss38 = p.Project()
+_miss38.audios = [p.AudioClip(os.path.join(_dir35, "nope.m4a"), 5.0)]
+_miss38.clips = [p.Clip(IMG[0], 2.0), p.Clip(os.path.join(_dir35, "nope.png"), 2.0)]
+check("缺的素材能列全（图片 + 音频）",
+      _miss38.missing_media() == [os.path.join(_dir35, "nope.png"),
+                                  os.path.join(_dir35, "nope.m4a")],
+      _miss38.missing_media())
+check("素材都在就没缺",
+      p.Project.from_doc({"version": 1, "clips": [
+          {"path": IMG[0], "dur": 1.0}]}).missing_media() == [])
+check("同一个文件只报一次",
+      (lambda pr: (pr.clips.append(p.Clip(pr.clips[-1].path, 1.0)),
+                   len(pr.missing_media()))[1])(_miss38) == 2)
+check("空工程没有缺素材", p.Project().missing_media() == [])
+
+# ---------------- 39 工程菜单 / 自动保存接线（源码级）
+check("工具栏有「工程」入口", "self.btn_project = QToolButton()" in src)
+check("工程菜单：新建/打开/保存/另存为",
+      'tr("新建工程")' in src and 'tr("打开工程…")' in src
+      and 'tr("保存工程")' in src and 'tr("另存为…")' in src)
+check("工程菜单有最近打开",
+      "self.menu_recent" in src and "def _refresh_recent_menu" in src)
+check("Ctrl+N/O/S 都绑上了",
+      '"Ctrl+N"' in src and '"Ctrl+O"' in src and '"Ctrl+S"' in src)
+check("标题带工程名和改动点",
+      "def _refresh_title" in src and 'star = " ●"' in src)
+check("关窗前问存不存（保存/不保存/取消）",
+      "def _confirm_discard" in src and 'tr("不保存")' in src
+      and 'tr("保存")' in src)
+check("自动保存定时器",
+      "self.autosave_timer" in src and "def _autosave_tick" in src)
+check("启动时能恢复自动保存", "def _maybe_restore_autosave" in src)
+check("打开工程时缺素材会提示",
+      "def _warn_missing" in src and "missing_media()" in src)
+check("保存/不保存后清掉自动保存", "self.autosaver.clear()" in src)
+check("打开过的记进最近列表", "self.settings.push_recent(" in src)
+check("自动保存落在数据目录",
+      'os.path.join(components.data_dir(),' in src)
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

@@ -185,6 +185,28 @@ def unique_path(directory: str, stem: str, ext: str = ".mp4") -> str:
 
 SETTINGS_PATH = components.settings_path()   # 打包后跟着 exe 走，目录不可写就放 LOCALAPPDATA
 
+# ---------------------------------------------------------------- 工程文件
+# .p2v 是带版本号的 JSON。改格式就 +1，并在这里写往上迁移的分支。
+PROJECT_VERSION = 1
+PROJECT_SUFFIX = ".p2v"
+PROJECT_FILTER = "Pic2Video 工程 (*.p2v)"
+
+
+class ProjectFileError(Exception):
+    """工程文件读写出错。
+
+    reason 给程序分支用：
+      missing      文件不在了
+      bad-json     不是 JSON（或编码坏了）
+      bad-shape    是 JSON 但不像本软件的工程
+      newer        更新版本写的，读不了
+      write-failed 写不进去（磁盘满 / 只读 / 没权限）
+    """
+
+    def __init__(self, reason: str, message: str = ""):
+        super().__init__(message or reason)
+        self.reason = reason
+
 FIT_MODES = ("own", "color", "image", "video", "cover")
 FIT_LABELS = {"own": "原图铺底", "color": "纯色留白",
               "image": "自定义背景图", "video": "自定义背景视频",
@@ -279,6 +301,7 @@ class Settings:
         "transition_sec": 0.3,
         "export_dir": "",         # 空 = 图片所在目录
         "last_export_dir": "",
+        "recent_projects": [],    # 最近打开的工程（最多 8 条，新的在前）
         "lang": SYSTEM,           # 界面语言：auto 跟随系统 / zh-CN / zh-TW / en / ja / ko
         "ui": "simple",           # 界面模式：simple 简洁（默认）/ pro 专业
         "theme": "auto",          # 外观：auto 跟随系统 / light / dark
@@ -330,6 +353,29 @@ class Settings:
         except OSError:
             pass  # 目录只读之类，设置存不下不该拖垮导出
 
+    RECENT_MAX = 8
+
+    # -- 最近打开的工程 ------------------------------------------------
+    def recent(self) -> list[str]:
+        """最近打开的工程，新的在前；磁盘上已经没有的顺手剔掉。"""
+        out: list[str] = []
+        for path in self.data.get("recent_projects") or []:
+            if (isinstance(path, str) and path and path not in out
+                    and os.path.isfile(path)):
+                out.append(path)
+        return out[:self.RECENT_MAX]
+
+    def push_recent(self, path: str | None) -> None:
+        """记一条最近打开：置顶、去重、最多 8 条，马上落盘。"""
+        if not isinstance(path, str) or not path:
+            return
+        path = os.path.abspath(path)
+        cur = [p for p in (self.data.get("recent_projects") or [])
+               if isinstance(p, str) and p and p != path]
+        cur.insert(0, path)
+        self.data["recent_projects"] = cur[:self.RECENT_MAX]
+        self.save()
+
     def _sanitize(self) -> None:
         d = self.data
         if d.get("mode") not in MODE_LABELS:
@@ -373,6 +419,10 @@ class Settings:
                     "intro_path", "outro_path"):
             if not isinstance(d.get(key), str):
                 d[key] = ""
+        rec = d.get("recent_projects")
+        d["recent_projects"] = ([p for p in rec
+                                 if isinstance(p, str) and p][:self.RECENT_MAX]
+                                if isinstance(rec, list) else [])
         if d.get("win_mode") not in WIN_MODES:
             d["win_mode"] = "remember"
         for key, lo, hi in (("win_fixed_w", 800, 8000),
@@ -505,6 +555,14 @@ def _media_dur(path: str) -> float:
     return d if d > 0.05 else 3.0
 
 
+def _doc_num(value, default: float) -> float:
+    """工程文件里的数字：读不出来就用默认值，别让一个字段废掉整份文件。"""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 class Project:
     """时间线模型：片头 + 图片序列 + 片尾，外加一条或多条音频。
 
@@ -571,28 +629,101 @@ class Project:
             if a.gap:
                 a.volume = max(0.0, min(2.0, float(value)))
 
-    # -- 撤回 / 还原用的快照（素材与音频都很小，整份存下来最省事）---------
-    def to_state(self) -> dict:
+    # -- 工程文件 / 撤回快照（同一套格式：存盘和撤销都走 to_doc）------------
+    def to_doc(self) -> dict:
+        """整份工程：带版本号、能直接 json.dump。撤销栈存的也是这个。"""
         return {
-            "clips": [[c.path, c.dur, c.kind, c.fade, c.xfade]
-                      for c in self.clips],
-            "audios": [[a.path, a.dur, a.start, a.volume, a.gap]
-                       for a in self.audios],
+            "version": PROJECT_VERSION,
+            "app": {"name": "Pic2Video", "version": APP_VERSION},
+            "fps": int(self.fps),
             "mode": self.mode,
             "audio_start": self.audio_start,
             "audio_len": self.audio_len,
             "total_setting": self.total_setting,
+            "clips": [{"path": c.path, "dur": c.dur, "kind": c.kind,
+                       "fade": bool(c.fade), "xfade": bool(c.xfade)}
+                      for c in self.clips],
+            "audios": [{"path": a.path, "dur": a.dur, "start": a.start,
+                        "volume": a.volume, "gap": bool(a.gap)}
+                       for a in self.audios],
         }
 
+    @classmethod
+    def from_doc(cls, doc: dict) -> "Project":
+        project = cls()
+        project.load_doc(doc)
+        return project
+
+    def load_doc(self, doc: dict):
+        """按工程文件格式读入；坏文件一律抛 ProjectFileError，不半途改坏现场。"""
+        if not isinstance(doc, dict):
+            raise ProjectFileError("bad-shape", "工程内容不是一个对象")
+        version = doc.get("version")
+        if isinstance(version, bool) or not isinstance(version, int):
+            raise ProjectFileError("bad-shape", "工程文件没有版本号")
+        if version > PROJECT_VERSION:
+            raise ProjectFileError(
+                "newer", "工程是 %d 版格式，这个版本只认到 %d 版"
+                % (version, PROJECT_VERSION))
+        clips = doc.get("clips", [])
+        audios = doc.get("audios", [])
+        if not isinstance(clips, list) or not isinstance(audios, list):
+            raise ProjectFileError("bad-shape", "素材表不是列表")
+        new_clips = [self._clip_from_doc(raw) for raw in clips]
+        new_audios = [self._audio_from_doc(raw) for raw in audios]
+        mode = doc.get("mode")
+        self.clips = new_clips
+        self.audios = new_audios
+        self.mode = mode if mode in MODE_LABELS else "bgm"
+        self.audio_start = _doc_num(doc.get("audio_start"), 0.0)
+        self.audio_len = _doc_num(doc.get("audio_len"), 0.0)
+        self.total_setting = _doc_num(doc.get("total_setting"), 10.0)
+        self.fps = 60 if _doc_num(doc.get("fps"), FPS) >= 50 else 30
+
+    @staticmethod
+    def _clip_from_doc(raw) -> Clip:
+        if not isinstance(raw, dict):
+            raise ProjectFileError("bad-shape", "素材条目不是对象")
+        path = raw.get("path")
+        if not isinstance(path, str) or not path:
+            raise ProjectFileError("bad-shape", "素材条目缺 path")
+        kind = raw.get("kind", "image")
+        if kind not in ("image", "intro", "outro"):
+            raise ProjectFileError("bad-shape", "不认识的素材类型：%r" % (kind,))
+        return Clip(path, max(0.0, _doc_num(raw.get("dur"), 0.0)), kind,
+                    bool(raw.get("fade", False)),
+                    bool(raw.get("xfade", False)))
+
+    @staticmethod
+    def _audio_from_doc(raw) -> AudioClip:
+        if not isinstance(raw, dict):
+            raise ProjectFileError("bad-shape", "音频条目不是对象")
+        path = raw.get("path", "")
+        if not isinstance(path, str):
+            raise ProjectFileError("bad-shape", "音频条目的 path 不是文字")
+        return AudioClip(path, max(0.0, _doc_num(raw.get("dur"), 0.0)),
+                         _doc_num(raw.get("start"), 0.0),
+                         _doc_num(raw.get("volume"), 1.0),
+                         bool(raw.get("gap", False)))
+
+    # 撤销栈沿用的老名字，底下就是工程格式，别再长两套
+    def to_state(self) -> dict:
+        return self.to_doc()
+
     def load_state(self, state: dict):
-        self.clips = [Clip(p, d, k, f, x)
-                      for p, d, k, f, x in state.get("clips", [])]
-        self.audios = [AudioClip(p, d, s, v, g)
-                       for p, d, s, v, g in state.get("audios", [])]
-        self.mode = state.get("mode", "bgm")
-        self.audio_start = float(state.get("audio_start", 0.0))
-        self.audio_len = float(state.get("audio_len", 0.0))
-        self.total_setting = float(state.get("total_setting", 10.0))
+        if isinstance(state, dict) and "version" not in state:
+            state = dict(state, version=PROJECT_VERSION)   # 早期撤销快照
+        self.load_doc(state)
+
+    # -- 素材检查 ------------------------------------------------------
+    def missing_media(self) -> list[str]:
+        """工程里登记了、磁盘上已经不在了的素材（按出现顺序，去重）。"""
+        out: list[str] = []
+        for path in ([c.path for c in self.clips]
+                     + [a.path for a in self.audios]):
+            if path and path not in out and not os.path.exists(path):
+                out.append(path)
+        return out
 
     # -- 片段分类 ------------------------------------------------------
     def images(self) -> list[Clip]:
@@ -853,6 +984,115 @@ class Project:
             prev += n
         return counts
 
+
+
+# ---------------------------------------------------------------- 工程文件读写
+
+def save_project_doc(doc: dict, path: str) -> None:
+    """整份写出去：先写 .tmp 再改名，写到一半断掉也不会毁掉原工程。"""
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(doc, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+        os.replace(tmp, path)
+    except OSError as exc:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise ProjectFileError("write-failed", str(exc)) from exc
+
+
+def load_project_doc(path: str) -> dict:
+    """读成 dict。文件不在 / 不是 JSON / 不像工程，各自报不同的 reason。"""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except FileNotFoundError as exc:
+        raise ProjectFileError("missing", path) from exc
+    except UnicodeDecodeError as exc:
+        raise ProjectFileError("bad-json", str(exc)) from exc
+    except ValueError as exc:      # json 解析失败都是 ValueError
+        raise ProjectFileError("bad-json", str(exc)) from exc
+    except OSError as exc:
+        raise ProjectFileError("missing", str(exc)) from exc
+    if not isinstance(raw, dict):
+        raise ProjectFileError("bad-shape", "工程内容不是一个对象")
+    return raw
+
+
+def save_project(project: "Project", path: str) -> None:
+    save_project_doc(project.to_doc(), path)
+
+
+def load_project(path: str) -> "Project":
+    return Project.from_doc(load_project_doc(path))
+
+
+def project_error_text(exc: "ProjectFileError") -> str:
+    """把工程读写出错翻译成一句人话（弹窗正文用）。"""
+    detail = str(exc) if str(exc) != exc.reason else ""
+    if exc.reason == "missing":
+        return tr("文件不在了：") + (detail or tr("（路径没记住）"))
+    if exc.reason == "bad-json":
+        return tr("不是 JSON，读不出来：") + detail
+    if exc.reason == "bad-shape":
+        return tr("内容不像本软件的工程：") + detail
+    if exc.reason == "newer":
+        return tr("这个工程是更新版本的软件存的，先升级软件再打开。")
+    if exc.reason == "write-failed":
+        return tr("写不进去（磁盘满或者没有权限）：") + detail
+    return detail or exc.reason
+
+
+class AutoSaver:
+    """自动保存：改动以后隔 interval 秒写一份，崩溃/断电后下次启动能捞回来。
+
+    只有「保存」或「不保存」才清掉它；窗口标题上那个「有改动」是另一回事。
+    """
+
+    def __init__(self, path: str, interval: float = 15.0, clock=time.time):
+        self.path = path
+        self.interval = float(interval)
+        self._clock = clock
+        self._dirty_since: float | None = None
+
+    def mark_dirty(self) -> None:
+        if self._dirty_since is None:
+            self._dirty_since = self._clock()
+
+    def tick(self, project: "Project") -> bool:
+        """到点了就写一份；返回这次写没写。"""
+        if self._dirty_since is None:
+            return False
+        now = self._clock()
+        if now - self._dirty_since < self.interval:
+            return False
+        try:
+            save_project(project, self.path)
+        except ProjectFileError:
+            # 写不进去（只读盘之类）就过一会儿再试，别每个 tick 都撞盘
+            self._dirty_since = now
+            return False
+        self._dirty_since = None
+        return True
+
+    def clear(self) -> None:
+        self._dirty_since = None
+        try:
+            os.remove(self.path)
+        except OSError:
+            pass
+
+    @staticmethod
+    def restorable(path: str) -> bool:
+        """盘上有能读的自动保存吗？读不了就当没有，别拿坏文件烦用户。"""
+        try:
+            project = load_project(path)
+        except ProjectFileError:
+            return False
+        return bool(project.clips or project.audios)
 
 
 def set_mode(project: Project, mode: str) -> None:
@@ -3265,6 +3505,10 @@ def run_gui() -> int:
             self.history = []          # 撤回栈：每步一份项目 + 设置快照
             self.hist_index = -1
             self._hist_lock = True     # 建界面时不要记步骤
+            self.project_path = ""     # 当前工程文件；空 = 还没存过
+            self._dirty = False        # 有没有没存的改动
+            self.autosaver = AutoSaver(   # 崩溃/断电后救命的那份
+                os.path.join(components.data_dir(), "自动保存.p2v"), 15.0)
 
             self.player = QMediaPlayer(self)
             self.audio_out = QAudioOutput(self)
@@ -3289,6 +3533,7 @@ def run_gui() -> int:
             self._refresh_all()
             self._history_reset(tr("打开"))
             self._hist_lock = False
+            QTimer.singleShot(0, self._maybe_restore_autosave)
 
         def _bind_shortcuts(self):
             """按设置绑快捷键（默认照剪辑软件惯例，设置里能逐条改）。"""
@@ -3310,6 +3555,216 @@ def run_gui() -> int:
                 sc = QShortcut(QKeySequence(seq), self)
                 sc.activated.connect(slot)
                 self._shortcuts.append(sc)
+            # 工程文件这几个不进设置表：剪辑软件的习惯，固定住
+            for seq, slot in (("Ctrl+N", self.on_new_project),
+                              ("Ctrl+O", self.on_open_project),
+                              ("Ctrl+S", self.on_save_project),
+                              ("Ctrl+Shift+S", self.on_save_project_as)):
+                sc = QShortcut(QKeySequence(seq), self)
+                sc.activated.connect(slot)
+                self._shortcuts.append(sc)
+
+        # ---------------- 工程文件
+        def _project_name(self) -> str:
+            return (os.path.basename(self.project_path) if self.project_path
+                    else tr("未命名工程"))
+
+        def _project_dir(self) -> str:
+            if self.project_path:
+                return os.path.dirname(self.project_path)
+            return (self.settings["last_export_dir"]
+                    or os.path.expanduser("~"))
+
+        def _refresh_title(self):
+            """标题栏：工程名 + 有改动的小圆点。"""
+            star = " ●" if self._dirty else ""
+            text = f"{self._project_name()}{star} —— Pic2Video"
+            self.setWindowTitle(text)
+            self.titlebar.set_title(text)
+
+        def _mark_dirty(self):
+            """改了一步：标题点上圆点，自动保存排上队。"""
+            if not self._dirty:
+                self._dirty = True
+                self._refresh_title()
+            self.autosaver.mark_dirty()
+
+        def _autosave_tick(self):
+            if self._dirty and self.autosaver.tick(self.project):
+                log("autosave -> %s" % self.autosaver.path)
+
+        def _build_project_menu(self) -> QMenu:
+            menu = QMenu(self)
+            act = menu.addAction(tr("新建工程"))
+            act.triggered.connect(self.on_new_project)
+            act = menu.addAction(tr("打开工程…"))
+            act.triggered.connect(self.on_open_project)
+            self.menu_recent = menu.addMenu(tr("最近打开"))
+            self.menu_recent.aboutToShow.connect(self._refresh_recent_menu)
+            menu.addSeparator()
+            act = menu.addAction(tr("保存工程"))
+            act.triggered.connect(self.on_save_project)
+            act = menu.addAction(tr("另存为…"))
+            act.triggered.connect(self.on_save_project_as)
+            return menu
+
+        def _refresh_recent_menu(self):
+            menu = getattr(self, "menu_recent", None)
+            if menu is None:
+                return
+            menu.clear()
+            recent = self.settings.recent()
+            if not recent:
+                act = menu.addAction(tr("（还没有）"))
+                act.setEnabled(False)
+                return
+            for path in recent:
+                act = menu.addAction(os.path.basename(path))
+                act.setToolTip(path)
+                act.triggered.connect(
+                    lambda _checked=False, _p=path: self.on_open_recent(_p))
+
+        def _confirm_discard(self) -> bool:
+            """有没存的改动先问一句。返回 False = 用户取消，整个动作别继续。"""
+            if not self._dirty:
+                return True
+            picked = MsgBox.choose(
+                self, tr("工程还没存"),
+                tr("「%s」有改动还没保存，先存下来吗？") % self._project_name(),
+                [(tr("保存"), "primary"), (tr("不保存"), "plain"),
+                 (tr("取消"), "plain")], "ask")
+            if picked == 0:
+                return self.on_save_project()
+            return picked == 1
+
+        def on_new_project(self, _checked=False):
+            if not self._confirm_discard():
+                return
+            project = Project(fps=int(self.settings["fps"]))
+            project.mode = self.settings["mode"]
+            self.project = project
+            self.project_path = ""
+            self._dirty = False
+            self.autosaver.clear()
+            self._refresh_all()
+            self._history_reset(tr("新建工程"))
+            self._refresh_title()
+
+        def on_open_project(self, _checked=False):
+            if not self._confirm_discard():
+                return
+            path, _f = QFileDialog.getOpenFileName(
+                self, tr("打开工程"), self._project_dir(), PROJECT_FILTER)
+            if path:
+                self._open_project_file(path)
+
+        def on_open_recent(self, path: str):
+            if not os.path.isfile(path):
+                MsgBox.warn(self, tr("打不开"),
+                            tr("这个工程文件已经不在了：\n%s") % path)
+                keep = [p for p in self.settings.data.get("recent_projects", [])
+                        if p != path]
+                self.settings.data["recent_projects"] = keep
+                self.settings.save()
+                return
+            if self._confirm_discard():
+                self._open_project_file(path)
+
+        def _open_project_file(self, path: str) -> bool:
+            try:
+                project = load_project(path)
+            except ProjectFileError as exc:
+                MsgBox.warn(self, tr("打不开这个工程"), project_error_text(exc))
+                return False
+            self.project = project
+            self.settings.data["fps"] = int(project.fps)
+            self.settings.data["mode"] = project.mode
+            self.settings.save()
+            self.project_path = path
+            self._dirty = False
+            self.autosaver.clear()
+            self.settings.push_recent(path)
+            self._refresh_all()
+            self._history_reset(tr("打开工程"))
+            self._refresh_title()
+            missing = self.project.missing_media()
+            if missing:
+                self._warn_missing(missing)
+            return True
+
+        def _warn_missing(self, missing: list[str]):
+            names = "、".join(os.path.basename(p) for p in missing[:6])
+            more = (tr(" 等 %d 个") % len(missing)) if len(missing) > 6 else ""
+            MsgBox.warn(
+                self, tr("有素材找不到了"),
+                tr("下面这些素材不在了，成片里会缺画面：\n%s%s\n"
+                   "把它们放回原来的位置，或者重新导入。") % (names, more))
+
+        def on_save_project(self, _checked=False) -> bool:
+            if not self.project_path:
+                return self.on_save_project_as()
+            return self._write_project(self.project_path)
+
+        def on_save_project_as(self, _checked=False) -> bool:
+            default = self.project_path or os.path.join(
+                self._project_dir(), tr("未命名工程") + PROJECT_SUFFIX)
+            path, _f = QFileDialog.getSaveFileName(
+                self, tr("工程另存为"), default, PROJECT_FILTER)
+            if not path:
+                return False
+            if not path.lower().endswith(PROJECT_SUFFIX):
+                path += PROJECT_SUFFIX
+            return self._write_project(path)
+
+        def _write_project(self, path: str) -> bool:
+            try:
+                save_project(self.project, path)
+            except ProjectFileError as exc:
+                MsgBox.warn(self, tr("保存失败"), project_error_text(exc))
+                return False
+            self.project_path = path
+            self._dirty = False
+            self.autosaver.clear()
+            self.settings.push_recent(path)
+            self._refresh_title()
+            return True
+
+        def _maybe_restore_autosave(self):
+            """上次没正常退出？把自动保存捞回来。"""
+            if self.project_path or os.environ.get("PIC2VIDEO_SHOT"):
+                return
+            path = self.autosaver.path
+            if not AutoSaver.restorable(path):
+                return
+            try:
+                when = time.strftime("%m-%d %H:%M",
+                                     time.localtime(os.path.getmtime(path)))
+            except OSError:
+                when = ""
+            picked = MsgBox.choose(
+                self, tr("上次好像没正常退出"),
+                tr("发现一份自动保存的工程（%s）。恢复它吗？") % when,
+                [(tr("恢复"), "primary"), (tr("不要"), "plain")], "ask")
+            if picked != 0:
+                self.autosaver.clear()
+                return
+            try:
+                project = load_project(path)
+            except ProjectFileError as exc:
+                MsgBox.warn(self, tr("恢复失败"), project_error_text(exc))
+                self.autosaver.clear()
+                return
+            self.project = project
+            self.project_path = ""
+            self.settings.data["fps"] = int(project.fps)
+            self.settings.save()
+            self._dirty = True
+            self._refresh_all()
+            self._history_reset(tr("恢复自动保存"))
+            self._refresh_title()
+            missing = self.project.missing_media()
+            if missing:
+                self._warn_missing(missing)
 
         # ---------------- 撤回 / 还原
         _HISTORY_MAX = 120
@@ -3331,6 +3786,7 @@ def run_gui() -> int:
             """记一步。拖时长会连发几十次，1.2 秒内的同类操作合并成一步。"""
             if self._hist_lock:
                 return
+            self._mark_dirty()      # 有编辑就有没存的改动，自动保存排上队
             now = time.time()
             self.history = self.history[:self.hist_index + 1]
             last = self.history[-1] if self.history else None
@@ -3483,6 +3939,11 @@ def run_gui() -> int:
             outer.addWidget(body, 1)
 
             bar = QHBoxLayout()
+            self.btn_project = QToolButton()
+            self.btn_project.setPopupMode(
+                QToolButton.ToolButtonPopupMode.InstantPopup)
+            self.btn_project.setMenu(self._build_project_menu())
+            bar.addWidget(self.btn_project)
             def btn(text, slot, tip=""):
                 b = QPushButton(text)
                 b.clicked.connect(slot)
@@ -3656,12 +4117,18 @@ def run_gui() -> int:
             self.auto_timer.setSingleShot(True)
             self.auto_timer.setInterval(900)
             self.auto_timer.timeout.connect(self.on_preview)
+            # 自动保存：每 5 秒问一次要不要写，真正落盘由 AutoSaver 判间隔
+            self.autosave_timer = QTimer(self)
+            self.autosave_timer.setInterval(5000)
+            self.autosave_timer.timeout.connect(self._autosave_tick)
+            self.autosave_timer.start()
 
         # ---------------- 语言 / 模式
         def retranslate(self):
             """换语言或换模式后重设文案，不重建窗口。"""
-            self.setWindowTitle(tr("图片出片 —— 图片 + B站 BGM → 视频"))
-            self.titlebar.set_title(tr("图片出片 —— 图片 + B站 BGM → 视频"))
+            self._refresh_title()
+            self.btn_project.setText(tr("工程"))
+            self.btn_project.setToolTip(tr("新建 / 打开 / 保存工程（Ctrl+S 保存）"))
             self.btn_add.setText(tr("加图片"))
             self.btn_up.setText(tr("上移"))
             self.btn_down.setText(tr("下移"))
@@ -4679,6 +5146,11 @@ def run_gui() -> int:
                 if stay:
                     ev.ignore()
                     return
+            if not os.environ.get("PIC2VIDEO_SHOT") and self._dirty:
+                if not self._confirm_discard():
+                    ev.ignore()
+                    return
+            self.autosaver.clear()
             self._save_geometry()
             if self.worker is not None and self.worker.isRunning():
                 self.worker.cancel()
