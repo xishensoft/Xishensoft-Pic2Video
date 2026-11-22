@@ -305,6 +305,32 @@ try:
 except A.SourceError as e:
     check("空来源报错", "先给个链接" in e.message, e.message)
 
+# 18 依赖自检 / 坏图预检
+check("missing_tools 返回 list", isinstance(p.missing_tools(), list), p.missing_tools())
+check("好图能读", p.image_ok(IMG[0]) is True)
+check("别的图也能读", all(p.image_ok(x) for x in IMG))
+check("不存在的图读不出", p.image_ok(os.path.join(FIXTURES, "nope.png")) is False)
+check("音频不算图片", p.image_ok(TONE) is False)
+try:
+    p.render([p.Clip(os.path.join(FIXTURES, "nope.png"), 1.0)], [30],
+             None, os.path.join(tmp, "never.mp4"))
+    check("坏图在渲染前就报错", False)
+except p.RenderError as e:
+    check("坏图在渲染前就报错", "nope.png" in str(e), str(e))
+except Exception as e:   # noqa: BLE001
+    check("坏图在渲染前就报错", False, f"{type(e).__name__}: {e}")
+
+# 19 进度/导出的新文案在四种语言里都能格式化
+import i18n as I
+for lang in ("zh-TW", "en", "ja", "ko"):
+    I.set_locale(lang)
+    msg = I.tr("正在导出… {pct}% · 剩余约 {left}", pct=40, left="0:12")
+    check(f"{lang} 导出进度文案", "40" in msg and "0:12" in msg, msg)
+    check(f"{lang} 取消文案", bool(I.tr("已取消")) and "已取消" in I.TR[lang], I.tr("已取消"))
+    check(f"{lang} 正在取消文案", bool(I.tr("正在取消…")), I.tr("正在取消…"))
+    check(f"{lang} 关窗确认文案", len(I.tr("视频还在导出，现在关掉会丢掉这次的结果。")) > 4)
+I.set_locale("zh-CN")
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

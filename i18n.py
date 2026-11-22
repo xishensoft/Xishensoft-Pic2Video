@@ -896,3 +896,80 @@ _TR_EXTRA3 = {
 }
 for _lang, _extra3 in _TR_EXTRA3.items():
     TR[_lang].update(_extra3)
+
+_TR_EXTRA4 = {
+    "zh-TW": {
+        "缺少依赖": "缺少相依元件",
+        "没找到 ffmpeg / ffprobe。\nWindows 上一行装完：winget install Gyan.FFmpeg\n（装好后重开这个窗口）":
+            "找不到 ffmpeg / ffprobe。\nWindows 上一行裝完：winget install Gyan.FFmpeg\n（裝好後重開這個視窗）",
+        "正在取消…": "正在取消…",
+        "已取消": "已取消",
+        "这张图片读不出来：{name}": "這張圖片讀不出來：{name}",
+    },
+    "en": {
+        "缺少依赖": "Missing dependency",
+        "没找到 ffmpeg / ffprobe。\nWindows 上一行装完：winget install Gyan.FFmpeg\n（装好后重开这个窗口）":
+            "ffmpeg / ffprobe not found.\nOn Windows one line installs it: winget install Gyan.FFmpeg\n(then reopen this window)",
+        "正在取消…": "Cancelling…",
+        "已取消": "Cancelled",
+        "这张图片读不出来：{name}": "Can't read this image: {name}",
+    },
+    "ja": {
+        "缺少依赖": "依存関係が見つかりません",
+        "没找到 ffmpeg / ffprobe。\nWindows 上一行装完：winget install Gyan.FFmpeg\n（装好后重开这个窗口）":
+            "ffmpeg / ffprobe が見つかりません。\nWindows では次の一行で入ります：winget install Gyan.FFmpeg\n（入れたらこのウィンドウを開き直してください）",
+        "正在取消…": "キャンセルしています…",
+        "已取消": "キャンセルしました",
+        "这张图片读不出来：{name}": "この画像を読み込めません：{name}",
+    },
+    "ko": {
+        "缺少依赖": "필수 프로그램 없음",
+        "没找到 ffmpeg / ffprobe。\nWindows 上一行装完：winget install Gyan.FFmpeg\n（装好后重开这个窗口）":
+            "ffmpeg / ffprobe 를 찾을 수 없습니다.\nWindows 에서는 한 줄로 설치합니다: winget install Gyan.FFmpeg\n(설치 후 이 창을 다시 열어 주세요)",
+        "正在取消…": "취소하는 중…",
+        "已取消": "취소되었습니다",
+        "这张图片读不出来：{name}": "이 이미지를 읽을 수 없습니다: {name}",
+    },
+}
+for _lang, _extra4 in _TR_EXTRA4.items():
+    TR[_lang].update(_extra4)
+_TR_EXTRA5 = {
+    "zh-TW": {
+        "生成预览… {pct}%": "產生預覽… {pct}%",
+        "正在导出… {pct}%": "正在匯出… {pct}%",
+        "正在导出… {pct}% · 剩余约 {left}": "正在匯出… {pct}% · 剩餘約 {left}",
+        "还在导出": "還在匯出",
+        "视频还在导出，现在关掉会丢掉这次的结果。": "影片還在匯出，現在關掉會丟掉這次的結果。",
+        "继续导出": "繼續匯出",
+        "关掉": "關掉",
+    },
+    "en": {
+        "生成预览… {pct}%": "Building preview… {pct}%",
+        "正在导出… {pct}%": "Exporting… {pct}%",
+        "正在导出… {pct}% · 剩余约 {left}": "Exporting… {pct}% · about {left} left",
+        "还在导出": "Export still running",
+        "视频还在导出，现在关掉会丢掉这次的结果。": "The video is still exporting; closing now discards this run.",
+        "继续导出": "Keep exporting",
+        "关掉": "Close anyway",
+    },
+    "ja": {
+        "生成预览… {pct}%": "プレビュー生成中… {pct}%",
+        "正在导出… {pct}%": "書き出し中… {pct}%",
+        "正在导出… {pct}% · 剩余约 {left}": "書き出し中… {pct}% · 残り約 {left}",
+        "还在导出": "書き出し中です",
+        "视频还在导出，现在关掉会丢掉这次的结果。": "まだ書き出し中です。今閉じると今回の結果は失われます。",
+        "继续导出": "書き出しを続ける",
+        "关掉": "閉じる",
+    },
+    "ko": {
+        "生成预览… {pct}%": "미리보기 생성 중… {pct}%",
+        "正在导出… {pct}%": "내보내는 중… {pct}%",
+        "正在导出… {pct}% · 剩余约 {left}": "내보내는 중… {pct}% · 약 {left} 남음",
+        "还在导出": "내보내는 중",
+        "视频还在导出，现在关掉会丢掉这次的结果。": "아직 내보내는 중입니다. 지금 닫으면 이번 결과는 사라집니다.",
+        "继续导出": "계속 내보내기",
+        "关掉": "닫기",
+    },
+}
+for _lang, _extra5 in _TR_EXTRA5.items():
+    TR[_lang].update(_extra5)

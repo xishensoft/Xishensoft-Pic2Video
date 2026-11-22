@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -47,6 +48,42 @@ FFPROBE = os.environ.get("PIC2VIDEO_FFPROBE", "ffprobe")
 
 class RenderError(RuntimeError):
     pass
+
+
+def missing_tools() -> list[str]:
+    """ffmpeg / ffprobe 缺哪个（空列表＝都找得到）。"""
+    miss = []
+    for name, exe in (("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)):
+        if not (os.path.isfile(exe) or shutil.which(exe)):
+            miss.append(name)
+    return miss
+
+
+_IMG_OK: dict = {}
+
+
+def image_ok(path: str) -> bool:
+    """这张图 ffprobe 能不能读（按 路径+mtime+大小 缓存，重渲预览不重复花时间）。"""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    key = (path, st.st_mtime, st.st_size)
+    if key in _IMG_OK:
+        return _IMG_OK[key]
+    if missing_tools():
+        _IMG_OK[key] = True          # 没 ffprobe 就别拦，交给 ffmpeg 自己报
+        return True
+    try:
+        r = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "v:0",
+                            "-show_entries", "stream=width,height",
+                            "-of", "csv=p=0", path],
+                           capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    ok = r.returncode == 0 and bool(r.stdout.strip()) and "N/A" not in r.stdout
+    _IMG_OK[key] = ok
+    return ok
 
 
 def probe_duration(path: str) -> float:
@@ -167,6 +204,10 @@ class Settings:
         "ui": "simple",           # 界面模式：simple 简洁（默认）/ pro 专业
         "theme": "auto",          # 外观：auto 跟随系统 / light / dark
         "accent": theme.DEFAULT_ACCENT,   # 主色（对撞色由它自动算）
+        "win_w": 0,               # 窗口大小/位置，0 = 用默认
+        "win_h": 0,
+        "win_x": -1,
+        "win_y": -1,
     }
 
     def __init__(self, path: str = SETTINGS_PATH):
@@ -244,6 +285,12 @@ class Settings:
             d["theme"] = "auto"
         if not is_hex_color(d.get("accent", "")):
             d["accent"] = theme.DEFAULT_ACCENT
+        for key, lo, hi in (("win_w", 0, 8000), ("win_h", 0, 8000),
+                            ("win_x", -1, 8000), ("win_y", -1, 8000)):
+            try:
+                d[key] = int(min(hi, max(lo, int(d.get(key, self.DEFAULTS[key])))))
+            except (TypeError, ValueError):
+                d[key] = self.DEFAULTS[key]
 
     # -- 访问 ---------------------------------------------------------
     def __getitem__(self, key):
@@ -511,10 +558,17 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
            crf=20, preset="veryfast", fps=FPS, fit="own", fade_in=FADE_IN,
            fade_out=FADE_OUT, transition="none", transition_sec=0.3,
            bg_blur=True, pad_color="#000000", bg_path="",
-           on_progress=None) -> str:
-    """一条 filtergraph 渲完；on_progress(0..1) 回调。"""
+           on_progress=None, proc_holder=None) -> str:
+    """一条 filtergraph 渲完；on_progress(0..1) 回调。
+
+    proc_holder 给一个 dict 时，把 ffmpeg 进程塞进 proc_holder["proc"]，
+    外面就能 terminate() 取消这次渲染。
+    """
     if not counts:
         raise RenderError(tr("没有图片"))
+    bad = [c.path for c in clips if not image_ok(c.path)]
+    if bad:
+        raise RenderError(tr("这张图片读不出来：{name}", name=os.path.basename(bad[0])))
     total = sum(counts) / fps
     add_bg = fit in BG_MODES
     if add_bg:
@@ -571,6 +625,8 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True,
                                 encoding="utf-8", errors="replace")
+        if proc_holder is not None:
+            proc_holder["proc"] = proc
         for raw in proc.stdout:
             line = raw.strip()
             if line.startswith("out_time_us="):
@@ -606,6 +662,10 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
 # ---------------------------------------------------------------- 命令行
 
 def cli_export(argv: list[str]) -> int:
+    if missing_tools():
+        print(tr("没找到 ffmpeg / ffprobe。\nWindows 上一行装完：winget install Gyan.FFmpeg\n（装好后重开这个窗口）"),
+              file=sys.stderr)
+        return 2
     import argparse
     ap = argparse.ArgumentParser(description=tr("图片 + BGM 合成视频（无窗口）"))
     ap.add_argument("--export", required=True, help=tr("输出 mp4 路径"))
@@ -720,8 +780,9 @@ def run_gui() -> int:
     from PyQt6.QtCore import (QPointF, QSize, Qt, QThread, QTimer, QUrl,
                               pyqtSignal)
     from PyQt6.QtGui import (QColor, QConicalGradient, QFont, QIcon,
-                            QImageReader, QLinearGradient, QPainter,
-                            QPainterPath, QPalette, QPen, QPixmap, QPolygonF)
+                            QImageReader, QKeySequence, QLinearGradient,
+                            QPainter, QPainterPath, QPalette, QPen, QPixmap,
+                            QPolygonF, QShortcut)
     from PyQt6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
     from PyQt6.QtMultimediaWidgets import QVideoWidget
     from PyQt6.QtWidgets import (
@@ -779,6 +840,7 @@ def run_gui() -> int:
         progress = pyqtSignal(float)
         ok = pyqtSignal(str)
         bad = pyqtSignal(str)
+        stopped = pyqtSignal()
 
         def __init__(self, clips, counts, audio, out, opts=None, preview=False,
                      parent=None):
@@ -787,22 +849,45 @@ def run_gui() -> int:
             self.audio, self.out = audio, out
             self.opts = opts or {}
             self.preview = preview
+            self._proc: dict = {}
+            self._canceled = False
+
+        def cancel(self):
+            """点「取消」时调：停掉 ffmpeg，run() 会走 stopped 分支。"""
+            self._canceled = True
+            proc = self._proc.get("proc")
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                except OSError:
+                    pass
 
         def run(self):
             try:
                 if self.preview:
                     render(self.clips, self.counts, self.audio, self.out,
                            crf=28, preset="ultrafast", **self.opts,
-                           on_progress=self.progress.emit)
+                           on_progress=self.progress.emit,
+                           proc_holder=self._proc)
                 else:
                     render(self.clips, self.counts, self.audio, self.out,
-                           **self.opts, on_progress=self.progress.emit)
+                           **self.opts, on_progress=self.progress.emit,
+                           proc_holder=self._proc)
             except RenderError as e:
-                self.bad.emit(str(e))
+                if self._canceled:
+                    self.stopped.emit()
+                else:
+                    self.bad.emit(str(e))
             except Exception as e:  # noqa: BLE001
-                self.bad.emit(f"{e}")
+                if self._canceled:
+                    self.stopped.emit()
+                else:
+                    self.bad.emit(f"{e}")
             else:
-                self.ok.emit(self.out)
+                if self._canceled:
+                    self.stopped.emit()
+                else:
+                    self.ok.emit(self.out)
 
     class ImageList(QListWidget):
         """内部拖动排序后发信号；QListWidget 的 internal move 不一定触发 rowsMoved。"""
@@ -1482,6 +1567,8 @@ def run_gui() -> int:
             self.worker = None
             self.fetch_worker = None
             self._rebuilding = False
+            self._render_kind = "export"
+            self._render_t0 = 0.0
 
             self.player = QMediaPlayer(self)
             self.audio_out = QAudioOutput(self)
@@ -1489,6 +1576,8 @@ def run_gui() -> int:
             self.player.setAudioOutput(self.audio_out)
 
             self._build_ui()
+            self._bind_shortcuts()
+            self._restore_geometry()
             self.retranslate()
             self.apply_theme()
             self._follow_audio()
@@ -1502,6 +1591,39 @@ def run_gui() -> int:
             except Exception:  # noqa: BLE001
                 pass
             self._refresh_all()
+
+        def _bind_shortcuts(self):
+            """键盘：Ctrl+O 加图、Ctrl+E 导出、空格播放/暂停、Delete 删图。"""
+            for keys, slot in (("Ctrl+O", self.on_add),
+                               ("Ctrl+S", self.on_export),
+                               ("Space", self.toggle_play),
+                               ("Delete", self.on_remove),
+                               ("F5", self.on_preview)):
+                QShortcut(QKeySequence(keys), self).activated.connect(slot)
+
+        # ---------------- 窗口大小 / 位置
+        def _restore_geometry(self):
+            """上次关窗时的大小和位置；不在任何屏幕上就退回默认。"""
+            s = self.settings
+            w, h = int(s["win_w"]), int(s["win_h"])
+            x, y = int(s["win_x"]), int(s["win_y"])
+            if w >= 800 and h >= 560:
+                self.resize(w, h)
+            if x < 0 or y < 0:
+                return
+            for scr in QApplication.screens():
+                a = scr.availableGeometry()
+                if (a.x() - 200 < x < a.x() + a.width() - 120
+                        and a.y() - 100 < y < a.y() + a.height() - 80):
+                    self.move(x, y)
+                    return
+
+        def _save_geometry(self):
+            s = self.settings
+            g = self.normalGeometry() if self.isMaximized() else self.geometry()
+            s["win_w"], s["win_h"] = g.width(), g.height()
+            s["win_x"], s["win_y"] = g.x(), g.y()
+            s.save()
 
         # ---------------- UI
         def _build_ui(self):
@@ -1635,6 +1757,11 @@ def run_gui() -> int:
             self.progress.setFixedWidth(220)
             self.progress.setVisible(False)
             foot.addWidget(self.progress)
+            self.btn_abort = QPushButton(tr("取消"))
+            self.btn_abort.setFixedWidth(64)
+            self.btn_abort.setVisible(False)
+            self.btn_abort.clicked.connect(self.on_abort)
+            foot.addWidget(self.btn_abort)
             v.addLayout(foot)
 
             self.setCentralWidget(root)
@@ -2020,6 +2147,46 @@ def run_gui() -> int:
             self.timeline.play_pos = ms / 1000.0
             self.timeline.update()
 
+        def _rendering(self, on, kind="export"):
+            """渲染中：禁用导出/刷新，露出进度条和「取消」。"""
+            self.btn_export.setEnabled(not on)
+            self.btn_refresh.setEnabled(not on)
+            self.progress.setVisible(on)
+            self.progress.setValue(0)
+            self.btn_abort.setVisible(on)
+            self.btn_abort.setEnabled(on)
+            if on:
+                self._render_kind = kind
+                self._render_t0 = time.time()
+
+        def _on_render_progress(self, p):
+            """进度条 + 导出时的剩余时间。"""
+            self.progress.setValue(int(p * 1000))
+            if self._render_kind != "export":
+                self.lbl_status.setText(tr("生成预览… {pct}%", pct=int(p * 100)))
+                return
+            spent = time.time() - self._render_t0
+            left = max(0.0, spent / p - spent) if p > 0.02 else 0.0
+            if p < 0.02 or left < 2:
+                self.lbl_status.setText(
+                    tr("正在导出… {pct}%", pct=int(p * 100)))
+            else:
+                self.lbl_status.setText(
+                    tr("正在导出… {pct}% · 剩余约 {left}",
+                       pct=int(p * 100), left=human_time(left)))
+
+        def on_abort(self):
+            w = self.worker
+            if w is None or not w.isRunning():
+                return
+            self.btn_abort.setEnabled(False)
+            self.lbl_status.setText(tr("正在取消…"))
+            w.cancel()
+
+        def on_render_stopped(self):
+            self._rendering(False)
+            self.lbl_status.setText(tr("已取消"))
+
         def on_preview(self):
             if not self.project.clips:
                 self.lbl_status.setText(tr("先加图片"))
@@ -2027,23 +2194,20 @@ def run_gui() -> int:
             if self.worker is not None and self.worker.isRunning():
                 return
             self._follow_audio()
-            self.btn_refresh.setEnabled(False)
-            self.progress.setVisible(True)
-            self.progress.setValue(0)
+            self._rendering(True, "preview")
             self.lbl_status.setText(tr("生成预览…"))
             self.worker = RenderWorker(
                 list(self.project.clips), self.project.frame_counts(),
                 self.project.audio_path, self.preview_path,
                 opts=self._opts(preview=True), preview=True, parent=self)
-            self.worker.progress.connect(
-                lambda p: self.progress.setValue(int(p * 1000)))
+            self.worker.progress.connect(self._on_render_progress)
             self.worker.ok.connect(self.on_preview_ok)
             self.worker.bad.connect(self.on_preview_bad)
+            self.worker.stopped.connect(self.on_render_stopped)
             self.worker.start()
 
         def on_preview_ok(self, path):
-            self.progress.setVisible(False)
-            self.btn_refresh.setEnabled(True)
+            self._rendering(False)
             self._clean_stale()
             self.player.setSource(QUrl.fromLocalFile(path))
             self.player.play()
@@ -2053,8 +2217,7 @@ def run_gui() -> int:
             self.lbl_preview.setText(tr("预览：{name}", name=self.preview_name))
 
         def on_preview_bad(self, msg):
-            self.progress.setVisible(False)
-            self.btn_refresh.setEnabled(True)
+            self._rendering(False)
             self.lbl_status.setText(tr("预览失败"))
             QMessageBox.warning(self, tr("预览失败"), msg)
 
@@ -2139,25 +2302,20 @@ def run_gui() -> int:
                 out += ".mp4"
             self.settings["last_export_dir"] = os.path.dirname(out) or base_dir
             self.settings.save()
-            self.btn_export.setEnabled(False)
-            self.btn_refresh.setEnabled(False)
-            self.progress.setVisible(True)
-            self.progress.setValue(0)
+            self._rendering(True, "export")
             self.lbl_status.setText(tr("正在导出…"))
             self.worker = RenderWorker(
                 list(self.project.clips), self.project.frame_counts(),
                 self.project.audio_path, out, opts=self._opts(),
                 preview=False, parent=self)
-            self.worker.progress.connect(
-                lambda p: self.progress.setValue(int(p * 1000)))
+            self.worker.progress.connect(self._on_render_progress)
             self.worker.ok.connect(self.on_export_ok)
             self.worker.bad.connect(self.on_export_bad)
+            self.worker.stopped.connect(self.on_render_stopped)
             self.worker.start()
 
         def on_export_ok(self, path):
-            self.progress.setVisible(False)
-            self.btn_export.setEnabled(True)
-            self.btn_refresh.setEnabled(True)
+            self._rendering(False)
             self.lbl_status.setText(tr("导出完成：{path}", path=path))
             if os.environ.get("PIC2VIDEO_SHOT"):
                 return
@@ -2172,9 +2330,7 @@ def run_gui() -> int:
                 subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
 
         def on_export_bad(self, msg):
-            self.progress.setVisible(False)
-            self.btn_export.setEnabled(True)
-            self.btn_refresh.setEnabled(True)
+            self._rendering(False)
             self.lbl_status.setText(tr("导出失败"))
             QMessageBox.warning(self, tr("导出失败"), msg)
 
@@ -2201,14 +2357,32 @@ def run_gui() -> int:
                 ev.acceptProposedAction()
 
         def closeEvent(self, ev):
+            busy = self.worker is not None and self.worker.isRunning()
+            if busy and not os.environ.get("PIC2VIDEO_SHOT"):
+                box = QMessageBox(self)
+                box.setWindowTitle(tr("还在导出"))
+                box.setText(tr("视频还在导出，现在关掉会丢掉这次的结果。"))
+                stay = box.addButton(tr("继续导出"), QMessageBox.ButtonRole.AcceptRole)
+                box.addButton(tr("关掉"), QMessageBox.ButtonRole.DestructiveRole)
+                box.exec()
+                if box.clickedButton() is stay:
+                    ev.ignore()
+                    return
+            self._save_geometry()
+            if self.worker is not None and self.worker.isRunning():
+                self.worker.cancel()
             for w in (self.worker, self.fetch_worker):
                 if w is not None and w.isRunning():
-                    w.wait(1500)
-            import shutil
+                    w.wait(3000)
             shutil.rmtree(self.tmpdir, ignore_errors=True)
             super().closeEvent(ev)
 
     app = QApplication(sys.argv[:1])
+    if missing_tools():
+        QMessageBox.critical(
+            None, tr("缺少依赖"),
+            tr("没找到 ffmpeg / ffprobe。\nWindows 上一行装完：winget install Gyan.FFmpeg\n（装好后重开这个窗口）"))
+        return 1
     w = Window()
 
     # 冒烟测试用：设了 PIC2VIDEO_SHOT 就截图然后退出（不影响正常使用）
@@ -2259,6 +2433,49 @@ def run_gui() -> int:
 
         def _shot(name):
             w.grab().save(os.path.join(os.path.dirname(shot), name + tag + ".png"))
+
+        # 「取消」和「窗口记忆」两个冒烟分支，同样只在 PIC2VIDEO_SHOT 下跑
+        cancel_after = os.environ.get("PIC2VIDEO_SHOT_CANCEL")
+        geo_probe = os.environ.get("PIC2VIDEO_SHOT_GEO")
+        if cancel_after and audio:
+            w.project.mode = "free"
+            for i in range(len(w.project.clips)):
+                w.project.set_duration(i, 8.0)
+            w._refresh_all()
+
+            def report_cancel():
+                out = os.environ.get("PIC2VIDEO_EXPORT_PATH", "")
+                print("CANCEL STATUS:", w.lbl_status.text(), flush=True)
+                print("CANCEL RUNNING:",
+                      bool(w.worker and w.worker.isRunning()), flush=True)
+                print("CANCEL FILE EXISTS:",
+                      os.path.exists(out) if out else "n/a", flush=True)
+                print("CANCEL UI:", w.btn_abort.isVisible(),
+                      w.btn_export.isEnabled(), w.progress.isVisible(), flush=True)
+                app.quit()
+
+            def do_abort():
+                print("STATUS DURING:", w.lbl_status.text(),
+                      "| progress:", w.progress.value(), flush=True)
+                w.on_abort()
+                QTimer.singleShot(2500, report_cancel)
+
+            QTimer.singleShot(500, w.on_export)
+            QTimer.singleShot(int(float(cancel_after) * 1000), do_abort)
+            return app.exec()
+        if geo_probe:
+            w.resize(1300, 760)
+            w.move(120, 90)
+            w._save_geometry()
+            w2 = Window()
+            print("GEO RESTORED:", w2.width(), w2.height(), w2.x(), w2.y(),
+                  flush=True)
+            print("SHORTCUTS:", sorted(s.key().toString()
+                                       for s in w.findChildren(QShortcut)),
+                  flush=True)
+            w2.deleteLater()
+            QTimer.singleShot(300, app.quit)
+            return app.exec()
 
         def shot_settings():
             dlg = SettingsDialog(w.settings, w)
