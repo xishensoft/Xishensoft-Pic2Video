@@ -587,6 +587,166 @@ check("Qt 自带文案本地化", "QTranslator" in _src
 check("样式贴到全局", "app_.setStyleSheet" in _src
       and "app_.setPalette(app_palette" in _src)
 
+# 30 窗口大小 / 片头片尾 / 交叉淡化 / 多条音频 / 时间线右键
+check("窗口模式三档", p.WIN_MODES == ("remember", "max", "fixed"), p.WIN_MODES)
+_sc = p.Settings()
+_sc.data["win_mode"] = "weird"
+_sc._sanitize()
+check("窗口模式非法回落记住上次", _sc["win_mode"] == "remember", _sc["win_mode"])
+_sc.data["win_fixed_w"] = 10
+_sc.data["win_fixed_h"] = 99999
+_sc._sanitize()
+check("固定宽高夹住", (_sc["win_fixed_w"], _sc["win_fixed_h"]) == (800, 8000),
+      (_sc["win_fixed_w"], _sc["win_fixed_h"]))
+check("片头片尾默认空", p.Settings.DEFAULTS["intro_path"] == ""
+      and p.Settings.DEFAULTS["outro_path"] == "")
+check("启动窗口分支齐全", '"max"' in _src and '"fixed"' in _src
+      and "maximize_to_screen()" in _src)
+check("自绘窗口自己记最大化状态", "def is_maxed" in _src
+      and "def toggle_maximum" in _src
+      and "def restore_down" in _src
+      and "self._maxed = True" in _src)
+check("最大化不靠 Qt 的 isMaximized", "win.isMaximized()" not in _src
+      and "self.isMaximized()" not in _src)
+
+pr = p.Project(); pr.mode = "free"
+pr.audio_dur = 30.0
+pr.add_images([IMG[0]], 2.0)
+check("没设片头片尾就只加图片", [c.kind for c in pr.clips] == ["image"],
+      [c.kind for c in pr.clips])
+
+# 片头片尾需要真视频文件
+if p.missing_tools():
+    check("片头片尾入片", False, "缺 ffmpeg")
+else:
+    intro = os.path.join(tmp, "intro.mp4")
+    outro = os.path.join(tmp, "outro.mp4")
+    for path, color, dur in ((intro, "red", 1.0), (outro, "blue", 2.0)):
+        subprocess.run([p.FFMPEG, "-v", "error", "-y", "-f", "lavfi",
+                        "-i", f"color=c={color}:s=320x180:d={dur}:r=30",
+                        "-pix_fmt", "yuv420p", path], capture_output=True)
+    pj = p.Project(); pj.mode = "free"; pj.audio_dur = 30.0
+    pj.add_images([IMG[0]], 2.0, intro=intro, outro=outro)
+    check("第一张图自动补片头片尾",
+          [c.kind for c in pj.clips] == ["intro", "image", "outro"],
+          [c.kind for c in pj.clips])
+    check("片头时长跟视频", abs(pj.intro().dur - 1.0) < 0.2, pj.intro().dur)
+    check("片尾时长跟视频", abs(pj.outro().dur - 2.0) < 0.2, pj.outro().dur)
+    check("固定段合计", abs(pj.fixed_span() - (pj.intro().dur + pj.outro().dur)) < 1e-6,
+          pj.fixed_span())
+    pj.add_images([IMG[1]], 2.0)
+    check("后来的图插在片尾前",
+          [c.kind for c in pj.clips] == ["intro", "image", "image", "outro"],
+          [c.kind for c in pj.clips])
+    _span = pj.fixed_span()
+    pj.set_duration(1, 5.0)
+    check("改图片不动片头片尾", abs(pj.fixed_span() - _span) < 1e-6)
+    pj.remove([0])
+    check("片头也能删（不锁死在中间）",
+          [c.kind for c in pj.clips] == ["image", "image", "outro"],
+          [c.kind for c in pj.clips])
+
+    # 跟 BGM：总长 = 音乐完整长度 + 片头片尾
+    pb = p.Project(); pb.mode = "bgm"
+    pb.audio_dur = 40.0
+    pb.add_images([IMG[0]], 2.0, intro=intro, outro=outro)
+    pb.normalize()
+    want = pb.music_length() + pb.fixed_span()
+    check("跟 BGM 时总长含片头片尾", abs(pb.total() - want) < 1e-6,
+          (pb.total(), want))
+    imgs = pb.images()
+    check("图片段吃满剩下的时长",
+          abs(sum(c.dur for c in imgs) - pb.music_length()) < 1e-6,
+          sum(c.dur for c in imgs))
+
+    # 真出片：片头不放 BGM、图片段放、片尾不放
+    tone = os.path.join(FIXTURES, "tone6.m4a")
+    if os.path.isfile(tone):
+        pk = p.Project(); pk.mode = "free"; pk.audio_dur = 6.0
+        pk.add_images([IMG[0]], 1.0, intro=intro, outro=outro)
+        pk.normalize()
+        dst = os.path.join(tmp, "intro_outro.mp4")
+        p.render(pk.clips, pk.frame_counts(), tone, dst, w=320, h=180,
+                 crf=35, preset="ultrafast", fps=30, fit="cover",
+                 fade_in=0.0, fade_out=0.0, transition="none")
+        dur = p.probe_duration(dst)
+        check("片头片尾出片总长对", abs(dur - pk.total()) < 0.15,
+              (dur, pk.total()))
+
+        def seg_mean(mp4, ss, t):
+            out = subprocess.run(
+                [p.FFMPEG, "-v", "info", "-ss", str(ss), "-t", str(t),
+                 "-i", mp4, "-vn", "-af", "volumedetect", "-f", "null", "-"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace").stderr
+            line = [ln for ln in out.splitlines() if "mean_volume" in ln]
+            if not line:
+                return None            # 整段纯静音，ffmpeg 干脆不给数
+            return float(line[0].split("mean_volume:")[1].split("dB")[0])
+
+        intro_db = seg_mean(dst, 0.2, 0.5)
+        body_db = seg_mean(dst, 1.2, 0.6)
+        check("片头段没有 BGM", intro_db is None or intro_db < -70,
+              (intro_db, body_db, pk.total(), dur))
+        check("图片段有 BGM", body_db is not None and body_db > -40,
+              (intro_db, body_db, pk.total(), dur))
+
+        # 多条音频叠在一起
+        pm = p.Project(); pm.mode = "free"; pm.audio_dur = 2.0
+        pm.add_images([IMG[0]], 2.0)
+        pm.normalize()
+        pm.audios.append(p.AudioClip(tone, 6.0, 0.0, 1.0, gap=False))
+        dst2 = os.path.join(tmp, "extra_audio.mp4")
+        p.render(pm.clips, pm.frame_counts(), list(pm.audios), dst2,
+                 w=320, h=180, crf=35, preset="ultrafast", fps=30,
+                 fit="cover", fade_in=0.0, fade_out=0.0, transition="none")
+        check("第二条音频也能混进成片",
+              os.path.isfile(dst2) and abs(p.probe_duration(dst2) - 2.0) < 0.15,
+              p.probe_duration(dst2))
+        _gx = p.build_graph([30, 30], 2.0, 320, 180, fps=30,
+                            clips=[p.Clip(IMG[0], 1.0), p.Clip(IMG[1], 1.0)],
+                            timeline=[(True, 1.0), (True, 1.0)],
+                            extras=[{"index": 3, "start": 0.5,
+                                     "dur": 1.0, "volume": 0.5}])
+        check("额外音频走 amix 且带延迟/音量",
+              "amix=inputs=2:normalize=0" in _gx and "adelay=500|500" in _gx
+              and "volume=0.500" in _gx, _gx[-260:])
+
+# 交叉淡化：总长守恒，两侧各挤一半
+_cf = [p.Clip(IMG[0], 2.0), p.Clip(IMG[1], 2.0)]
+_cf[0].xfade = True
+_c2, _ov = p._xfade_plan(_cf, [60, 60], 30, 0.3)
+_half = min(int(round(0.3 * 30 / 2.0)), 30)
+check("交叉淡化各补一半帧", _c2 == [60 + _half, 60 + _half] and _ov == [2 * _half],
+      (_c2, _ov))
+check("交叉淡化总帧不变", sum(_c2) - 2 * _half == 120, (_c2, _ov))
+_c3, _ov3 = p._xfade_plan([p.Clip(IMG[0], 2.0), p.Clip(IMG[1], 2.0)],
+                          [60, 60], 30, 0.3)
+check("没勾就不交叉", _ov3 == [0] and _c3 == [60, 60], (_c3, _ov3))
+check("兜底：没有 clips 也不炸", p._xfade_plan(None, [30], 30, 0.3) == ([30], []))
+_gxf = p.build_graph([30, 30], 2.0, 320, 180, fps=30, clips=_cf,
+                     timeline=[(True, 1.0), (True, 1.0)])
+check("graph 用 xfade 合并", "xfade=transition=fade" in _gxf, _gxf[-200:])
+
+# 右键菜单 / 时间线多选 / 滚轮音量 的接线
+check("时间线支持多选与音频轨", "set_selection" in _src
+      and "sel_audio" in _src and "audioVolume" in _src)
+check("时间线右键发菜单信号", "def on_timeline_menu" in _src
+      and "menu = pyqtSignal" in _src)
+check("右键能开关淡入淡出", "def on_toggle_fade" in _src
+      and "def on_toggle_xfade" in _src)
+check("右键能统一改音量", "def on_audio_set_volume" in _src
+      and "def on_ask_volume" in _src)
+check("能加/删额外音频", "def add_audio_extra" in _src
+      and "def on_add_audio" in _src and "def on_remove_audio" in _src)
+_aw = p.AudioClip(os.path.join(FIXTURES, "tone6.m4a"), 6.0, 0.0, 1.0, gap=False)
+check("音频元素带名字", _aw.name.endswith("tone6.m4a"), _aw.name)
+check("音量改到 0..2 之间", "max(0.0, min(2.0, value))" in _src
+      and "max(0.0, min(2.0, a.volume + (delta or 0.0)))" in _src)
+check("滚轮一步 5 个百分点", "audioVolume.emit" in _src and "0.05" in _src)
+check("色带能拖播放头", "def mouseMoveEvent" in _src and "seeked.emit" in _src)
+check("色带能拖着换位置", "moved.emit" in _src and "audioMoved.emit" in _src)
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

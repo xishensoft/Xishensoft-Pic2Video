@@ -202,6 +202,9 @@ MOTION_LABELS = {"none": "静止", "in": "缓慢推近",
 MOTION_AMOUNT = 0.06                              # 推拉幅度：放大 6%
 CROP_FOCUS = {"center": 0.5, "top": 0.0, "bottom": 1.0}   # 裁切铺满时留住哪一段
 CROP_LABELS = {"center": "居中", "top": "偏上", "bottom": "偏下"}
+WIN_MODES = ("remember", "max", "fixed")             # 启动时窗口
+WIN_LABELS = {"remember": "记住上次", "max": "启动时最大化",
+              "fixed": "固定大小"}
 
 
 # 界面语言的显示文案（内部值保持中文，只有显示时翻译）
@@ -273,6 +276,11 @@ class Settings:
         "win_h": 0,
         "win_x": -1,
         "win_y": -1,
+        "win_mode": "remember",   # remember 记住上次 / max 启动最大化 / fixed 固定大小
+        "win_fixed_w": 1475,
+        "win_fixed_h": 1000,
+        "intro_path": "",        # 默认片头视频（加第一张图时自动放到最前）
+        "outro_path": "",        # 默认片尾视频
     }
 
     def __init__(self, path: str = SETTINGS_PATH):
@@ -342,9 +350,18 @@ class Settings:
                 d[key] = float(min(hi, max(lo, float(d.get(key, self.DEFAULTS[key])))))
             except (TypeError, ValueError):
                 d[key] = self.DEFAULTS[key]
-        for key in ("export_dir", "last_export_dir", "bg_path"):
+        for key in ("export_dir", "last_export_dir", "bg_path",
+                    "intro_path", "outro_path"):
             if not isinstance(d.get(key), str):
                 d[key] = ""
+        if d.get("win_mode") not in WIN_MODES:
+            d["win_mode"] = "remember"
+        for key, lo, hi in (("win_fixed_w", 800, 8000),
+                            ("win_fixed_h", 560, 8000)):
+            try:
+                d[key] = int(min(hi, max(lo, int(d.get(key, self.DEFAULTS[key])))))
+            except (TypeError, ValueError):
+                d[key] = self.DEFAULTS[key]
         if d.get("lang") not in (SYSTEM,) + LOCALES:
             d["lang"] = SYSTEM
         if d.get("ui") not in ("simple", "pro"):
@@ -398,35 +415,150 @@ class Settings:
 # ---------------------------------------------------------------- 时间线模型
 
 class Clip:
-    __slots__ = ("path", "dur")
+    """时间线上的一个视频元素：图片、片头或片尾。
 
-    def __init__(self, path: str, dur: float):
+    kind: image / intro / outro
+    fade: 这个元素自己开头淡入、结尾淡出（黑场）
+    xfade: 跟下一个元素交叉淡化
+    """
+
+    __slots__ = ("path", "dur", "kind", "fade", "xfade")
+
+    def __init__(self, path: str, dur: float, kind: str = "image",
+                 fade: bool = False, xfade: bool = False):
         self.path = path
         self.dur = float(dur)
+        self.kind = kind if kind in ("image", "intro", "outro") else "image"
+        self.fade = bool(fade)
+        self.xfade = bool(xfade)
+
+    @property
+    def is_video(self) -> bool:
+        return self.kind in ("intro", "outro")
+
+    def copy(self):
+        return Clip(self.path, self.dur, self.kind, self.fade, self.xfade)
 
     def __repr__(self):
-        return f"Clip({os.path.basename(self.path)!r}, {self.dur:.2f})"
+        return f"Clip({os.path.basename(self.path)!r}, {self.dur:.2f}, {self.kind})"
+
+
+class AudioClip:
+    """音频轨道上的一条：可以随时拖着换起始位置。
+
+    gap=True 的（背景音乐）只在图片段出声，片头/片尾那几段会安静；
+    别的音频从 start 开始按自己长度播。
+    """
+
+    __slots__ = ("path", "dur", "start", "volume", "gap")
+
+    def __init__(self, path: str, dur: float, start: float = 0.0,
+                 volume: float = 1.0, gap: bool = False):
+        self.path = path
+        self.dur = float(dur)
+        self.start = max(0.0, float(start))
+        self.volume = max(0.0, min(2.0, float(volume)))
+        self.gap = bool(gap)
+
+    @property
+    def name(self) -> str:
+        return os.path.basename(self.path)
+
+    def __repr__(self):
+        return f"AudioClip({self.name!r}, {self.dur:.2f}, @{self.start:.2f})"
+
+
+def _media_dur(path: str) -> float:
+    """片头片尾视频有多长；探不到就给 3 秒，别让界面卡住。"""
+    try:
+        d = probe_duration(path)
+    except Exception:
+        d = 0.0
+    return d if d > 0.05 else 3.0
 
 
 class Project:
-    """图片序列 + 时长模式。
+    """时间线模型：片头 + 图片序列 + 片尾，外加一条或多条音频。
 
     mode:
-      bgm   跟 BGM：总长 = 音乐时长，各图按比例均摊（默认）
-      total 自设总长：总长 = total_setting
-      free  逐张秒数：总长 = 各图之和
-    固定总长时手改某张，其余按原比例让位，总长守恒。
+      bgm   跟 BGM：图片段总长 = 音乐长度，片头片尾各占自己的时长
+      total 自设总长：整个成片（含片头片尾）= total_setting
+      free  逐张秒数：图片段 = 各图之和
+    固定总长时手改某张，其余按原比例让位，总长守恒（片头片尾不动）。
     """
 
     def __init__(self, fps: int = FPS):
         self.clips: list[Clip] = []
+        self.audios: list[AudioClip] = []
         self.mode = "bgm"
-        self.audio_path: str | None = None
-        self.audio_dur = 0.0
-        self.audio_start = 0.0        # 从音乐的第几秒开始用
+        self.audio_start = 0.0        # 背景音乐从第几秒开始用
         self.audio_len = 0.0          # 用多长；0 = 到音乐结尾
         self.total_setting = 10.0
         self.fps = int(fps)
+
+    # -- 背景音乐：还是挂在第一条音频上，命令行/设置都靠它 ---------------
+    @property
+    def audio_path(self) -> str | None:
+        for a in self.audios:
+            if a.gap:
+                return a.path
+        return None
+
+    @audio_path.setter
+    def audio_path(self, value):
+        if not value:
+            self.audios = [a for a in self.audios if not a.gap]
+            return
+        dur = probe_duration(value) if os.path.exists(value) else 0.0
+        for a in self.audios:
+            if a.gap:
+                a.path, a.dur = value, dur
+                return
+        self.audios.insert(0, AudioClip(value, dur, 0.0, 1.0, gap=True))
+
+    @property
+    def audio_dur(self) -> float:
+        for a in self.audios:
+            if a.gap:
+                return a.dur
+        return 0.0
+
+    @audio_dur.setter
+    def audio_dur(self, value):
+        for a in self.audios:
+            if a.gap:
+                a.dur = float(value)
+                return
+        # 只有时长还没有来源（老代码 / 单元测试会这么写）：先记着
+        self.audios.insert(0, AudioClip("", float(value), 0.0, 1.0, gap=True))
+
+    def music_volume(self) -> float:
+        for a in self.audios:
+            if a.gap:
+                return a.volume
+        return 1.0
+
+    def set_music_volume(self, value: float):
+        for a in self.audios:
+            if a.gap:
+                a.volume = max(0.0, min(2.0, float(value)))
+
+    # -- 片段分类 ------------------------------------------------------
+    def images(self) -> list[Clip]:
+        return [c for c in self.clips if not c.is_video]
+
+    def image_count(self) -> int:
+        return sum(1 for c in self.clips if not c.is_video)
+
+    def intro(self) -> Clip | None:
+        return next((c for c in self.clips if c.kind == "intro"), None)
+
+    def outro(self) -> Clip | None:
+        return next((c for c in self.clips if c.kind == "outro"), None)
+
+    def fixed_span(self) -> float:
+        """片头 + 片尾占掉的时间（图片段要减掉它）。"""
+        return sum(c.dur for c in self.clips if c.is_video)
 
     # -- 目标总长 ------------------------------------------------------
     def music_length(self) -> float:
@@ -440,13 +572,13 @@ class Project:
         return avail
 
     def target(self) -> float | None:
-        n = len(self.clips)
+        n = self.image_count()
         if n == 0:
             return None
         if self.mode == "bgm" and self.audio_dur > 0:
-            return self.music_length()
+            return self.music_length() + self.fixed_span()
         if self.mode == "total":
-            return max(self.total_setting, MIN_DUR * n)
+            return max(self.total_setting, MIN_DUR * n + self.fixed_span())
         return None
 
     def total(self) -> float:
@@ -455,40 +587,51 @@ class Project:
     # -- 归一化 --------------------------------------------------------
     def normalize(self):
         t = self.target()
-        if t is None or not self.clips:
+        imgs = self.images()
+        if t is None or not imgs:
             return
-        durs = [c.dur for c in self.clips]
+        room = max(MIN_DUR * len(imgs), t - self.fixed_span())
+        durs = [c.dur for c in imgs]
         total = sum(durs)
         if total <= 0:
-            durs = [t / len(durs)] * len(durs)
+            durs = [room / len(durs)] * len(durs)
         else:
-            durs = [max(MIN_DUR, d * t / total) for d in durs]
-        self.clips = [Clip(c.path, d) for c, d in zip(self.clips, durs)]
-        self._fix_sum(t)
+            durs = [max(MIN_DUR, d * room / total) for d in durs]
+        for c, d in zip(imgs, durs):
+            c.dur = d
+        self._fix_sum(room)
 
-    def _fix_sum(self, t: float):
-        if not self.clips:
+    def _fix_sum(self, room: float):
+        imgs = self.images()
+        if not imgs:
             return
-        diff = t - sum(c.dur for c in self.clips)
+        diff = room - sum(c.dur for c in imgs)
         if abs(diff) < 1e-9:
             return
-        i = max(range(len(self.clips)), key=lambda k: self.clips[k].dur)
-        self.clips[i].dur = max(MIN_DUR, self.clips[i].dur + diff)
+        i = max(range(len(imgs)), key=lambda k: imgs[k].dur)
+        imgs[i].dur = max(MIN_DUR, imgs[i].dur + diff)
 
     def set_duration(self, index: int, value: float):
         if not (0 <= index < len(self.clips)):
             return
-        t = self.target()
-        if t is None:
-            self.clips[index].dur = max(MIN_DUR, value)
+        clip = self.clips[index]
+        if clip.is_video:           # 片头片尾时长跟着视频走
             return
-        n = len(self.clips)
-        value = min(max(value, MIN_DUR), max(MIN_DUR, t - MIN_DUR * (n - 1)))
-        durs = [c.dur for c in self.clips]
-        durs[index] = value
-        self._fit_others(durs, index, t)
-        self.clips = [Clip(c.path, d) for c, d in zip(self.clips, durs)]
-        self._fix_sum(t)
+        t = self.target()
+        imgs = self.images()
+        if t is None:
+            clip.dur = max(MIN_DUR, value)
+            return
+        room = max(MIN_DUR * len(imgs), t - self.fixed_span())
+        pos = imgs.index(clip)
+        value = min(max(value, MIN_DUR),
+                    max(MIN_DUR, room - MIN_DUR * (len(imgs) - 1)))
+        durs = [c.dur for c in imgs]
+        durs[pos] = value
+        self._fit_others(durs, pos, room)
+        for c, d in zip(imgs, durs):
+            c.dur = d
+        self._fix_sum(room)
 
     @staticmethod
     def _fit_others(durs: list[float], fixed: int, target: float):
@@ -514,13 +657,49 @@ class Project:
                 idx.remove(j)
 
     # -- 增删排序 ------------------------------------------------------
-    def add_images(self, paths, dur: float | None = None):
+    def _insert_at(self) -> int:
+        """新图插在片尾前面（没有片尾就加到末尾）。"""
+        outro = self.outro()
+        if outro is not None:
+            return self.clips.index(outro)
+        return len(self.clips)
+
+    def add_images(self, paths, dur: float | None = None,
+                   intro: str = "", outro: str = ""):
         if not paths:
             return
+        was_empty = self.image_count() == 0
         t = self.target()
-        base = dur if dur is not None else ((t / (len(self.clips) + len(paths))) if t else 3.0)
-        for p in paths:
-            self.clips.append(Clip(p, max(MIN_DUR, base)))
+        base = dur if dur is not None else (
+            (t / (self.image_count() + len(paths))) if t else 3.0)
+        at = self._insert_at()
+        self.clips[at:at] = [Clip(p, max(MIN_DUR, base)) for p in paths]
+        if was_empty:
+            if intro and os.path.exists(intro) and self.intro() is None:
+                self.clips.insert(0, Clip(intro, _media_dur(intro), "intro"))
+            if outro and os.path.exists(outro) and self.outro() is None:
+                self.clips.append(Clip(outro, _media_dur(outro), "outro"))
+        self.normalize()
+
+    def add_video(self, path: str, kind: str) -> Clip | None:
+        """手动挂片头/片尾（同一位置只留一个）。"""
+        if not path or not os.path.exists(path):
+            return None
+        dur = _media_dur(path)
+        old = self.intro() if kind == "intro" else self.outro()
+        if old is not None:
+            old.path, old.dur = path, dur
+        else:
+            clip = Clip(path, dur, kind)
+            if kind == "intro":
+                self.clips.insert(0, clip)
+            else:
+                self.clips.append(clip)
+        self.normalize()
+        return self.intro() if kind == "intro" else self.outro()
+
+    def clear_video(self, kind: str):
+        self.clips = [c for c in self.clips if c.kind != kind]
         self.normalize()
 
     def remove(self, indexes):
@@ -538,6 +717,22 @@ class Project:
         self.clips = [Clip(p, d) for p, d in paths_and_durs]
         self.normalize()
 
+    def move_to(self, index: int, pos: float):
+        """把第 index 个视频元素挪到时间线上的 pos（秒）附近。"""
+        if not (0 <= index < len(self.clips)):
+            return
+        clip = self.clips[index]
+        others = [c for c in self.clips if c is not clip]
+        acc, dest = 0.0, len(others)
+        for k, c in enumerate(others):
+            if pos < acc + c.dur / 2:
+                dest = k
+                break
+            acc += c.dur
+        self.clips.remove(clip)
+        self.clips.insert(min(dest, len(self.clips)), clip)
+        self.normalize()
+
     # -- 帧数 ----------------------------------------------------------
     def frame_counts(self) -> list[int]:
         """按累计时间取整，保证总帧数 = round(总时长 * FPS)，不漂移。"""
@@ -551,10 +746,12 @@ class Project:
         return counts
 
 
+
 def set_mode(project: Project, mode: str) -> None:
     project.mode = mode
     if mode == "total":
-        project.total_setting = max(MIN_DUR * max(1, len(project.clips)), project.total())
+        project.total_setting = max(MIN_DUR * max(1, project.image_count()),
+                                    project.total())
     project.normalize()
 
 
@@ -587,6 +784,34 @@ def _motion_chain(chain: str, motion: str, index: int, nf: int,
             f":d=1:s={w}x{h}:fps={fps}")
 
 
+def _xfade_plan(clips, counts, fps: int, xfade_sec: float):
+    """交叉淡化时每条边界两侧各补一半帧，输出总帧数守恒。
+
+    返回 (counts2, overlaps)，overlaps[i] 是第 i 与 i+1 段的重叠帧数（偶数，0=硬切）。
+    """
+    counts2 = list(counts)
+    if not clips or len(clips) < 2:
+        return counts2, []
+    overlaps = [0] * (len(clips) - 1)
+    want = max(1, int(round(max(0.0, float(xfade_sec)) * fps / 2.0)))
+    for i in range(len(clips) - 1):
+        if not (clips[i].xfade or clips[i + 1].xfade):
+            continue
+        room = min(counts2[i], counts2[i + 1]) // 2
+        half = min(want, room)
+        if half < 1:
+            continue
+        overlaps[i] = 2 * half
+        counts2[i] += half
+        counts2[i + 1] += half
+    return counts2, overlaps
+
+
+def _sec(value: float) -> str:
+    """0 就写 0（跟老滤镜串一致），其余保留三位。"""
+    return "0" if abs(value) < 5e-4 else f"{value:.3f}"
+
+
 def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT,
                 *, fps: int = FPS, fit: str = "own", fade_in: float = FADE_IN,
                 fade_out: float = FADE_OUT, transition: str = "none",
@@ -594,22 +819,31 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
                 pad_color: str = "#000000", bg_index: int | None = None,
                 audio_index: int | None = None, motion: str = "none",
                 motion_amount: float = MOTION_AMOUNT, volume: float = 1.0,
-                crop_focus: str = "center", music_start: float = 0.0) -> str:
-    """一条 filtergraph：每图按帧数切片 → 拼接 → 音频裁到总长并淡入淡出。
+                crop_focus: str = "center", music_start: float = 0.0,
+                clips=None, timeline=None, extras=None,
+                xfade_sec: float = 0.3) -> str:
+    """一条 filtergraph：逐元素切片 → 拼接（可交叉淡化）→ 音频 → 总长。
 
+    clips: Clip 列表（含片头片尾）；不传就按「全是图片」
+    timeline: [(是不是图片段, 输出时长)]，决定背景音乐在哪些段出声
+    extras: [{"index","start","dur","volume"}]，叠加的额外音频
     fit: own 原图铺底（bg_blur 决定模糊不模糊）/ color 纯色留白（pad_color）
          / image·video 自定义背景（输入下标 bg_index）+ 原图完整居中
-         / cover 裁切铺满
-    transition: none 硬切；fade 每张首尾淡黑
+         / cover 裁切铺满；片头片尾视频一律铺满
+    transition: none 硬切；fade 每张首尾淡黑（图片）
     motion: none 静帧；in 缓慢推近；out 缓慢拉远；inout 一张推近一张拉远
     volume: 背景音乐音量倍数（1.0 = 原样）
     crop_focus: 裁切铺满时留住 center / top / bottom
     """
     K = len(counts)
+    if K <= 0:
+        return ""
     if audio_index is None:
         audio_index = K
+    video_flags = [c.is_video for c in clips] if clips else [False] * K
+    counts2, overlaps = _xfade_plan(clips, counts, fps, xfade_sec)
+    segs = [nf / fps for nf in counts2]
     pad_hex = "0x" + pad_color.lstrip("#")
-    segs = [nf / fps for nf in counts]
     starts, acc = [], 0.0
     for seg in segs:
         starts.append(acc)
@@ -624,9 +858,13 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
             bg += ",gblur=sigma=40"
         parts.append(bg + f",split={K}" + "".join(f"[bgx{i}]" for i in range(K)))
 
-    for i, nf in enumerate(counts):
+    for i, nf in enumerate(counts2):
         seg = segs[i]
-        if fit == "cover":
+        if video_flags[i]:
+            parts.append(
+                f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=increase:"
+                f"in_range=full:out_range=tv,{crop_expr(w, h, crop_focus)}[s{i}]")
+        elif fit == "cover":
             parts.append(
                 f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=increase:"
                 f"in_range=full:out_range=tv,{crop_expr(w, h, crop_focus)}[s{i}]")
@@ -657,47 +895,151 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
             parts.append(f"[bgz{i}][fgz{i}]overlay=(W-w)/2:(H-h)/2[s{i}]")
         chain = (f"[s{i}]setsar=1,fps={fps},format=yuv420p,"
                  f"trim=start_frame=0:end_frame={nf},setpts=PTS-STARTPTS")
-        if motion in MOTIONS and motion != "none" and nf > 1:
+        if (motion in MOTIONS and motion != "none" and nf > 1
+                and not video_flags[i]):
             chain = _motion_chain(chain, motion, i, nf, w, h, fps,
                                   motion_amount)
+        seg = segs[i]
         td = min(max(0.0, float(transition_sec)), seg / 2.0)
-        if transition == "fade" and td > 0.02 and seg > 0.1:
+        if clips and i < len(clips):
+            want_fade = bool(clips[i].fade)
+            if not video_flags[i] and transition == "fade":
+                want_fade = True
+        else:
+            want_fade = transition == "fade"
+        if want_fade and td > 0.02 and seg > 0.1:
             chain += (f",fade=t=in:st=0:d={td:.3f}"
                       f",fade=t=out:st={max(0.0, seg - td):.3f}:d={td:.3f}")
+        if any(overlaps):
+            chain += ",settb=AVTB"
         parts.append(chain + f"[v{i}]")
-    labels = "".join(f"[v{i}]" for i in range(K))
-    parts.append(f"{labels}concat=n={K}:v=1:a=0,"
-                 f"{COLOR_TAG}[vout]")
+
+    prev = "[v0]"
+    acc = segs[0]
+    for i in range(1, K):
+        d = overlaps[i - 1] / fps if overlaps else 0.0
+        if d > 0:
+            off = max(0.0, acc - d)
+            parts.append(f"{prev}[v{i}]xfade=transition=fade:duration={d:.3f}:"
+                         f"offset={off:.3f}[m{i}]")
+            acc += segs[i] - d
+        else:
+            parts.append(f"{prev}[v{i}]concat=n=2:v=1:a=0[m{i}]")
+            acc += segs[i]
+        prev = f"[m{i}]"
+    parts.append(f"{prev}{COLOR_TAG}[vout]")
+
+    # ---------------- 音频 ----------------
     mstart = max(0.0, float(music_start))
-    audio = (f"[{audio_index}:a]atrim=start={mstart:.3f}:"
-             f"end={mstart + total:.3f},asetpts=N/SR/TB")
+    spans = timeline if timeline else [(True, total)]
+    split = any(not is_img for is_img, _ in spans)
+
+    if split:
+        labels, times, idx = [], [], 0
+        pos = mstart
+        run = 0.0
+        for is_img, dur in spans:
+            if is_img:
+                parts.append(f"[{audio_index}:a]atrim=start={pos:.3f}:"
+                             f"end={pos + dur:.3f},asetpts=N/SR/TB[bgs{idx}]")
+                pos += dur
+            else:
+                parts.append(f"anullsrc=channel_layout=stereo:sample_rate=48000,"
+                             f"atrim=0:{dur:.3f},asetpts=N/SR/TB[bgs{idx}]")
+            times.append((run, run + dur, is_img))
+            run += dur
+            labels.append(f"[bgs{idx}]")
+            idx += 1
+        parts.append("".join(labels) + f"concat=n={idx}:v=0:a=1[bgm0]")
+        head, pre = "[bgm0]", "anull"
+        img_start = next((a for a, b, ok in times if ok), 0.0)
+        img_end = max((b for a, b, ok in times if ok), default=img_start)
+    else:
+        head = f"[{audio_index}:a]"
+        pre = (f"atrim=start={mstart:.3f}:"
+               f"end={mstart + total:.3f},asetpts=N/SR/TB")
+        img_start, img_end = 0.0, total
+
+    filters = []
     if abs(volume - 1.0) > 0.005:
-        audio += f",volume={max(0.0, float(volume)):.3f}"
+        filters.append(f"volume={max(0.0, float(volume)):.3f}")
     if fade_in > 0:
-        audio += f",afade=t=in:st=0:d={fade_in:.3f}"
-    fade = min(max(0.0, fade_out), max(0.0, total - 0.05))
+        filters.append(f"afade=t=in:st={_sec(img_start)}:d={fade_in:.3f}")
+    span = max(0.0, img_end - img_start)
+    fade = min(max(0.0, float(fade_out)), max(0.0, span - 0.05))
     if fade > 0.05:
-        audio += f",afade=t=out:st={max(0.0, total - fade):.3f}:d={fade:.3f}"
-    parts.append(audio + "[aout]")
+        filters.append(
+            f"afade=t=out:st={max(img_start, img_end - fade):.3f}:d={fade:.3f}")
+    audio = head + pre
+    if filters:
+        audio += "," + ",".join(filters)
+
+    if extras:
+        # 主音频先落到一个标签上，才接得进 amix（否则把整条链塞进 input 列表就废了）
+        main_label = "[bgmain]"
+        parts.append(audio + main_label)
+        mix = [main_label]
+        for k, ex in enumerate(extras):
+            ch = (f"[{ex['index']}:a]atrim=start=0:end={ex['dur']:.3f},"
+                  f"asetpts=N/SR/TB")
+            vol = float(ex.get("volume", 1.0))
+            if abs(vol - 1.0) > 0.005:
+                ch += f",volume={max(0.0, vol):.3f}"
+            ms = int(round(max(0.0, float(ex["start"])) * 1000))
+            ch += f",adelay={ms}|{ms}[ax{k}]"
+            parts.append(ch)
+            mix.append(f"[ax{k}]")
+        parts.append("".join(mix) +
+                     f"amix=inputs={len(mix)}:normalize=0:duration=longest,"
+                     f"apad,atrim=0:{total:.3f}[aout]")
+    else:
+        parts.append(audio + "[aout]")
     return ";".join(parts)
 
 
-def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
+def _audio_items(audio) -> list[dict]:
+    """把 render 的 audio 参数统一成 [{path,start,dur,volume,gap}]。"""
+    if not audio:
+        return []
+    if isinstance(audio, str):
+        return [{"path": audio, "start": 0.0,
+                 "dur": probe_duration(audio), "volume": 1.0, "gap": True}]
+    items = []
+    for a in audio:
+        if isinstance(a, dict):
+            items.append(a)
+        elif isinstance(a, AudioClip):
+            items.append({"path": a.path, "start": a.start, "dur": a.dur,
+                          "volume": a.volume, "gap": a.gap})
+        else:  # 路径字符串
+            items.append({"path": a, "start": 0.0,
+                          "dur": probe_duration(a), "volume": 1.0, "gap": True})
+    return items
+
+
+def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
            crf=20, preset="veryfast", fps=FPS, fit="own", fade_in=FADE_IN,
            fade_out=FADE_OUT, transition="none", transition_sec=0.3,
            bg_blur=True, pad_color="#000000", bg_path="", motion="none",
-           volume=1.0, crop_focus="center", music_start=0.0, on_progress=None,
-           proc_holder=None) -> str:
+           volume=1.0, crop_focus="center", music_start=0.0, xfade_sec=0.3,
+           on_progress=None, proc_holder=None) -> str:
     """一条 filtergraph 渲完；on_progress(0..1) 回调。
 
+    audio 可以是路径、AudioClip 列表或等价的 dict 列表。
     proc_holder 给一个 dict 时，把 ffmpeg 进程塞进 proc_holder["proc"]，
     外面就能 terminate() 取消这次渲染。
     """
     if not counts:
         raise RenderError(tr("没有图片"))
-    bad = [c.path for c in clips if not image_ok(c.path)]
+    for c, nf in zip(clips, counts):
+        if c.is_video and not os.path.exists(c.path):
+            raise RenderError(tr("这张图片读不出来：{name}",
+                                 name=os.path.basename(c.path)))
+    bad = [c.path for c in clips if not c.is_video and not image_ok(c.path)]
     if bad:
-        raise RenderError(tr("这张图片读不出来：{name}", name=os.path.basename(bad[0])))
+        raise RenderError(tr("这张图片读不出来：{name}",
+                             name=os.path.basename(bad[0])))
+    counts2, overlaps = _xfade_plan(clips, counts, fps, xfade_sec)
     total = sum(counts) / fps
     add_bg = fit in BG_MODES
     if add_bg:
@@ -705,35 +1047,82 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
             raise RenderError(tr("选的背景文件不存在，去设置里重新选一个"))
         if fit == "image" and not bg_path.lower().endswith(tuple(IMG_EXTS)):
             raise RenderError(tr("背景图格式不支持，用 jpg / png / webp / bmp"))
+
+    # 时间线：每段在成片里占的区间（交叉淡化把边界挤掉一块）
+    segs = [nf / fps for nf in counts2]
+    spans, acc = [], 0.0
+    for i, seg in enumerate(segs):
+        d_prev = overlaps[i - 1] / fps if i > 0 else 0.0
+        d_next = overlaps[i] / fps if i < len(segs) - 1 else 0.0
+        spans.append((acc, acc + seg - d_next))
+        acc += seg - (d_next if i < len(segs) - 1 else 0.0)
+    timeline = [(not c.is_video, max(0.05, spans[i][1] - spans[i][0]))
+                for i, c in enumerate(clips)]
+    if abs(sum(d for _, d in timeline) - total) > 0.05:   # 别让音画漂
+        timeline = [(not c.is_video, counts[i] / fps)
+                    for i, c in enumerate(clips)]
+
+    items = _audio_items(audio)
+    bgm = next((a for a in items if a.get("gap")), None)
+    extras = [a for a in items if not a.get("gap")]
+
     graph = build_graph(counts, total, w, h, fps=fps, fit=fit,
                         fade_in=fade_in, fade_out=fade_out,
                         transition=transition, transition_sec=transition_sec,
                         bg_blur=bg_blur, pad_color=pad_color,
                         bg_index=(len(counts) if add_bg else None),
-                        audio_index=(len(counts) + (1 if add_bg else 0)),
-                        motion=motion, volume=volume, crop_focus=crop_focus,
-                        music_start=music_start)
+                        audio_index=len(counts) + (1 if add_bg else 0),
+                        motion=motion, volume=volume,
+                        crop_focus=crop_focus, music_start=music_start,
+                        clips=clips, timeline=timeline,
+                        extras=None, xfade_sec=xfade_sec)
     cmd = [FFMPEG, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
            "-progress", "pipe:1", "-nostats"]
-    for c, nf in zip(clips, counts):
-        cmd += ["-loop", "1", "-framerate", str(fps), "-t",
-                f"{nf / fps + 0.2:.3f}", "-i", c.path]
+    for c, nf in zip(clips, counts2):
+        if c.is_video:
+            cmd += ["-i", c.path]
+        else:
+            cmd += ["-loop", "1", "-framerate", str(fps), "-t",
+                    f"{nf / fps + 0.2:.3f}", "-i", c.path]
     if add_bg:
         if fit == "video":
             cmd += ["-stream_loop", "-1", "-i", bg_path]
         else:
             cmd += ["-loop", "1", "-framerate", str(fps), "-t",
                     f"{total + 1.0:.3f}", "-i", bg_path]
-    if audio_path:
-        adur = probe_duration(audio_path)
-        if adur > 0:
-            adur = max(0.0, adur - max(0.0, float(music_start)))
-        if adur > 0 and adur + 0.05 < total:
+
+    audio_index = len(counts) + (1 if add_bg else 0)
+    need = sum(d for is_img, d in timeline if is_img)
+    if bgm and bgm.get("path"):
+        adur = bgm.get("dur") or probe_duration(bgm["path"])
+        adur = max(0.0, adur - max(0.0, float(music_start)))
+        if adur > 0 and adur + 0.05 < need:
             cmd += ["-stream_loop", "-1"]
-        cmd += ["-i", audio_path]
+        cmd += ["-i", bgm["path"]]
     else:
         cmd += ["-f", "lavfi", "-i",
                 "anullsrc=channel_layout=stereo:sample_rate=48000"]
+
+    extra_specs = []
+    for k, ex in enumerate(extras):
+        idx = audio_index + 1 + k
+        cmd += ["-i", ex["path"]]
+        dur = ex.get("dur") or probe_duration(ex["path"])
+        extra_specs.append({"index": idx, "start": ex.get("start", 0.0),
+                            "dur": max(0.05, dur),
+                            "volume": ex.get("volume", 1.0)})
+    if extra_specs:
+        graph = build_graph(counts, total, w, h, fps=fps, fit=fit,
+                            fade_in=fade_in, fade_out=fade_out,
+                            transition=transition,
+                            transition_sec=transition_sec,
+                            bg_blur=bg_blur, pad_color=pad_color,
+                            bg_index=(len(counts) if add_bg else None),
+                            audio_index=audio_index, motion=motion,
+                            volume=volume, crop_focus=crop_focus,
+                            music_start=music_start, clips=clips,
+                            timeline=timeline, extras=extra_specs,
+                            xfade_sec=xfade_sec)
 
     graph_file = None
     if len(graph) > 6000:
@@ -792,6 +1181,7 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
                 os.remove(out_path)
             except OSError:
                 pass
+
 
 
 # ---------------------------------------------------------------- 命令行
@@ -907,7 +1297,8 @@ def cli_export(argv: list[str]) -> int:
     pr.add_images(a.images, dur=a.total)
     if a.total:
         pr.mode = "total"
-        pr.total_setting = max(MIN_DUR * len(pr.clips), a.total * len(pr.clips))
+        pr.total_setting = max(MIN_DUR * pr.image_count(),
+                               a.total * pr.image_count())
     if audio:
         pr.audio_path = audio
         pr.audio_dur = probe_duration(audio)
@@ -930,7 +1321,7 @@ def cli_export(argv: list[str]) -> int:
             last[0] = pct
             print(f"          {pct}%")
 
-    render(pr.clips, pr.frame_counts(), audio, a.export, **opts,
+    render(pr.clips, pr.frame_counts(), pr.audios, a.export, **opts,
            on_progress=prog)
     print(tr("完成：{path}  ({secs}s, {mb} MB)", path=a.export,
              secs=f"{time.perf_counter() - t0:.1f}",
@@ -1027,7 +1418,7 @@ def run_gui() -> int:
         r = win.geometry()
         x, y = gx - r.x(), gy - r.y()
         w, h = r.width(), r.height()
-        if resize and not win.isMaximized() and not win.isFullScreen():
+        if resize and not win.is_maxed() and not win.isFullScreen():
             b = 6.0
             left, right = x < b, x >= w - b
             top, bottom = y < b, y >= h - b
@@ -1113,16 +1504,12 @@ def run_gui() -> int:
         def sync_max(self):
             if not self.btn_max.isVisible():
                 return
-            maxed = self.win.isMaximized()
+            maxed = self.win.is_maxed()
             self.btn_max.setText("❐" if maxed else "□")
             self.btn_max.setToolTip(tr("还原") if maxed else tr("最大化"))
 
         def toggle_max(self):
-            if self.win.isMaximized():
-                self.win.showNormal()
-            else:
-                self.win.showMaximized()
-            self.sync_max()
+            self.win.toggle_maximum()
 
         # 系统命中测试生效时这些事件收不到；收得到就自己拖，双保险
         def mousePressEvent(self, ev):
@@ -1535,36 +1922,76 @@ def run_gui() -> int:
             self.order_changed.emit()
 
     class Timeline(QWidget):
+        """双轨时间线：上面视频元素，下面音频元素。
+
+        能做的：点一下跳转、拖播放头擦洗、拖色块换位置、拖右边界改时长、
+        Shift/Ctrl 多选、音频块滚轮调音量、右键弹出对应元素的菜单。
+        """
+
         seeked = pyqtSignal(float)
         picked = pyqtSignal(int)
         resized = pyqtSignal(int, float)
+        moved = pyqtSignal(int, float)
+        audioMoved = pyqtSignal(int, float)
+        audioVolume = pyqtSignal(int, float)
+        menu = pyqtSignal(str, int, object)
 
         DEFAULT_COLORS = {"bg": "#1f2329", "empty": "#9ca3af",
                           "piece_a": "#b86b6b", "piece_b": "#b8a05f",
                           "piece_text": "#111827", "playhead": "#f59e0b",
-                          "selected_edge": "#3b82f6"}
+                          "selected_edge": "#3b82f6", "audio": "#2f6f5e",
+                          "audio_sel": "#3f9d84"}
 
         def __init__(self, project, parent=None):
             super().__init__(parent)
             self.project = project
-            self.selected = -1
+            self.selected: list[int] = []
+            self.sel_audio: list[int] = []
             self.play_pos = 0.0
             self._drag = None
+            self._press = 0.0
             self.c = dict(self.DEFAULT_COLORS)
-            self.setMinimumHeight(64)
+            self.setMinimumHeight(112)
             self.setMouseTracking(True)
             self.setCursor(Qt.CursorShape.PointingHandCursor)
             self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
+        # -- 几何 ------------------------------------------------------
+        def _video_rect(self):
+            h = self.height()
+            return 4, max(30, int(h * 0.60))
+
+        def _audio_rect(self):
+            top = self._video_rect()[1] + 14
+            return top, max(16, self.height() - top - 4)
+
+        def _total(self) -> float:
+            return sum(c.dur for c in self.project.clips) or 1.0
+
         def _spans(self):
-            durs = [c.dur for c in self.project.clips]
-            total = sum(durs) or 1.0
+            total = self._total()
             x, spans = 0.0, []
-            for d in durs:
+            for d in (c.dur for c in self.project.clips):
                 w = self.width() * d / total
                 spans.append((x, x + w, d))
                 x += w
             return spans, total
+
+        def _audio_spans(self):
+            total = self._total()
+            out = []
+            for a in self.project.audios:
+                x0 = self.width() * max(0.0, a.start) / total
+                x1 = self.width() * min(total, a.start + a.dur) / total
+                out.append((x0, max(x0 + 3, x1), a))
+            return out
+
+        def _audio_rows(self, count: int):
+            """多条音频各自一行，能并排看到叠在一起的效果。"""
+            top, h = self._audio_rect()
+            n = max(1, count)
+            row = max(10.0, h / n)
+            return [(top + i * row, top + (i + 1) * row - 2) for i in range(n)]
 
         def set_colors(self, colors):
             """主题换了就换色带配色（时间线自己画，不吃 QSS）。"""
@@ -1572,6 +1999,15 @@ def run_gui() -> int:
             self.c.update({k: v for k, v in colors.items() if k in self.c})
             self.update()
 
+        def set_selection(self, rows):
+            self.selected = [r for r in rows if 0 <= r < len(self.project.clips)]
+            self.update()
+
+        def set_audio_selection(self, rows):
+            self.sel_audio = [r for r in rows if 0 <= r < len(self.project.audios)]
+            self.update()
+
+        # -- 画 --------------------------------------------------------
         def paintEvent(self, ev):
             p = QPainter(self)
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -1585,72 +2021,227 @@ def run_gui() -> int:
             font = QFont(self.font())
             font.setPointSize(9)
             p.setFont(font)
+            top, vh = self._video_rect()
             base = QColor(self.c["piece_a"])
             dark_bg = self.c.get("theme") == "dark"
+            crosses = 0.0
             for i, (x0, x1, d) in enumerate(spans):
-                # 色带统一用主色，隔一块微调明度，边界一眼能分清；
-                # 对撞色只留给播放头 / 进度条这类点缀。
+                clip = self.project.clips[i]
                 col = QColor(base)
                 if i % 2:
                     col = col.lighter(116) if dark_bg else col.darker(108)
-                if i == self.selected:
-                    col = col.lighter(125)
-                p.fillRect(int(x0) + 1, 4, max(1, int(x1 - x0) - 2),
-                           self.height() - 8, col)
-                if i == self.selected:
+                if i in self.selected:
+                    col = col.lighter(128)
+                p.fillRect(int(x0) + 1, top, max(1, int(x1 - x0) - 2),
+                           vh - top - 2, col)
+                if i in self.selected:
                     p.setPen(QPen(QColor(self.c["selected_edge"]), 2))
-                    p.drawRect(int(x0) + 1, 4, max(1, int(x1 - x0) - 2),
-                               self.height() - 9)
+                    p.drawRect(int(x0) + 1, top, max(1, int(x1 - x0) - 2),
+                               vh - top - 3)
                 if x1 - x0 > 26:
                     p.setPen(QColor(theme.contrast_text(col.name())))
-                    p.drawText(int(x0) + 6, self.height() - 12,
-                               f"{i + 1} · {d:.1f}s")
-            if total > 0:
-                px = int(self.width() * min(1.0, self.play_pos / total))
-                p.setPen(QPen(QColor(self.c["playhead"]), 2))
-                p.drawLine(px, 0, px, self.height())
+                    name = {"intro": tr("片头"), "outro": tr("片尾")}.get(
+                        clip.kind, f"{i + 1}")
+                    marks = ""
+                    if clip.fade:
+                        marks += "◐"
+                    if clip.xfade:
+                        marks += "⇄"
+                    p.drawText(int(x0) + 6, top + 15,
+                               f"{name} · {d:.1f}s {marks}")
+                if clip.xfade and i < len(spans) - 1:
+                    crosses += 1
+                    p.setPen(QPen(QColor(self.c["playhead"]), 1,
+                                  Qt.PenStyle.DotLine))
+                    p.drawLine(int(x1), top, int(x1), top + vh - top)
 
-        def _hit(self, x):
+            # 音频轨
+            aspans = self._audio_spans()
+            rows = self._audio_rows(len(aspans))
+            atrack_top, atrack_bottom = self._audio_rect()
+            p.setPen(QColor(self.c["empty"]))
+            p.drawText(4, atrack_top - 4, tr("音频"))
+            for k, (x0, x1, a) in enumerate(aspans):
+                ry0, ry1 = rows[k]
+                col = QColor(self.c["audio_sel"] if k in self.sel_audio
+                             else self.c["audio"])
+                if a.gap:
+                    col = QColor(self.c["piece_b"])
+                p.fillRect(int(x0), int(ry0) + 1, max(2, int(x1 - x0)),
+                           max(4, int(ry1 - ry0) - 1), col)
+                if x1 - x0 > 34:
+                    p.setPen(QColor(theme.contrast_text(col.name())))
+                    p.drawText(int(x0) + 5, int(ry0) + 12,
+                               f"{os.path.basename(a.path)[:18]}  "
+                               f"{int(round(a.volume * 100))}%")
+
+            px = int(self.width() * min(1.0, self.play_pos / total))
+            p.setPen(QPen(QColor(self.c["playhead"]), 2))
+            p.drawLine(px, 0, px, self.height())
+
+        # -- 命中 ------------------------------------------------------
+        def _hit_video(self, x, y):
+            _t, vh = self._video_rect()
+            if y > vh + 2:
+                return -1, -1.0
             spans, _ = self._spans()
             for i, (x0, x1, _d) in enumerate(spans):
-                if x0 - 4 <= x <= x1 + 4:
+                if x0 - 3 <= x <= x1 + 3:
                     return i, x1
-            return -1, 0
+            return -1, 0.0
 
+        def _hit_audio(self, x, y):
+            top, bottom = self._audio_rect()
+            if y < top - 3 or y > bottom + 3:
+                return -1
+            for k, (x0, x1, _a) in enumerate(self._audio_spans()):
+                if x0 - 3 <= x <= x1 + 3:
+                    return k
+            return -1
+
+        # -- 鼠标 ------------------------------------------------------
         def mousePressEvent(self, ev):
+            x, y = ev.position().x(), ev.position().y()
+            self._press = x
+            if ev.button() == Qt.MouseButton.RightButton:
+                i, _ = self._hit_video(x, y)
+                if i >= 0:
+                    if i not in self.selected:
+                        self.selected = [i]
+                    self.picked.emit(i)
+                    self.update()
+                    self.menu.emit("video", i, ev.globalPosition().toPoint())
+                    return
+                k = self._hit_audio(x, y)
+                if k >= 0:
+                    if k not in self.sel_audio:
+                        self.sel_audio = [k]
+                    self.update()
+                    self.menu.emit("audio", k, ev.globalPosition().toPoint())
+                    return
+                self.menu.emit("empty", -1, ev.globalPosition().toPoint())
+                return
             if ev.button() != Qt.MouseButton.LeftButton:
                 return
-            x = ev.position().x()
-            spans, total = self._spans()
-            for i, (x0, x1, d) in enumerate(spans):
-                if abs(x - x1) <= 5:
-                    self._drag = (i, x, d)
+
+            i, edge_x = self._hit_video(x, y)
+            if i >= 0:
+                spans, total = self._spans()
+                x0, x1, d = spans[i]
+                clip = self.project.clips[i]
+                if (not clip.is_video) and abs(x - x1) <= 5:
+                    self._drag = ("resize", i, x, d)
                     self.setCursor(Qt.CursorShape.SizeHorCursor)
                     return
-            for i, (x0, x1, d) in enumerate(spans):
-                if x0 <= x <= x1:
-                    self.selected = i
-                    self.picked.emit(i)
-                    start = sum(c.dur for c in self.project.clips[:i])
-                    self.seeked.emit(start)
-                    self.update()
-                    return
+                multi = bool(ev.modifiers() & (Qt.KeyboardModifier.ShiftModifier
+                                               | Qt.KeyboardModifier.ControlModifier))
+                if multi:
+                    if i in self.selected:
+                        self.selected.remove(i)
+                    else:
+                        self.selected.append(i)
+                    self.selected.sort()
+                else:
+                    self.selected = [i]
+                self.picked.emit(i)
+                start = sum(c.dur for c in self.project.clips[:i])
+                self.seeked.emit(start)
+                self.play_pos = start
+                self._drag = ("clip", i, x, x0)
+                self.update()
+                return
+
+            k = self._hit_audio(x, y)
+            if k >= 0:
+                a = self.project.audios[k]
+                multi = bool(ev.modifiers() & (Qt.KeyboardModifier.ShiftModifier
+                                               | Qt.KeyboardModifier.ControlModifier))
+                if multi:
+                    if k in self.sel_audio:
+                        self.sel_audio.remove(k)
+                    else:
+                        self.sel_audio.append(k)
+                    self.sel_audio.sort()
+                else:
+                    self.sel_audio = [k]
+                self._drag = ("audio", k, x, a.start)
+                self.update()
+                return
+
+            # 空白处：拖播放头
+            self._drag = ("scrub", -1, x, 0.0)
+            _spans, total = self._spans()
+            self.play_pos = total * x / max(1, self.width())
+            self.seeked.emit(self.play_pos)
+            self.update()
 
         def mouseMoveEvent(self, ev):
-            if self._drag:
-                i, x0, d0 = self._drag
-                spans, total = self._spans()
-                if total > 0:
-                    self.resized.emit(i, d0 + (ev.position().x() - x0) * total / max(1, self.width()))
+            x, y = ev.position().x(), ev.position().y()
+            if not self._drag:
+                i, edge_x = self._hit_video(x, y)
+                near = (i >= 0 and not self.project.clips[i].is_video
+                        and abs(x - edge_x) <= 5)
+                self.setCursor(Qt.CursorShape.SizeHorCursor if near
+                               else Qt.CursorShape.PointingHandCursor)
                 return
-            x = ev.position().x()
-            near = any(abs(x - x1) <= 5 for _x0, x1, _d in self._spans()[0])
-            self.setCursor(Qt.CursorShape.SizeHorCursor if near
-                           else Qt.CursorShape.PointingHandCursor)
+            kind = self._drag[0]
+            if kind == "scrub":
+                _spans, total = self._spans()
+                self.play_pos = total * x / max(1, self.width())
+                self.seeked.emit(self.play_pos)
+                self.update()
+                return
+            if kind == "resize":
+                _k, i, x0, d0 = self._drag
+                _spans, total = self._spans()
+                self.resized.emit(
+                    i, d0 + (x - x0) * total / max(1, self.width()))
+                return
+            if kind == "audio":
+                _k, idx, x0, start0 = self._drag
+                _spans, total = self._spans()
+                self.play_pos = total * x / max(1, self.width())
+                self.update()
+                return
+            if kind == "clip":
+                self.play_pos = self._time_at(x)
+                self.update()
+
+        def _time_at(self, x: float) -> float:
+            total = self._total()
+            return max(0.0, min(total, total * x / max(1, self.width())))
 
         def mouseReleaseEvent(self, ev):
-            self._drag = None
+            drag, self._drag = self._drag, None
             self.setCursor(Qt.CursorShape.PointingHandCursor)
+            if not drag:
+                return
+            kind = drag[0]
+            x = ev.position().x()
+            if kind == "clip":
+                i = drag[1]
+                if abs(x - drag[2]) > 6:
+                    self.moved.emit(i, self._time_at(x))
+                return
+            if kind == "audio":
+                _k, idx, x0, start0 = drag
+                if abs(x - x0) <= 6:
+                    return
+                total = self._total()
+                delta = (x - x0) * total / max(1, self.width())
+                a = self.project.audios[idx]
+                self.audioMoved.emit(idx, max(0.0, start0 + delta))
+                return
+
+        def wheelEvent(self, ev):
+            k = self._hit_audio(ev.position().x(), ev.position().y())
+            if k < 0:
+                ev.ignore()
+                return
+            step = 0.05 if ev.angleDelta().y() > 0 else -0.05
+            self.audioVolume.emit(k, step)
+            ev.accept()
+
 
     class ColorWheel(QWidget):
         """色环（色相）+ 中间的饱和度/明度方块，按住就能拖。
@@ -1923,6 +2514,31 @@ def run_gui() -> int:
             self.chk_open.setChecked(bool(settings["open_after_export"]))
             self._form().addRow(self.chk_open)   # 自带文字，不需要左边标签
 
+            self.cmb_win = QComboBox()
+            for k in WIN_MODES:
+                self.cmb_win.addItem(tr(WIN_LABELS[k]), k)
+            self.cmb_win.setCurrentIndex(
+                max(0, list(WIN_MODES).index(settings["win_mode"])))
+            self.cmb_win.activated.connect(self._sync_win_mode)
+            add_row("启动时窗口", self.cmb_win)
+            self.spin_win_w = QSpinBox()
+            self.spin_win_w.setRange(800, 8000)
+            self.spin_win_w.setSingleStep(20)
+            self.spin_win_w.setValue(int(settings["win_fixed_w"]))
+            self.spin_win_h = QSpinBox()
+            self.spin_win_h.setRange(560, 8000)
+            self.spin_win_h.setSingleStep(20)
+            self.spin_win_h.setValue(int(settings["win_fixed_h"]))
+            row_win = QHBoxLayout()
+            row_win.setContentsMargins(0, 0, 0, 0)
+            row_win.addWidget(self.spin_win_w, 1)
+            row_win.addWidget(QLabel("x"))
+            row_win.addWidget(self.spin_win_h, 1)
+            wrap_win = QWidget()
+            wrap_win.setLayout(row_win)
+            add_row("固定大小", wrap_win)
+            self._sync_win_mode()
+
             add_sep("画面")
             self._syncing = True
             self.cmb_ratio = QComboBox()
@@ -1975,6 +2591,32 @@ def run_gui() -> int:
             self.cmb_fit.setCurrentIndex(list(FIT_MODES).index(settings["fit"]))
             self.cmb_fit.currentIndexChanged.connect(self._sync_fit)
             add_row("画面铺底", self.cmb_fit)
+
+            self.edit_intro = QLineEdit(settings["intro_path"])
+            self.edit_intro.setPlaceholderText(
+                tr("视频文件（留空 = 不加片头）"))
+            btn_intro = QPushButton(tr("浏览…"))
+            btn_intro.clicked.connect(lambda: self._browse_clip(self.edit_intro))
+            wrap_intro = QWidget()
+            row_intro = QHBoxLayout()
+            row_intro.setContentsMargins(0, 0, 0, 0)
+            row_intro.addWidget(self.edit_intro, 1)
+            row_intro.addWidget(btn_intro)
+            wrap_intro.setLayout(row_intro)
+            add_row("默认片头视频", wrap_intro)
+
+            self.edit_outro = QLineEdit(settings["outro_path"])
+            self.edit_outro.setPlaceholderText(
+                tr("视频文件（留空 = 不加片尾）"))
+            btn_outro = QPushButton(tr("浏览…"))
+            btn_outro.clicked.connect(lambda: self._browse_clip(self.edit_outro))
+            wrap_outro = QWidget()
+            row_outro = QHBoxLayout()
+            row_outro.setContentsMargins(0, 0, 0, 0)
+            row_outro.addWidget(self.edit_outro, 1)
+            row_outro.addWidget(btn_outro)
+            wrap_outro.setLayout(row_outro)
+            add_row("默认片尾视频", wrap_outro)
 
             self._color = settings["pad_color"]
             self.btn_color = QPushButton(self._color)
@@ -2224,6 +2866,18 @@ def run_gui() -> int:
                 self._accent = dlg.value()
                 self._sync_accent()
 
+        def _browse_clip(self, edit):
+            picked = FileDialog.get_open_files(
+                self, tr("选视频"), edit.text() or "",
+                tr("视频 (*.mp4 *.mov *.mkv *.webm *.avi)"))
+            if picked:
+                edit.setText(picked[0])
+
+        def _sync_win_mode(self, *_a):
+            fixed = self.cmb_win.currentData() == "fixed"
+            self.spin_win_w.setEnabled(fixed)
+            self.spin_win_h.setEnabled(fixed)
+
         def _browse_bg(self):
             video = self.cmb_fit.currentData() == "video"
             cap = tr("选背景视频") if video else tr("选背景图片")
@@ -2317,6 +2971,11 @@ def run_gui() -> int:
                 music_len=float(self.spin_mlen.value()),
                 crop_focus=self.cmb_crop.currentData(),
                 transition_sec=float(self.spin_trans.value()),
+                win_mode=self.cmb_win.currentData(),
+                win_fixed_w=int(self.spin_win_w.value()),
+                win_fixed_h=int(self.spin_win_h.value()),
+                intro_path=self.edit_intro.text().strip(),
+                outro_path=self.edit_outro.text().strip(),
             )
             super().accept()
 
@@ -2368,6 +3027,8 @@ def run_gui() -> int:
             self._rebuilding = False
             self._render_kind = "export"
             self._render_t0 = 0.0
+            self._maxed = False
+            self._geo_before_max = None
 
             self.player = QMediaPlayer(self)
             self.audio_out = QAudioOutput(self)
@@ -2402,8 +3063,22 @@ def run_gui() -> int:
 
         # ---------------- 窗口大小 / 位置
         def _restore_geometry(self):
-            """上次关窗时的大小和位置；不在任何屏幕上就退回默认。"""
+            """启动窗口：按设置记住上次 / 直接最大化 / 固定宽高。"""
             s = self.settings
+            mode = s["win_mode"]
+            if mode == "max":
+                self.maximize_to_screen()
+                return
+            if mode == "fixed":
+                w = max(800, int(s["win_fixed_w"]))
+                h = max(560, int(s["win_fixed_h"]))
+                self.resize(w, h)
+                scr = QApplication.primaryScreen()
+                if scr is not None:
+                    a = scr.availableGeometry()
+                    self.move(a.x() + max(0, (a.width() - w) // 2),
+                              a.y() + max(0, (a.height() - h) // 2))
+                return
             w, h = int(s["win_w"]), int(s["win_h"])
             x, y = int(s["win_x"]), int(s["win_y"])
             if w >= 800 and h >= 560:
@@ -2417,9 +3092,37 @@ def run_gui() -> int:
                     self.move(x, y)
                     return
 
+        def is_maxed(self):
+            """自绘窗口的「最大化」：Qt 的 isMaximized() 对无边框窗口不可靠。"""
+            return self._maxed
+
+        def maximize_to_screen(self):
+            if not self._maxed:
+                self._geo_before_max = self.geometry()
+            scr = self.screen() or QApplication.primaryScreen()
+            if scr is not None:
+                self.setGeometry(scr.availableGeometry())
+            self._maxed = True
+            self.titlebar.sync_max()
+
+        def restore_down(self):
+            self._maxed = False
+            if self._geo_before_max is not None:
+                self.setGeometry(self._geo_before_max)
+            self.titlebar.sync_max()
+
+        def toggle_maximum(self):
+            if self._maxed:
+                self.restore_down()
+            else:
+                self.maximize_to_screen()
+
         def _save_geometry(self):
             s = self.settings
-            g = self.normalGeometry() if self.isMaximized() else self.geometry()
+            if self._maxed and self._geo_before_max is not None:
+                g = self._geo_before_max
+            else:
+                g = self.geometry()
             s["win_w"], s["win_h"] = g.width(), g.height()
             s["win_x"], s["win_y"] = g.x(), g.y()
             s.save()
@@ -2552,6 +3255,10 @@ def run_gui() -> int:
             self.timeline.seeked.connect(self.seek)
             self.timeline.picked.connect(self.on_timeline_pick)
             self.timeline.resized.connect(self.on_timeline_resize)
+            self.timeline.moved.connect(self.on_timeline_move)
+            self.timeline.audioMoved.connect(self.on_audio_move)
+            self.timeline.audioVolume.connect(self.on_audio_volume)
+            self.timeline.menu.connect(self.on_timeline_menu)
             v.addWidget(self.timeline)
 
             foot = QHBoxLayout()
@@ -2755,18 +3462,21 @@ def run_gui() -> int:
                 self.spin_total.blockSignals(True)
                 self.spin_total.setValue(self.project.total_setting)
                 self.spin_total.blockSignals(False)
-            n = len(self.project.clips)
+            n = self.project.image_count()
             src = "BGM" if self.project.audio_path else tr("无音乐")
+            extra = ""
+            if self.project.intro() or self.project.outro():
+                extra = tr("（含片头片尾）")
             self.lbl_status.setText(
                 tr("{n} 张图 · 总长 {total} · {src}", n=n,
-                   total=human_time(self.project.total()), src=src))
+                   total=human_time(self.project.total()), src=src) + extra)
 
         def _refresh_list(self):
             self._rebuilding = True
             cur = self.list.currentRow()
             self.list.clear()
             for i, c in enumerate(self.project.clips):
-                it = QListWidgetItem(self._thumb(c.path), "")
+                it = QListWidgetItem(self._thumb(c.path, c.kind), "")
                 it.setData(Qt.ItemDataRole.UserRole, c.path)
                 it.setData(Qt.ItemDataRole.UserRole + 1, c.dur)
                 self.list.addItem(it)
@@ -2782,11 +3492,24 @@ def run_gui() -> int:
                     continue
                 it.setData(Qt.ItemDataRole.UserRole, c.path)
                 it.setData(Qt.ItemDataRole.UserRole + 1, c.dur)
-                it.setText(tr("{i}.  {dur} 秒   {name}", i=i + 1,
+                head = {"intro": tr("片头"),
+                        "outro": tr("片尾")}.get(c.kind, f"{i + 1}.")
+                it.setText(tr("{i}.  {dur} 秒   {name}", i=head,
                               dur=f"{c.dur:.1f}",
                               name=os.path.basename(c.path)))
 
-        def _thumb(self, path):
+        def _thumb(self, path, kind="image"):
+            if kind in ("intro", "outro"):
+                pm = QPixmap(96, 54)
+                pm.fill(QColor(self.pal["panel"]))
+                p = QPainter(pm)
+                p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                p.setBrush(QColor(self.pal["accent2"]))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.drawPolygon(QPolygonF([QPointF(40, 17), QPointF(40, 37),
+                                         QPointF(60, 27)]))
+                p.end()
+                return QIcon(pm)
             pm = QPixmap(path)
             if pm.isNull():
                 return QIcon()
@@ -2847,6 +3570,7 @@ def run_gui() -> int:
                         fade_out=float(s["fade_out"]),
                         transition=s["transition"],
                         transition_sec=float(s["transition_sec"]),
+                        xfade_sec=float(s["transition_sec"]),
                         motion=s["motion"],
                         volume=float(s["music_volume"]),
                         music_start=float(s["music_start"]),
@@ -2872,7 +3596,10 @@ def run_gui() -> int:
             if good:
                 dur = (self.settings["per_image"]
                        if self.project.mode == "free" else None)
-                self.project.add_images(good, dur=dur)
+                self.project.add_images(
+                    good, dur=dur,
+                    intro=self.settings["intro_path"],
+                    outro=self.settings["outro_path"])
                 self.radio_total.setChecked(self.project.mode == "total")
                 self._refresh_all()
                 self.lbl_status.setText(tr("已加 {n} 张图", n=len(good)))
@@ -2916,8 +3643,11 @@ def run_gui() -> int:
             self._refresh_all()
 
         def on_row_changed(self, row):
-            self.timeline.selected = row
-            self.timeline.update()
+            if row < 0:
+                self.timeline.set_selection([])
+            else:
+                rows = [i.row() for i in self.list.selectedItems()]
+                self.timeline.set_selection(rows or [row])
 
         def on_mode(self, mode):
             set_mode(self.project, mode)
@@ -2931,7 +3661,11 @@ def run_gui() -> int:
             self._refresh_all()
 
         def on_timeline_pick(self, i):
-            self.list.setCurrentRow(i)
+            if 0 <= i < self.list.count():
+                self.list.blockSignals(True)
+                self.list.setCurrentRow(i)
+                self.list.blockSignals(False)
+            self.timeline.set_selection(self.timeline.selected or [i])
 
         def on_timeline_resize(self, i, value):
             self.project.set_duration(i, value)
@@ -2939,8 +3673,160 @@ def run_gui() -> int:
             self.timeline.update()
             self._mark_stale()
             self.lbl_status.setText(
-                tr("{n} 张图 · 总长 {total}", n=len(self.project.clips),
+                tr("{n} 张图 · 总长 {total}", n=self.project.image_count(),
                    total=human_time(self.project.total())))
+
+        def on_timeline_move(self, i, pos):
+            self.project.move_to(i, pos)
+            self._refresh_all()
+            if 0 <= i < self.list.count():
+                self.list.setCurrentRow(i)
+
+        def add_audio_extra(self, path: str):
+            """再叠一条音频（不占 BGM 那条，起始位置跟着播放头）。"""
+            path = os.path.normpath(path)
+            if not os.path.isfile(path):
+                return
+            dur = max(0.2, probe_duration(path) or 3.0)
+            pos = min(max(0.0, self.player.position() / 1000.0),
+                      max(0.0, self.project.total()))
+            self.project.audios.append(
+                AudioClip(path, dur, pos, 1.0, gap=False))
+            self._refresh_all()
+            self.lbl_status.setText(
+                tr("已加音频 {name}", name=os.path.basename(path)))
+
+        def on_add_audio(self):
+            picked = FileDialog.get_open_files(
+                self, tr("添加音频文件"), "",
+                tr("音频 (*.mp3 *.m4a *.aac *.wav *.flac *.ogg)"))
+            for p in picked:
+                self.add_audio_extra(p)
+
+        def on_remove_audio(self, k):
+            if 0 <= k < len(self.project.audios):
+                self.project.audios.pop(k)
+                self.timeline.sel_audio = []
+                self._refresh_all()
+                self._mark_stale()
+
+        def on_audio_move(self, k, start):
+            if not (0 <= k < len(self.project.audios)):
+                return
+            self.project.audios[k].start = max(0.0, float(start))
+            self.timeline.update()
+            self._mark_stale()
+
+        def on_audio_volume(self, k, delta):
+            self.on_audio_set_volume([k], None, delta)
+
+        def on_audio_set_volume(self, rows, value=None, delta=None):
+            """把这几条音频的音量改成 value，或者各自加上 delta。"""
+            for k in rows:
+                if not (0 <= k < len(self.project.audios)):
+                    continue
+                a = self.project.audios[k]
+                if value is None:
+                    a.volume = max(0.0, min(2.0, a.volume + (delta or 0.0)))
+                else:
+                    a.volume = max(0.0, min(2.0, value))
+            self.timeline.update()
+            self._mark_stale()
+            if rows and 0 <= rows[0] < len(self.project.audios):
+                self.lbl_status.setText(tr("音量 {pct}%", pct=int(round(
+                    self.project.audios[rows[0]].volume * 100))))
+
+        def on_timeline_menu(self, kind, index, pos):
+            m = self.timeline_menu(kind, index)
+            if m is not None:
+                m.exec(pos)
+
+        def timeline_menu(self, kind, index):
+            rows = list(self.timeline.selected)
+            arows = list(self.timeline.sel_audio)
+            if kind == "empty":
+                return None
+            m = QMenu(self)
+            if kind == "video":
+                targets = rows or [index]
+                fades = [self.project.clips[i].fade for i in targets
+                         if 0 <= i < len(self.project.clips)]
+                act = m.addAction(tr("淡入淡出"))
+                act.setCheckable(True)
+                act.setChecked(bool(fades) and all(fades))
+                act.triggered.connect(
+                    lambda _c=False, t=targets: self.on_toggle_fade(t))
+                if len(targets) >= 2:
+                    xfs = [self.project.clips[i].xfade for i in targets
+                           if 0 <= i < len(self.project.clips)]
+                    xact = m.addAction(tr("交叉淡化（与相邻元素）"))
+                    xact.setCheckable(True)
+                    xact.setChecked(bool(xfs) and all(xfs))
+                    xact.triggered.connect(
+                        lambda _c=False, t=targets: self.on_toggle_xfade(t))
+                m.addSeparator()
+                dur = m.addAction(tr("这张显示多久…"))
+                dur.setEnabled(len(targets) == 1
+                               and not self.project.clips[targets[0]].is_video)
+                dur.triggered.connect(
+                    lambda _c=False, t=targets:
+                    self.on_edit_dur(self.list.item(t[0])))
+            else:
+                targets = arows or [index]
+                if len(targets) == 1 and 0 <= index < len(self.project.audios):
+                    a = self.project.audios[index]
+                    info = m.addAction(tr("音量 {pct}%", pct=int(round(
+                        a.volume * 100))))
+                    info.setEnabled(False)
+                    m.addSeparator()
+                setact = m.addAction(tr("设置音量…"))
+                setact.triggered.connect(
+                    lambda _c=False, t=targets: self.on_ask_volume(t))
+                quick = m.addMenu(tr("音量预设"))
+                for pct in (25, 50, 75, 100, 150, 200):
+                    q = quick.addAction(f"{pct}%")
+                    q.triggered.connect(
+                        lambda _c=False, t=targets, v=pct / 100.0:
+                        self.on_audio_set_volume(t, value=v))
+                m.addSeparator()
+                add = m.addAction(tr("添加音频文件…"))
+                add.triggered.connect(lambda _c=False: self.on_add_audio())
+                extra = [k for k in targets if 0 <= k < len(self.project.audios)
+                         and not self.project.audios[k].gap]
+                if extra:
+                    rm = m.addAction(tr("删除这条音频"))
+                    rm.triggered.connect(
+                        lambda _c=False, k=extra[0]: self.on_remove_audio(k))
+            return m
+
+        def on_toggle_fade(self, rows):
+            rows = [i for i in rows if 0 <= i < len(self.project.clips)]
+            if not rows:
+                return
+            want = not all(self.project.clips[i].fade for i in rows)
+            for i in rows:
+                self.project.clips[i].fade = want
+            self._refresh_all()
+
+        def on_toggle_xfade(self, rows):
+            rows = [i for i in rows if 0 <= i < len(self.project.clips)]
+            if not rows:
+                return
+            want = not all(self.project.clips[i].xfade for i in rows)
+            for i in rows:
+                self.project.clips[i].xfade = want
+            self._refresh_all()
+
+        def on_ask_volume(self, rows):
+            rows = [k for k in rows if 0 <= k < len(self.project.audios)]
+            if not rows:
+                return
+            cur = self.project.audios[rows[0]].volume * 100
+            val, ok = NumberDialog.get_double(
+                self, tr("音量"),
+                tr("音量（%）："), cur, 0, 200, 0)
+            if ok:
+                self.on_audio_set_volume(rows, value=val / 100.0)
 
         # ---------------- 预览
         def seek(self, seconds):
@@ -3049,7 +3935,7 @@ def run_gui() -> int:
             self.lbl_status.setText(tr("生成预览…"))
             self.worker = RenderWorker(
                 list(self.project.clips), self.project.frame_counts(),
-                self.project.audio_path, self.preview_path,
+                list(self.project.audios), self.preview_path,
                 opts=self._opts(preview=True), preview=True, parent=self)
             self.worker.progress.connect(self._on_render_progress)
             self.worker.ok.connect(self.on_preview_ok)
@@ -3124,6 +4010,7 @@ def run_gui() -> int:
             self.project.audio_dur = dur
             self.project.audio_start = float(self.settings["music_start"])
             self.project.audio_len = float(self.settings["music_len"])
+            self.project.set_music_volume(float(self.settings["music_volume"]))
             self.project.normalize()
             self.btn_retry.setEnabled(True)
             self._refresh_all()
@@ -3179,7 +4066,7 @@ def run_gui() -> int:
             self.lbl_status.setText(tr("正在导出…"))
             self.worker = RenderWorker(
                 list(self.project.clips), self.project.frame_counts(),
-                self.project.audio_path, out, opts=self._opts(),
+                list(self.project.audios), out, opts=self._opts(),
                 preview=False, parent=self)
             self.worker.progress.connect(self._on_render_progress)
             self.worker.ok.connect(self.on_export_ok)
@@ -3232,10 +4119,18 @@ def run_gui() -> int:
                      if os.path.splitext(p)[1].lower() in MEDIA_EXTS]
             if imgs:
                 self.add_images(sorted(imgs, key=lambda p: os.path.basename(p).lower()))
-            # 拖进来的音频 / 视频当 BGM（视频会抽音轨）
+            # 拖进来的音频 / 视频：还没有 BGM 就当 BGM（视频会抽音轨），
+            # 已经有 BGM 就叠一条额外音频
             if audio or media:
-                self.edit_bgm.setText((audio or media)[0])
-                self.start_fetch()
+                if self.project.audio_path:
+                    for p in audio:
+                        self.add_audio_extra(p)
+                    if media:
+                        self.edit_bgm.setText(media[0])
+                        self.start_fetch()
+                else:
+                    self.edit_bgm.setText((audio or media)[0])
+                    self.start_fetch()
             if imgs or audio or media:
                 ev.acceptProposedAction()
 
@@ -3249,6 +4144,28 @@ def run_gui() -> int:
             if hit is None:
                 return False, 0   # 别调 super()：PyQt6 在这里调会崩掉整个进程
             return True, hit
+
+        def resizeEvent(self, ev):
+            super().resizeEvent(ev)
+            if self._maxed:
+                scr = self.screen() or QApplication.primaryScreen()
+                if scr is not None and self.geometry() != scr.availableGeometry():
+                    self._maxed = False
+                    bar = getattr(self, "titlebar", None)
+                    if bar is not None:
+                        try:
+                            bar.sync_max()
+                        except Exception:     # noqa: BLE001
+                            pass
+
+        def showEvent(self, ev):
+            super().showEvent(ev)
+            bar = getattr(self, "titlebar", None)
+            if bar is not None:
+                try:
+                    bar.sync_max()
+                except Exception:         # noqa: BLE001
+                    pass
 
         def changeEvent(self, ev):
             bar = getattr(self, "titlebar", None)
@@ -3368,16 +4285,42 @@ def run_gui() -> int:
 
     if shot:
         for p in [x for x in os.environ.get("PIC2VIDEO_SHOT_IMAGES", "").split(";") if x]:
-            w.project.add_images([p])
+            w.add_images([p])
         audio = os.environ.get("PIC2VIDEO_SHOT_AUDIO")
         if audio:
             w.project.audio_path = audio
             w.project.audio_dur = probe_duration(audio)
+            w.project.set_music_volume(float(w.settings["music_volume"]))
             w.project.normalize()
         w._refresh_all()
 
         def _shot(name):
             w.grab().save(os.path.join(os.path.dirname(shot), name + tag + ".png"))
+
+        # 时间线右键菜单：只把菜单本身截下来（菜单是弹出窗口，抓主窗口抓不到）
+        menu_probe = os.environ.get("PIC2VIDEO_SHOT_MENU")
+        if menu_probe:
+            outdir = os.path.dirname(shot)
+            idx = [i for i, c in enumerate(w.project.clips) if c.kind == "image"]
+            if menu_probe == "video" and idx:
+                w.timeline.set_selection(idx[:2] if len(idx) >= 2 else idx[:1])
+                menu = w.timeline_menu("video", idx[0])
+                name = "shot_menu_video"
+            else:
+                w.timeline.set_audio_selection([0])
+                menu = w.timeline_menu("audio", 0)
+                name = "shot_menu_audio"
+            menu.popup(w.mapToGlobal(w.rect().center()))
+
+            def grab_menu():
+                menu.grab().save(os.path.join(outdir, name + tag + ".png"))
+                menu.close()
+                print("MENU", name, [a.text() for a in menu.actions()],
+                      flush=True)
+                app.quit()
+
+            QTimer.singleShot(400, grab_menu)
+            return app.exec()
 
         # 自绘对话框的样子（文件框 / 消息框 / 数字框各截一张）
         dlg_probe = os.environ.get("PIC2VIDEO_SHOT_DLG")
@@ -3488,6 +4431,27 @@ def run_gui() -> int:
                                        for s in w.findChildren(QShortcut)),
                   flush=True)
             w2.deleteLater()
+            for _mode in ("max", "fixed", "remember"):
+                w.settings["win_mode"] = _mode
+                w.settings["win_fixed_w"] = 1200
+                w.settings["win_fixed_h"] = 700
+                w.showNormal()
+                w._restore_geometry()
+                for _ in range(6):
+                    app.processEvents()
+                    time.sleep(0.05)
+                _scr = QApplication.primaryScreen()
+                _flag = bool(w.windowState()
+                             & Qt.WindowState.WindowMaximized)
+                print("WINMODE %-8s %dx%d max=%s flag=%s screen=%dx%d" % (
+                    _mode, w.width(), w.height(), w.is_maxed(), _flag,
+                    _scr.availableGeometry().width(),
+                    _scr.availableGeometry().height()), flush=True)
+                if _mode == "max":
+                    w.toggle_maximum()
+                    app.processEvents()
+                    print("RESTORE  %dx%d max=%s" % (
+                        w.width(), w.height(), w.is_maxed()), flush=True)
             QTimer.singleShot(300, app.quit)
             return app.exec()
 

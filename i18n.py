@@ -1406,3 +1406,179 @@ _TR_EXTRA16 = {
 for _k, _trs in _TR_EXTRA16.items():
     for _lang, _v in _trs.items():
         TR[_lang].setdefault(_k, _v)
+
+
+_TR_EXTRA17 = {
+    '片头': {
+        'zh-TW': '片頭',
+        'en': 'Intro',
+        'ja': 'オープニング',
+        'ko': '오프닝',
+    },
+    '片尾': {
+        'zh-TW': '片尾',
+        'en': 'Outro',
+        'ja': 'エンディング',
+        'ko': '엔딩',
+    },
+    '音频': {
+        'zh-TW': '音訊',
+        'en': 'Audio',
+        'ja': 'オーディオ',
+        'ko': '오디오',
+    },
+    '淡入淡出': {
+        'zh-TW': '淡入淡出',
+        'en': 'Fade in · out',
+        'ja': 'フェードイン・アウト',
+        'ko': '페이드 인/아웃',
+    },
+    '交叉淡化（与相邻元素）': {
+        'zh-TW': '交叉淡化（與相鄰元素）',
+        'en': 'Crossfade with neighbours',
+        'ja': 'クロスフェード（隣接要素と）',
+        'ko': '크로스페이드(인접 요소와)',
+    },
+    '这张显示多久…': {
+        'zh-TW': '這張顯示多久…',
+        'en': 'How long should this show…',
+        'ja': 'この要素の表示時間…',
+        'ko': '이 요소 표시 시간…',
+    },
+    '设置音量…': {
+        'zh-TW': '設定音量…',
+        'en': 'Set volume…',
+        'ja': '音量を設定…',
+        'ko': '볼륨 설정…',
+    },
+    '音量预设': {
+        'zh-TW': '音量預設',
+        'en': 'Volume presets',
+        'ja': '音量プリセット',
+        'ko': '볼륨 프리셋',
+    },
+    '音量': {
+        'zh-TW': '音量',
+        'en': 'Volume',
+        'ja': '音量',
+        'ko': '볼륨',
+    },
+    '音量（%）：': {
+        'zh-TW': '音量（%）：',
+        'en': 'Volume (%):',
+        'ja': '音量（%）：',
+        'ko': '볼륨(%):',
+    },
+    '音量 {pct}%': {
+        'zh-TW': '音量 {pct}%',
+        'en': 'Volume {pct}%',
+        'ja': '音量 {pct}%',
+        'ko': '볼륨 {pct}%',
+    },
+    '启动时窗口': {
+        'zh-TW': '啟動時視窗',
+        'en': 'Window on startup',
+        'ja': '起動時のウィンドウ',
+        'ko': '시작 시 창',
+    },
+    '固定大小': {
+        'zh-TW': '固定大小',
+        'en': 'Fixed size',
+        'ja': '固定サイズ',
+        'ko': '고정 크기',
+    },
+    '记住上次': {
+        'zh-TW': '記住上次',
+        'en': 'Remember last',
+        'ja': '前回を記憶',
+        'ko': '마지막 크기 기억',
+    },
+    '启动时最大化': {
+        'zh-TW': '啟動時最大化',
+        'en': 'Start maximized',
+        'ja': '最大化で起動',
+        'ko': '최대화로 시작',
+    },
+    '默认片头视频': {
+        'zh-TW': '預設片頭影片',
+        'en': 'Default intro video',
+        'ja': '既定のオープニング動画',
+        'ko': '기본 오프닝 영상',
+    },
+    '默认片尾视频': {
+        'zh-TW': '預設片尾影片',
+        'en': 'Default outro video',
+        'ja': '既定のエンディング動画',
+        'ko': '기본 엔딩 영상',
+    },
+    '视频文件（留空 = 不加片头）': {
+        'zh-TW': '影片檔（留空 = 不加片頭）',
+        'en': 'Video file (empty = no intro)',
+        'ja': '動画ファイル（空 = オープニングなし）',
+        'ko': '영상 파일(비우면 오프닝 없음)',
+    },
+    '视频文件（留空 = 不加片尾）': {
+        'zh-TW': '影片檔（留空 = 不加片尾）',
+        'en': 'Video file (empty = no outro)',
+        'ja': '動画ファイル（空 = エンディングなし）',
+        'ko': '영상 파일(비우면 엔딩 없음)',
+    },
+    '选视频': {
+        'zh-TW': '選影片',
+        'en': 'Choose a video',
+        'ja': '動画を選ぶ',
+        'ko': '영상 선택',
+    },
+    '视频 (*.mp4 *.mov *.mkv *.webm *.avi)': {
+        'zh-TW': '影片 (*.mp4 *.mov *.mkv *.webm *.avi)',
+        'en': 'Video (*.mp4 *.mov *.mkv *.webm *.avi)',
+        'ja': '動画 (*.mp4 *.mov *.mkv *.webm *.avi)',
+        'ko': '영상 (*.mp4 *.mov *.mkv *.webm *.avi)',
+    },
+    '（含片头片尾）': {
+        'zh-TW': '（含片頭片尾）',
+        'en': '(intro/outro included)',
+        'ja': '（オープニング・エンディング含む）',
+        'ko': '(오프닝·엔딩 포함)',
+    },
+}
+for _k, _trs in _TR_EXTRA17.items():
+    for _lang, _v in _trs.items():
+        TR[_lang][_k] = _v
+
+
+_TR_EXTRA18 = {
+    '已加音频 {name}': {
+        'zh-TW': '已加音訊 {name}',
+        'en': 'Audio added: {name}',
+        'ja': 'オーディオを追加: {name}',
+        'ko': '오디오 추가: {name}',
+    },
+    '添加音频文件': {
+        'zh-TW': '新增音訊檔',
+        'en': 'Add audio file',
+        'ja': 'オーディオを追加',
+        'ko': '오디오 파일 추가',
+    },
+    '添加音频文件…': {
+        'zh-TW': '新增音訊檔…',
+        'en': 'Add audio file…',
+        'ja': 'オーディオを追加…',
+        'ko': '오디오 파일 추가…',
+    },
+    '音频 (*.mp3 *.m4a *.aac *.wav *.flac *.ogg)': {
+        'zh-TW': '音訊 (*.mp3 *.m4a *.aac *.wav *.flac *.ogg)',
+        'en': 'Audio (*.mp3 *.m4a *.aac *.wav *.flac *.ogg)',
+        'ja': 'オーディオ (*.mp3 *.m4a *.aac *.wav *.flac *.ogg)',
+        'ko': '오디오 (*.mp3 *.m4a *.aac *.wav *.flac *.ogg)',
+    },
+    '删除这条音频': {
+        'zh-TW': '刪除這條音訊',
+        'en': 'Remove this audio',
+        'ja': 'このオーディオを削除',
+        'ko': '이 오디오 삭제',
+    },
+}
+for _k, _trs in _TR_EXTRA18.items():
+    for _lang, _v in _trs.items():
+        TR[_lang][_k] = _v
