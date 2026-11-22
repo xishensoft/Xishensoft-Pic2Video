@@ -1271,11 +1271,11 @@ _TR_EXTRA15 = {
         'ja': 'システムのものを使います：{path}（持ち歩くならここでダウンロード）',
         'ko': '시스템 것을 사용합니다: {path} (들고 다니려면 여기서 다운로드)',
     },
-    '出片要靠 ffmpeg（约 90 MB，只下这一次，之后不再问）。\n现在就自动下载吗？': {
-        'zh-TW': '出片要靠 ffmpeg（約 90 MB，只下這一次，之後不再問）。\n現在就自動下載嗎？',
-        'en': 'Exporting needs ffmpeg (about 90 MB, downloaded once).\nDownload it now?',
-        'ja': '書き出しには ffmpeg が必要です（約 90 MB、今回だけ）。\n今すぐダウンロードしますか？',
-        'ko': '출력에는 ffmpeg가 필요합니다(약 90 MB, 이번 한 번만).\n지금 내려받을까요?',
+    '出片要靠 ffmpeg（约 120 MB，只下这一次，之后不再问）。\n现在就自动下载吗？': {
+        'zh-TW': '出片要靠 ffmpeg（約 120 MB，只下這一次，之後不再問）。\n現在就自動下載嗎？',
+        'en': 'Exporting needs ffmpeg (about 120 MB, downloaded once).\nDownload it now?',
+        'ja': '書き出しには ffmpeg が必要です（約 120 MB、今回だけ）。\n今すぐダウンロードしますか？',
+        'ko': '출력에는 ffmpeg가 필요합니다(약 120 MB, 이번 한 번만).\n지금 내려받을까요?',
     },
     '找不到 yt-dlp，去设置里重新下载': {
         'zh-TW': '找不到 yt-dlp，去設定裡重新下載',
@@ -1295,11 +1295,11 @@ _TR_EXTRA15 = {
         'ja': 'ダウンロード中…',
         'ko': '다운로드 중…',
     },
-    '没找到 ffmpeg，正在下载（约 90 MB，只下这一次）…': {
-        'zh-TW': '沒找到 ffmpeg，正在下載（約 90 MB，只下這一次）…',
-        'en': 'ffmpeg not found — downloading (about 90 MB, once)…',
-        'ja': 'ffmpeg が見つかりません。ダウンロード中（約 90 MB、今回だけ）…',
-        'ko': 'ffmpeg를 찾을 수 없어 다운로드합니다(약 90 MB, 이번 한 번)…',
+    '没找到 ffmpeg，正在下载（约 120 MB，只下这一次）…': {
+        'zh-TW': '沒找到 ffmpeg，正在下載（約 120 MB，只下這一次）…',
+        'en': 'ffmpeg not found — downloading (about 120 MB, once)…',
+        'ja': 'ffmpeg が見つかりません。ダウンロード中（約 120 MB、今回だけ）…',
+        'ko': 'ffmpeg를 찾을 수 없어 다운로드합니다(약 120 MB, 이번 한 번)…',
     },
     '现在下载': {
         'zh-TW': '現在下載',
@@ -1325,11 +1325,11 @@ _TR_EXTRA15 = {
         'ja': 'このサイトのリンクは yt-dlp で解析します（約 25 MB、ツールフォルダに保存、いつでも削除可）。今ダウンロードしますか？',
         'ko': '이 사이트 링크는 yt-dlp로 분석합니다(약 25 MB, 도구 폴더에 저장, 언제든 삭제 가능). 지금 내려받을까요?',
     },
-    '出片引擎，约 90 MB': {
-        'zh-TW': '出片引擎，約 90 MB',
-        'en': 'Export engine, about 90 MB',
-        'ja': '書き出しエンジン（約 90 MB）',
-        'ko': '출력 엔진, 약 90 MB',
+    '出片引擎，约 120 MB': {
+        'zh-TW': '出片引擎，約 120 MB',
+        'en': 'Export engine, about 120 MB',
+        'ja': '書き出しエンジン（約 120 MB）',
+        'ko': '출력 엔진, 약 120 MB',
     },
     '抖音 / YouTube 等链接解析，约 25 MB': {
         'zh-TW': '抖音 / YouTube 等連結解析，約 25 MB',

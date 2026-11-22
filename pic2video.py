@@ -794,7 +794,7 @@ def render(clips, counts, audio_path, out_path, *, w=WIDTH, h=HEIGHT,
 
 def cli_export(argv: list[str]) -> int:
     if missing_tools():
-        print(tr("没找到 ffmpeg，正在下载（约 90 MB，只下这一次）…"),
+        print(tr("没找到 ffmpeg，正在下载（约 120 MB，只下这一次）…"),
               file=sys.stderr)
 
         def _cli_note(text: str, pct: float = 0.0):
@@ -2767,13 +2767,13 @@ def run_gui() -> int:
             super().closeEvent(ev)
 
     def ensure_ffmpeg_gui() -> bool:
-        """缺 ffmpeg 时当场下载（约 90 MB，只下一次），装完直接用。"""
+        """缺 ffmpeg 时当场下载（约 120 MB，只下一次），装完直接用。"""
         if not missing_tools():
             return True
         if not os.environ.get("PIC2VIDEO_SHOT"):      # 跑测试时别弹窗等点击
             box = QMessageBox(
                 QMessageBox.Icon.Question, tr("第一次运行"),
-                tr("出片要靠 ffmpeg（约 90 MB，只下这一次，之后不再问）。"
+                tr("出片要靠 ffmpeg（约 120 MB，只下这一次，之后不再问）。"
                    "\n现在就自动下载吗？"),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             box.button(QMessageBox.StandardButton.Yes).setText(tr("现在下载"))

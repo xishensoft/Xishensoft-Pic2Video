@@ -32,7 +32,7 @@ YTDLP_EXE = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.ex
 COMPONENTS = {
     "ffmpeg": {
         "label": "ffmpeg",
-        "hint": "出片引擎，约 90 MB",
+        "hint": "出片引擎，约 120 MB",
         "url": FFMPEG_ZIP,
         "kind": "zip",
         "files": ("ffmpeg.exe", "ffprobe.exe"),
