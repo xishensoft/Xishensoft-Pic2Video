@@ -2565,6 +2565,376 @@ check("音频词条四语齐全",
       [k for k in _c60_keys if not all(k in tbl for tbl in _i18n.values())])
 
 
+# ---------------- 61 资源包：模型层 ----------------
+import hashlib as _h61, zipfile as _z61
+
+
+def _sha61(b):
+    return _h61.sha256(b).hexdigest()
+
+
+def _man61(kind, name, version, files):
+    return {"name": name, "version": version, "kind": kind,
+            "entries": [{"path": r, "sha256": _sha61(d)}
+                        for r, d in files.items()]}
+
+
+def _zip61(path, man, files, extra=None):
+    z = _z61.ZipFile(path, "w")
+    z.writestr("manifest.json", _j61.dumps(man, ensure_ascii=False))
+    for r, d in files.items():
+        z.writestr(r, d)
+    for r, d in (extra or {}).items():
+        z.writestr(r, d)
+    z.close()
+    return path
+
+
+import json as _j61
+_CUBE61 = (b"TITLE \"T\"\nLUT_3D_SIZE 2\n"
+           b"0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n")
+
+check("三类资源包都有中文名",
+      p.ASSET_KINDS == ("font", "lut", "transition")
+      and all(k in p.ASSET_KIND_LABELS for k in p.ASSET_KINDS),
+      p.ASSET_KIND_LABELS)
+check("资源包目录在数据目录的 assets 下",
+      p.assets_root().replace("\\", "/").endswith("/assets")
+      and p.asset_dir("lut").replace("\\", "/").endswith("/assets/luts"),
+      (p.assets_root(), p.asset_dir("lut")))
+check("包扩展名白名单",
+      ".ttf" in p.ASSET_EXTS["font"] and ".otf" in p.ASSET_EXTS["font"]
+      and ".cube" in p.ASSET_EXTS["lut"]
+      and ".json" in p.ASSET_EXTS["transition"], p.ASSET_EXTS)
+for _bad61 in ("", "/abs/x.cube", "C:/x.cube", "a/../b.cube", "a/./b.cube",
+               "a//b.cube", "a\nb.cube"):
+    try:
+        p._asset_rel(_bad61)
+        _ok61 = False
+    except p.AssetError as _e61:
+        _ok61 = _e61.reason == "unsafe-path"
+    check("拒绝不安全路径 %r" % _bad61, _ok61)
+check("正常相对路径能过", p._asset_rel("sub\\a.cube") == "sub/a.cube")
+check("转场预设：认名字与时长",
+      p.parse_transition_preset({"name": "柔和", "xfade": "slideleft",
+                                 "duration": 0.5})
+      == {"name": "柔和", "xfade": "slideleft", "duration": 0.5})
+check("转场预设：时长夹到范围",
+      p.parse_transition_preset({"name": "x", "xfade": "fade",
+                                 "duration": 99})["duration"] == p.XFADE_MAX)
+try:
+    p.parse_transition_preset({"name": "x", "xfade": "nope"})
+    _ok61b = False
+except p.AssetError as _e61b:
+    _ok61b = _e61b.reason == "bad-preset"
+check("转场预设：认不出的转场名不收", _ok61b)
+try:
+    p.parse_transition_preset({"name": "", "xfade": "fade"})
+    _ok61c = False
+except p.AssetError as _e61c:
+    _ok61c = _e61c.reason == "bad-preset"
+check("转场预设：名字空着不收", _ok61c)
+
+with tempfile.TemporaryDirectory() as _td61:
+    _root61 = os.path.join(_td61, "assets")
+    _files61 = {"probe.cube": _CUBE61}
+    _zp61 = _zip61(os.path.join(_td61, "lut.zip"),
+                   _man61("lut", "Probe LUT", "1.0", _files61), _files61)
+    _info61 = p.inspect_asset_zip(_zp61)
+    check("读包：认出类型/名字/版本",
+          (_info61["kind"], _info61["name"], _info61["version"])
+          == ("lut", "Probe LUT", "1.0"))
+    check("读包：文件内容与清单对上",
+          list(_info61["files"]) == ["probe.cube"]
+          and _info61["files"]["probe.cube"] == _CUBE61)
+    _pkg61 = p.install_asset_zip(_zp61, _root61)
+    check("装包：落进 assets/luts 下",
+          os.path.dirname(_pkg61["path"]).replace("\\", "/")
+          .endswith("/assets/luts"), _pkg61["path"])
+    check("装包：文件真写下去了",
+          os.path.exists(os.path.join(_pkg61["path"], "probe.cube")))
+    check("装包：清单也写下去了，还带 sha256",
+          (lambda: (lambda man: man["entries"][0]["sha256"] == _sha61(_CUBE61))(
+              _j61.load(open(os.path.join(_pkg61["path"], "manifest.json"),
+                             encoding="utf-8"))))())
+    _lst61 = p.installed_assets("lut", _root61)
+    check("已装列表只有这一包",
+          len(_lst61) == 1 and _lst61[0]["name"] == "Probe LUT")
+    check("同类不同类的列表分开",
+          p.installed_assets("font", _root61) == []
+          and len(p.installed_asset_packages(_root61)) == 1)
+    try:
+        p.install_asset_zip(_zp61, _root61)
+        _ok61d = False
+    except p.AssetError as _e61d:
+        _ok61d = _e61d.reason == "exists"
+    check("同一版本再装一次被拒", _ok61d)
+    _files61b = {"probe2.cube": _CUBE61}
+    _zp61b = _zip61(os.path.join(_td61, "lut2.zip"),
+                    _man61("lut", "Probe LUT", "2.0", _files61b), _files61b)
+    _pkg61b = p.install_asset_zip(_zp61b, _root61)
+    check("新版本覆盖同名包",
+          len(p.installed_assets("lut", _root61)) == 1
+          and p.installed_assets("lut", _root61)[0]["version"] == "2.0")
+    check("覆盖后旧文件不在了",
+          not os.path.exists(os.path.join(_pkg61b["path"], "probe.cube")))
+    check("覆盖不留 .old 目录",
+          not any(n.endswith(".old") for n in
+                  os.listdir(os.path.join(_root61, "luts"))))
+    check("装好的 LUT 出现在下拉源里",
+          [os.path.basename(x) for x in p.asset_luts(_root61)]
+          == ["probe2.cube"])
+    check("all_luts 合并目录与资源包",
+          len(p.all_luts("", _root61)) == 1)
+    check("删除资源包", p.remove_asset_package(_pkg61b, _root61)
+          and p.installed_asset_packages(_root61) == [])
+    check("删完删不掉第二次",
+          p.remove_asset_package(_pkg61b, _root61) is False)
+
+    _preset_files = {"soft.json": _j61.dumps(
+        {"name": "柔和推移", "xfade": "slideleft", "duration": 0.5},
+        ensure_ascii=False).encode("utf-8")}
+    _zpt = _zip61(os.path.join(_td61, "tr.zip"),
+                  _man61("transition", "Probe Tr", "1", _preset_files),
+                  _preset_files)
+    p.install_asset_zip(_zpt, _root61)
+    _tp61 = p.asset_transition_presets(_root61)
+    check("转场预设包读得出名字/转场/时长",
+          len(_tp61) == 1 and _tp61[0]["name"] == "柔和推移"
+          and _tp61[0]["xfade"] == "slideleft"
+          and abs(_tp61[0]["duration"] - 0.5) < 1e-9, _tp61)
+    _badpreset = {"bad.json": b'{"name": "x", "xfade": "no-such"}'}
+    _zpb = _zip61(os.path.join(_td61, "trbad.zip"),
+                  _man61("transition", "Bad Tr", "1", _badpreset), _badpreset)
+    try:
+        p.inspect_asset_zip(_zpb)
+        _ok61e = False
+    except p.AssetError as _e61e:
+        _ok61e = _e61e.reason == "bad-preset"
+    check("转场包里写了不存在的转场名就不收", _ok61e)
+
+    _tsrc = os.path.join(os.environ.get("WINDIR", r"C:\Windows"),
+                         "Fonts", "arial.ttf")
+    if os.path.exists(_tsrc):
+        _fam61 = p.font_family_of(_tsrc)
+        check("字体包：能读出 family", _fam61 == "Arial", _fam61)
+        _ffiles = {"arial.ttf": open(_tsrc, "rb").read()}
+        _zpf = _zip61(os.path.join(_td61, "font.zip"),
+                      _man61("font", "Probe Font", "1", _ffiles), _ffiles)
+        _pf61 = p.install_asset_zip(_zpf, _root61)
+        check("字体包：装好就进字体表",
+              p.asset_fonts(_root61).get(_fam61)
+              == os.path.join(_pf61["path"], "arial.ttf"))
+        check("字体包：烧字幕的字体目录指向包目录",
+              p.font_lookup_dir(_fam61, _root61) == _pf61["path"])
+        check("字体包：系统字体回落到系统目录",
+              p.font_lookup_dir("No Such Family", _root61)
+              == p.default_font_dir())
+        _proj61 = p.Project()
+        _proj61.clips = [p.Clip(IMG[0], 2.0)]
+        check("删包前能算出「字幕字体」在用",
+              p.asset_usage(_proj61, _pf61, _fam61) == [p.tr("字幕字体")],
+              p.asset_usage(_proj61, _pf61, _fam61))
+
+    _lutpath = os.path.join(_pkg61["path"], "probe.cube")
+    _proj61b = p.Project()
+    _proj61b.clips = [p.Clip(IMG[0], 2.0, lut=_lutpath.replace("probe.cube",
+                                                               "probe2.cube"))]
+    check("删包前能算出「第 n 段的 LUT」在用",
+          p.asset_usage(_proj61b, _pkg61b) == [p.tr("第 {n} 段的 LUT", n=1)],
+          p.asset_usage(_proj61b, _pkg61b))
+
+    # 每条拒绝路径
+    def _reject(name, man, files, extra=None, patch=None):
+        path = _zip61(os.path.join(_td61, "r%d.zip" % len(fails)), man, files,
+                      extra)
+        old = {}
+        for k, v in (patch or {}).items():
+            old[k] = getattr(p, k)
+            setattr(p, k, v)
+        try:
+            p.inspect_asset_zip(path)
+            got = ""
+        except p.AssetError as exc:
+            got = exc.reason
+        finally:
+            for k, v in old.items():
+                setattr(p, k, v)
+        return got
+
+    try:
+        p.inspect_asset_zip(os.path.join(_td61, "nope.zip"))
+        _r61 = ""
+    except p.AssetError as _e61f:
+        _r61 = _e61f.reason
+    check("拒绝：文件不在了", _r61 == "missing")
+    _notzip = os.path.join(_td61, "not.zip")
+    open(_notzip, "wb").write(b"not a zip at all")
+    try:
+        p.inspect_asset_zip(_notzip)
+        _r61 = ""
+    except p.AssetError as _e61g:
+        _r61 = _e61g.reason
+    check("拒绝：不是 zip", _r61 == "bad-zip")
+    check("拒绝：条目太多", _reject("x", _man61("lut", "n", "1", {}), {},
+                                  extra={"f%d.cube" % i: b"x" for i in range(70)},
+                                  patch={"ASSET_MAX_ENTRIES": 4})
+          == "too-many")
+    check("拒绝：解压太大", _reject("x", _man61("lut", "n", "1",
+                                                {"a.cube": _CUBE61}),
+                                  {"a.cube": _CUBE61},
+                                  patch={"ASSET_MAX_BYTES": 8}) == "too-big")
+    check("拒绝：没清单", _reject("x", {}, {"a.cube": _CUBE61}) == "bad-manifest")
+    check("拒绝：清单不是对象",
+          _reject("x", [], {"a.cube": _CUBE61}) == "bad-manifest")
+    check("拒绝：类型不在白名单",
+          _reject("x", _man61("video", "n", "1", {"a.cube": _CUBE61}),
+                  {"a.cube": _CUBE61}) == "bad-manifest")
+    check("拒绝：扩展名与类型不符",
+          _reject("x", _man61("lut", "n", "1", {"a.txt": b"x"}), {"a.txt": b"x"})
+          == "bad-entry")
+    check("拒绝：清单里的文件不在包里",
+          _reject("x", _man61("lut", "n", "1", {"a.cube": _CUBE61}), {})
+          == "missing-entry")
+    check("拒绝：包里多出没声明的文件",
+          _reject("x", _man61("lut", "n", "1", {"a.cube": _CUBE61}),
+                  {"a.cube": _CUBE61}, extra={"junk.txt": b"x"})
+          == "bad-manifest")
+    _badman = _man61("lut", "n", "1", {"a.cube": _CUBE61})
+    _badman["entries"][0]["sha256"] = "0" * 64
+    check("拒绝：文件校验对不上",
+          _reject("x", _badman, {"a.cube": _CUBE61}) == "hash-mismatch")
+
+    _sym = _zip61(os.path.join(_td61, "sym.zip"),
+                  _man61("lut", "n", "1", {"l.cube": b""}), {"l.cube": b""})
+    _zr = _z61.ZipFile(_sym, "a")
+    _zi = _z61.ZipInfo("link.cube")
+    _zi.external_attr = (0o120777 << 16)
+    _zr.writestr(_zi, b"")
+    _zr.close()
+    try:
+        p.inspect_asset_zip(_sym)
+        _r61 = ""
+    except p.AssetError as _e61h:
+        _r61 = _e61h.reason
+    check("拒绝：符号链接", _r61 == "symlink")
+
+    _exep = os.path.join(_td61, "exe.zip")
+    _zr = _z61.ZipFile(_exep, "w")
+    _zr.writestr("manifest.json", _j61.dumps(_man61("lut", "n", "1",
+                                                    {"a.cube": _CUBE61})))
+    _zr.writestr("a.cube", _CUBE61)
+    _zi = _z61.ZipInfo("run.exe")
+    _zi.external_attr = (0o100755 << 16)
+    _zr.writestr(_zi, b"MZ")
+    _zr.close()
+    try:
+        p.inspect_asset_zip(_exep)
+        _r61 = ""
+    except p.AssetError as _e61i:
+        _r61 = _e61i.reason
+    check("拒绝：可执行文件", _r61 in ("executable", "bad-manifest"))
+
+    for _reason61 in ("missing", "bad-zip", "too-many", "too-big",
+                      "unsafe-path", "symlink", "executable", "bad-manifest",
+                      "bad-entry", "missing-entry", "hash-mismatch",
+                      "bad-preset", "exists", "io"):
+        _txt61 = p.asset_error_text(p.AssetError(_reason61))
+        check("错误提示 %s 有人话" % _reason61,
+              _txt61.startswith(p.tr("装不进去："))
+              and _txt61 != p.tr("装不进去：") + p.tr("认不出来的问题"), _txt61)
+
+# ---------------- 62 资源包：界面接线与词条 ----------------
+_src62 = open(os.path.join(ROOT, "pic2video.py"), encoding="utf-8").read()
+check("设置页有「资源包」一栏",
+      'add_sep("资源包"' in _src62 and "self.list_assets" in _src62)
+check("资源包区有导入/删除按钮",
+      'tr("导入 zip…")' in _src62 and 'tr("删除所选")' in _src62)
+check("导入走 zip 文件框",
+      'tr("资源包 (*.zip)")' in _src62 and "def _import_asset(" in _src62)
+check("导入失败说人话",
+      "asset_error_text(" in _src62 and 'tr("资源包没装上")' in _src62)
+check("删除要问、删完提示在用",
+      "def _remove_asset(" in _src62 and 'tr("删掉资源包")' in _src62
+      and "asset_usage(" in _src62)
+check("设置对话框拿得到工程",
+      "def __init__(self, settings: Settings, parent=None, project=None)"
+      in _src62 and "self.project = project" in _src62)
+check("启动时注册资源字体", "register_asset_fonts()" in _src62)
+check("资源字体注册是模块级函数", "\ndef register_asset_fonts(" in _src62)
+check("字幕烧录用资源字体目录",
+      'subtitle_fonts=font_lookup_dir(s["subtitle_font"])' in _src62)
+check("调色下拉合并资源 LUT", "luts = all_luts(lut_dir)" in _src62)
+check("转场菜单有资源包预设",
+      'tr("{name}（资源包）", name=preset["name"])' in _src62
+      and "def on_set_transition_preset(" in _src62)
+check("资源包预设按内置转场名套",
+      'name if name in XFADE_NAMES else "fade"' in _src62
+      and 'preset["xfade"], preset["duration"]' in _src62)
+
+_c62_keys = ("字体", "LUT", "转场预设", "资源包", "已装资源包", "导入 zip…",
+             "删除所选", "选资源包", "资源包 (*.zip)", "资源包没装上",
+             "资源包装好了", "删掉资源包", "删掉", "算了", "删不掉",
+             "资源包已经删掉", "字幕字体", "{name}（资源包）",
+             "装不进去：", "认不出来的问题", "第 {n} 段的 LUT",
+             "找不到这个 zip 文件", "文件校验对不上（sha256），包可能坏了")
+check("资源包词条四语齐全",
+      all(_k in tbl for _k in _c62_keys for tbl in _i18n.values()),
+      [k for k in _c62_keys if not all(k in tbl for tbl in _i18n.values())])
+
+# ---------------- 63 资源包：真拿去渲染 ----------------
+_BLACK61 = (b"TITLE \"go black\"\nLUT_3D_SIZE 2\n" +
+            b"0 0 0\n" * 8)
+with tempfile.TemporaryDirectory() as _td63:
+    _root63 = os.path.join(_td63, "assets")
+    _lutf = {"black.cube": _BLACK61}
+    _zpl = _zip61(os.path.join(_td63, "black.zip"),
+                  _man61("lut", "Black", "1", _lutf), _lutf)
+    _pl63 = p.install_asset_zip(_zpl, _root63)
+    _lutfile = os.path.join(_pl63["path"], "black.cube")
+    _pr63 = p.Project(fps=10)
+    _pr63.clips = [p.Clip(IMG[0], 1.0, lut=_lutfile)]
+    _out63 = os.path.join(_td63, "lut.mp4")
+    p.render(_pr63.clips, _pr63.frame_counts(), _pr63.audios, _out63,
+             w=160, h=90, fps=10, crf=30, preset="ultrafast",
+             fade_in=0, fade_out=0, transition="none")
+    _raw = subprocess.run([p.FFMPEG, "-v", "error", "-i", _out63,
+                           "-frames:v", "1", "-f", "rawvideo",
+                           "-pix_fmt", "rgb24", "-"],
+                          capture_output=True).stdout
+    check("资源包里的 LUT 真套上了（整帧变黑）",
+          len(_raw) > 100 and max(_raw) < 40, max(_raw) if _raw else -1)
+
+    _tsrc63 = os.path.join(os.environ.get("WINDIR", r"C:\Windows"),
+                           "Fonts", "arial.ttf")
+    if os.path.exists(_tsrc63):
+        _ff63 = {"arial.ttf": open(_tsrc63, "rb").read()}
+        _zpf63 = _zip61(os.path.join(_td63, "font.zip"),
+                        _man61("font", "F", "1", _ff63), _ff63)
+        _pf63 = p.install_asset_zip(_zpf63, _root63)
+        _fam63 = p.font_family_of(os.path.join(_pf63["path"], "arial.ttf"))
+        _cues63 = [{"start": 0.1, "end": 0.9, "text": "Hello pack"}]
+        _out63b = os.path.join(_td63, "font.mp4")
+        p.render(_pr63.clips, _pr63.frame_counts(), [], _out63b,
+                 w=160, h=90, fps=10, crf=30, preset="ultrafast",
+                 fade_in=0, fade_out=0, transition="none",
+                 subtitles=_cues63, subtitle_font=_fam63,
+                 subtitle_fonts=p.font_lookup_dir(_fam63, _root63))
+        check("资源包字体能烧字幕", os.path.getsize(_out63b) > 500,
+              os.path.getsize(_out63b))
+
+    _pr63b = p.Project(fps=10)
+    _pr63b.clips = [p.Clip(IMG[0], 1.0), p.Clip(IMG[1], 1.0)]
+    _pr63b.clips[0].xfade = True
+    _pr63b.clips[0].xfade_name = "slideleft"
+    _pr63b.clips[0].xfade_dur = 0.2
+    _out63c = os.path.join(_td63, "tr.mp4")
+    p.render(_pr63b.clips, _pr63b.frame_counts(), [], _out63c,
+             w=160, h=90, fps=10, crf=30, preset="ultrafast",
+             fade_in=0, fade_out=0, transition="none")
+    check("资源包预设选的转场能出片", os.path.getsize(_out63c) > 500,
+          os.path.getsize(_out63c))
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

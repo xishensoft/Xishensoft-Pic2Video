@@ -15,16 +15,20 @@ bilibili 链接整条取下来（不分离人声）。
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import uuid
+import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -42,7 +46,7 @@ components.prepend_path()      # tools/ 里的 ffmpeg 优先于系统那份
 # exe 是窗口程序，没有控制台：起子进程时别让它继承无效的句柄
 CREATION_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 WIDTH, HEIGHT, FPS = 1920, 1080, 30
 PREVIEW_W, PREVIEW_H = 960, 540
@@ -719,6 +723,459 @@ def list_luts(folder: str) -> list[str]:
     except OSError:
         return []
     return [os.path.join(folder, n) for n in sorted(names, key=str.lower)]
+
+
+# ---------------- 资源包：字体 / LUT / 转场预设（zip 装进数据目录）
+ASSET_KINDS = ("font", "lut", "transition")
+ASSET_KIND_LABELS = {"font": "字体", "lut": "LUT", "transition": "转场预设"}
+ASSET_EXTS = {"font": (".ttf", ".otf", ".ttc"),
+              "lut": (".cube",),
+              "transition": (".json",)}
+ASSET_MAX_ENTRIES = 64
+ASSET_MAX_BYTES = 64 * 1024 * 1024
+ASSET_EXE_EXTS = (".exe", ".dll", ".com", ".bat", ".cmd", ".ps1",
+                  ".vbs", ".js", ".msi", ".scr", ".sys", ".pif")
+
+
+class AssetError(Exception):
+    """资源包装不进去：reason 给程序判断，message 给人看。"""
+
+    def __init__(self, reason: str, message: str = ""):
+        self.reason = reason
+        super().__init__(message or reason)
+
+
+def assets_root() -> str:
+    """资源包装在数据目录的 assets/ 下（跟工程文件无关）。"""
+    return os.path.join(components.data_dir(), "assets")
+
+
+ASSET_DIRS = {"font": "fonts", "lut": "luts", "transition": "transitions"}
+
+
+def asset_dir(kind: str, root: str = "") -> str:
+    """每类资源一个子目录：assets/fonts、assets/luts、assets/transitions。"""
+    sub = ASSET_DIRS.get(kind, kind)
+    return os.path.join(root or assets_root(), sub)
+
+
+def _asset_rel(name) -> str:
+    """把包内路径洗成相对路径；绝对路径、上跳、空段一律拒绝。"""
+    if not isinstance(name, str):
+        raise AssetError("unsafe-path", "包里有不认识的路径")
+    rel = name.replace("\\", "/").strip()
+    if not rel or rel.startswith("/") or (len(rel) > 1 and rel[1] == ":"):
+        raise AssetError("unsafe-path", str(name))
+    bad = any(part in ("", ".", "..") for part in rel.split("/"))
+    if bad or any(ch in rel for ch in ("\n", "\r", "\0")):
+        raise AssetError("unsafe-path", str(name))
+    return rel
+
+
+def _asset_file_ok(rel: str, kind: str) -> bool:
+    return os.path.splitext(rel)[1].lower() in ASSET_EXTS.get(kind, ())
+
+
+def parse_transition_preset(raw) -> dict:
+    """一个转场预设：{"name": 显示名, "xfade": 内置名, "duration": 秒}。"""
+    if isinstance(raw, (bytes, bytearray)):
+        try:
+            raw = json.loads(bytes(raw).decode("utf-8-sig"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise AssetError("bad-preset", str(exc))
+    if not isinstance(raw, dict):
+        raise AssetError("bad-preset", "转场预设不是一个对象")
+    name = raw.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise AssetError("bad-preset", "转场预设缺名字")
+    xfade = raw.get("xfade")
+    if xfade not in XFADE_NAMES:
+        raise AssetError("bad-preset", "转场预设里的 xfade 不认识：" + str(xfade))
+    try:
+        dur = float(raw.get("duration", 0.5))
+    except (TypeError, ValueError):
+        raise AssetError("bad-preset", "转场时长不是数字")
+    return {"name": name.strip(), "xfade": xfade,
+            "duration": min(XFADE_MAX, max(XFADE_MIN, dur))}
+
+
+def inspect_asset_zip(path: str) -> dict:
+    """读 + 校验一个资源包 zip，不动任何文件。返回包内容。"""
+    if not os.path.isfile(path):
+        raise AssetError("missing", str(path))
+    try:
+        zf = zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise AssetError("bad-zip", str(exc))
+    with zf:
+        try:
+            infos = [i for i in zf.infolist() if not i.is_dir()]
+        except (zipfile.BadZipFile, OSError) as exc:
+            raise AssetError("bad-zip", str(exc))
+        if len(infos) > ASSET_MAX_ENTRIES:
+            raise AssetError("too-many", str(len(infos)))
+        if sum(max(0, i.file_size) for i in infos) > ASSET_MAX_BYTES:
+            raise AssetError("too-big", "解压后超过 64 MB")
+        names = set()
+        for info in infos:
+            rel = _asset_rel(info.filename)
+            mode = (info.external_attr >> 16) & 0xFFFF
+            if stat.S_ISLNK(mode):
+                raise AssetError("symlink", rel)
+            if mode & 0o111 or rel.lower().endswith(ASSET_EXE_EXTS):
+                raise AssetError("executable", rel)
+            if rel in names:
+                raise AssetError("bad-entry", "包里路径重了：" + rel)
+            names.add(rel)
+        if "manifest.json" not in names:
+            raise AssetError("bad-manifest", "缺 manifest.json")
+        try:
+            doc = json.loads(zf.read("manifest.json").decode("utf-8-sig"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise AssetError("bad-manifest", str(exc))
+        if not isinstance(doc, dict):
+            raise AssetError("bad-manifest", "manifest.json 不是一个对象")
+        kind = doc.get("kind")
+        if kind not in ASSET_KINDS:
+            raise AssetError("bad-manifest", "kind 只能是 font / lut / transition")
+        name = doc.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise AssetError("bad-manifest", "包里没写名字")
+        version = doc.get("version", "")
+        if not isinstance(version, str):
+            raise AssetError("bad-manifest", "version 得是字符串")
+        entries = doc.get("entries")
+        if not isinstance(entries, list) or not entries:
+            raise AssetError("bad-manifest", "entries 得是非空列表")
+        files = {}
+        for ent in entries:
+            if not isinstance(ent, dict):
+                raise AssetError("bad-manifest", "entries 里每项都得是对象")
+            rel = _asset_rel(ent.get("path") or "")
+            if rel not in names:
+                raise AssetError("missing-entry", rel)
+            if not _asset_file_ok(rel, kind):
+                raise AssetError("bad-entry", rel)
+            sha = str(ent.get("sha256") or "").strip().lower()
+            try:
+                data = zf.read(rel)
+            except (KeyError, zipfile.BadZipFile, OSError) as exc:
+                raise AssetError("bad-zip", str(exc))
+            if hashlib.sha256(data).hexdigest() != sha:
+                raise AssetError("hash-mismatch", rel)
+            files[rel] = data
+        declared = set(files) | {"manifest.json"}
+        extra = names - declared
+        if extra:
+            raise AssetError("bad-manifest",
+                             "有文件没写进 manifest：" + sorted(extra)[0])
+        if kind == "transition":
+            for rel, data in files.items():
+                try:
+                    parse_transition_preset(data)
+                except AssetError as exc:
+                    raise AssetError("bad-preset", rel + "：" + str(exc))
+        return {"kind": kind, "name": name.strip(),
+                "version": version.strip(), "files": files}
+
+
+def asset_package_folder(kind: str, name: str) -> str:
+    """包目录名：由 kind + 名字定，同名包始终落在同一个目录。"""
+    safe = "".join(ch if (ch.isalnum() or ch in "-_") else "_"
+                   for ch in name.strip())[:40] or "package"
+    digest = hashlib.sha1((kind + "|" + name.strip().lower())
+                          .encode("utf-8")).hexdigest()[:8]
+    return "%s_%s_%s" % (kind, safe, digest)
+
+
+def _read_pkg_manifest(folder: str):
+    try:
+        with open(os.path.join(folder, "manifest.json"), "r",
+                  encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def installed_assets(kind: str, root: str = "") -> list:
+    """已装的某个 kind 的包（按目录名排）；装一半、坏掉的直接跳过。"""
+    base = asset_dir(kind, root)
+    if not os.path.isdir(base):
+        return []
+    try:
+        subs = sorted(os.listdir(base), key=str.lower)
+    except OSError:
+        return []
+    out = []
+    for sub in subs:
+        if sub.startswith(".") or sub.endswith(".old"):
+            continue
+        full = os.path.join(base, sub)
+        if not os.path.isdir(full):
+            continue
+        doc = _read_pkg_manifest(full)
+        if not doc or doc.get("kind") != kind:
+            continue
+        files = []
+        for ent in doc.get("entries") or []:
+            if isinstance(ent, dict) and isinstance(ent.get("path"), str):
+                files.append(os.path.join(full, *ent["path"].split("/")))
+        out.append({"kind": kind, "name": str(doc.get("name") or sub),
+                    "version": str(doc.get("version") or ""),
+                    "folder": sub, "path": full, "files": files})
+    return out
+
+
+def installed_asset_packages(root: str = "") -> list:
+    out = []
+    for kind in ASSET_KINDS:
+        out.extend(installed_assets(kind, root))
+    return out
+
+
+def install_asset_zip(path: str, root: str = "") -> dict:
+    """校验并装一个资源包；先写临时目录，全写完再改名，失败不留半成品。"""
+    pkg = inspect_asset_zip(path)
+    base = asset_dir(pkg["kind"], root)
+    folder = asset_package_folder(pkg["kind"], pkg["name"])
+    final = os.path.join(base, folder)
+    try:
+        os.makedirs(base, exist_ok=True)
+    except OSError as exc:
+        raise AssetError("io", str(exc))
+    if os.path.isdir(final):
+        old = _read_pkg_manifest(final) or {}
+        if str(old.get("version") or "") == pkg["version"]:
+            raise AssetError("exists", pkg["name"])
+    tmp = os.path.join(base, ".tmp-" + uuid.uuid4().hex[:8])
+    try:
+        os.makedirs(tmp)
+        entries = []
+        for rel, data in pkg["files"].items():
+            target = os.path.join(tmp, *rel.split("/"))
+            parent = os.path.dirname(target)
+            if parent and not os.path.isdir(parent):
+                os.makedirs(parent)
+            with open(target, "wb") as fh:
+                fh.write(data)
+            entries.append({"path": rel,
+                            "sha256": hashlib.sha256(data).hexdigest()})
+        manifest = {"name": pkg["name"], "version": pkg["version"],
+                    "kind": pkg["kind"], "entries": entries}
+        with open(os.path.join(tmp, "manifest.json"), "w",
+                  encoding="utf-8", newline="\n") as fh:
+            json.dump(manifest, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+        if os.path.isdir(final):
+            backup = final + ".old"
+            shutil.rmtree(backup, ignore_errors=True)
+            os.rename(final, backup)
+            os.rename(tmp, final)
+            shutil.rmtree(backup, ignore_errors=True)
+        else:
+            os.rename(tmp, final)
+    except OSError as exc:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise AssetError("io", str(exc))
+    return {"kind": pkg["kind"], "name": pkg["name"],
+            "version": pkg["version"], "folder": folder, "path": final,
+            "files": [os.path.join(final, *r.split("/"))
+                      for r in pkg["files"]]}
+
+
+def remove_asset_package(package: dict, root: str = "") -> bool:
+    """删掉一个已装的包；只认 assets 目录底下的目录。"""
+    path = os.path.abspath(str(package.get("path") or ""))
+    base = os.path.abspath(root or assets_root())
+    if not path.startswith(base + os.sep) or not os.path.isdir(path):
+        return False
+    shutil.rmtree(path, ignore_errors=True)
+    return not os.path.isdir(path)
+
+
+def _font_family(data: bytes) -> str:
+    """从 ttf/otf/ttc 的 name 表里读 family（TTC 只取第一套字形）。"""
+    if len(data) < 12:
+        return ""
+    off = 0
+    if data[:4] == b"ttcf":
+        if len(data) < 16:
+            return ""
+        off = int.from_bytes(data[12:16], "big")
+    if off + 12 > len(data) or data[off:off + 4] not in (
+            b"\x00\x01\x00\x00", b"OTTO", b"true"):
+        return ""
+    count = int.from_bytes(data[off + 4:off + 6], "big")
+    name_off = name_len = 0
+    for i in range(count):
+        rec = off + 12 + i * 16
+        if rec + 16 > len(data):
+            return ""
+        if data[rec:rec + 4] == b"name":
+            name_off = int.from_bytes(data[rec + 8:rec + 12], "big")
+            name_len = int.from_bytes(data[rec + 12:rec + 16], "big")
+            break
+    if not name_off or not name_len or name_off + 6 > len(data):
+        return ""
+    rec_count = int.from_bytes(data[name_off + 2:name_off + 4], "big")
+    str_off = name_off + int.from_bytes(data[name_off + 4:name_off + 6], "big")
+    best = ""
+    for i in range(rec_count):
+        rec = name_off + 6 + i * 12
+        if rec + 12 > len(data):
+            break
+        pid = int.from_bytes(data[rec:rec + 2], "big")
+        eid = int.from_bytes(data[rec + 2:rec + 4], "big")
+        nid = int.from_bytes(data[rec + 6:rec + 8], "big")
+        length = int.from_bytes(data[rec + 8:rec + 10], "big")
+        start = str_off + int.from_bytes(data[rec + 10:rec + 12], "big")
+        if nid not in (1, 16) or start + length > len(data):
+            continue
+        chunk = data[start:start + length]
+        if not chunk:
+            continue
+        if pid == 3 and eid in (1, 10):
+            text = chunk.decode("utf-16-be", "ignore").strip()
+        elif pid == 1 and eid == 0:
+            text = chunk.decode("mac-roman", "ignore").strip()
+        else:
+            continue
+        if not text:
+            continue
+        if nid == 16:
+            return text
+        if not best:
+            best = text
+    return best
+
+
+def font_family_of(path: str) -> str:
+    try:
+        with open(path, "rb") as fh:
+            return _font_family(fh.read())
+    except OSError:
+        return ""
+
+
+def asset_fonts(root: str = "") -> dict:
+    """已装字体包里的字体：family -> 文件路径（先装的优先）。"""
+    out = {}
+    seen = set()
+    for pkg in installed_assets("font", root):
+        for path in pkg["files"]:
+            if not path.lower().endswith((".ttf", ".otf", ".ttc")):
+                continue
+            fam = font_family_of(path)
+            if fam and fam.lower() not in seen:
+                seen.add(fam.lower())
+                out[fam] = path
+    return out
+
+
+def font_lookup_dir(family: str, root: str = "") -> str:
+    """烧字幕时给 libass 的字体目录：资源包的字体给它的包目录，否则系统字体。"""
+    want = str(family or "").strip().lower()
+    for fam, path in asset_fonts(root).items():
+        if fam.lower() == want:
+            return os.path.dirname(path)
+    return default_font_dir()
+
+
+def register_asset_fonts():
+    """把资源包里的字体注册给 Qt：字体下拉、预览都能直接选。"""
+    try:
+        from PyQt6.QtGui import QFontDatabase
+        from PyQt6.QtWidgets import QApplication
+    except Exception:  # noqa: BLE001  没装 Qt 也要能跑命令行
+        return
+    if QApplication.instance() is None:
+        return
+    for fam, path in asset_fonts().items():
+        try:
+            QFontDatabase.addApplicationFont(path)
+        except Exception:  # noqa: BLE001  坏字体别把启动拖垮
+            log("asset font failed: %s" % path)
+
+
+def asset_luts(root: str = "") -> list:
+    out = []
+    for pkg in installed_assets("lut", root):
+        for path in pkg["files"]:
+            if path.lower().endswith(".cube") and os.path.isfile(path):
+                out.append(path)
+    return out
+
+
+def all_luts(folder: str = "", root: str = "") -> list:
+    """下拉里该列的 LUT：外部目录里的 + 资源包里的（同一文件只列一次）。"""
+    out, seen = [], set()
+    for path in list_luts(folder) + asset_luts(root):
+        key = os.path.normcase(os.path.abspath(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def asset_transition_presets(root: str = "") -> list:
+    """资源包里带来的转场预设（名字 = 内置 xfade 名 + 默认时长）。"""
+    out = []
+    for pkg in installed_assets("transition", root):
+        for path in pkg["files"]:
+            if not path.lower().endswith(".json"):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8-sig") as fh:
+                    preset = parse_transition_preset(json.load(fh))
+            except (OSError, ValueError, AssetError):
+                continue
+            preset["package"] = pkg["name"]
+            out.append(preset)
+    out.sort(key=lambda p: p["name"].lower())
+    return out
+
+
+def asset_error_text(exc: "AssetError") -> str:
+    """把资源包出错翻译成一句人话。"""
+    reason = getattr(exc, "reason", "")
+    table = {
+        "missing": tr("找不到这个 zip 文件"),
+        "bad-zip": tr("这不是一个能读的 zip"),
+        "too-many": tr("包里的文件太多了（上限 64 个）"),
+        "too-big": tr("包解压后太大了（上限 64 MB）"),
+        "unsafe-path": tr("包里有不安全的路径（绝对路径或 .. 上跳）"),
+        "symlink": tr("包里有符号链接，不收"),
+        "executable": tr("包里有可执行文件，不收"),
+        "bad-manifest": tr("manifest.json 写得不对"),
+        "bad-entry": tr("包里的文件类型不对"),
+        "missing-entry": tr("manifest 里写的文件不在包里"),
+        "hash-mismatch": tr("文件校验对不上（sha256），包可能坏了"),
+        "bad-preset": tr("转场预设写得不对"),
+        "exists": tr("同名的包已经装过同一个版本；先删掉再装"),
+        "io": tr("写文件失败"),
+    }
+    detail = str(exc) if str(exc) != reason else ""
+    text = tr("装不进去：") + table.get(reason, tr("认不出来的问题"))
+    return text + ("（" + detail + "）" if detail else "")
+
+
+def asset_usage(project, package: dict, current_font: str = "") -> list:
+    """工程里哪些地方用了这个包（删除前的提示用）。"""
+    base = os.path.abspath(str(package.get("path") or "")).lower()
+    used = []
+    for i, clip in enumerate(getattr(project, "clips", None) or []):
+        lut = getattr(clip, "lut", "") or ""
+        if lut and os.path.abspath(lut).lower().startswith(base + os.sep):
+            used.append(tr("第 {n} 段的 LUT", n=i + 1))
+    if package.get("kind") == "font":
+        want = str(current_font or "").strip().lower()
+        for path in package.get("files") or []:
+            if want and font_family_of(path).lower() == want:
+                used.append(tr("字幕字体"))
+                break
+    return used
 
 
 class Clip:
@@ -2774,7 +3231,8 @@ def run_gui() -> int:
     from PyQt6.QtCore import (QEvent, QEventLoop, QLibraryInfo, QPoint, QPointF,
                               QSize, Qt, QThread, QTimer, QTranslator, QUrl,
                               pyqtSignal)
-    from PyQt6.QtGui import (QBrush, QColor, QConicalGradient, QFont, QIcon,
+    from PyQt6.QtGui import (QBrush, QColor, QConicalGradient, QFont,
+                            QFontDatabase, QIcon,
                             QImageReader, QKeySequence, QLinearGradient,
                             QPainter, QPainterPath, QPalette, QPen, QPixmap,
                             QPolygonF, QShortcut)
@@ -3412,7 +3870,7 @@ def run_gui() -> int:
             form.addRow(tr("饱和度"), self._slider_row(self._sat, self._lbl_s))
             self.cmb_lut = QComboBox()
             self.cmb_lut.addItem(tr("不用"), "")
-            luts = list_luts(lut_dir)
+            luts = all_luts(lut_dir)
             for path in luts:
                 self.cmb_lut.addItem(os.path.basename(path), path)
             if clip.lut and clip.lut not in luts:
@@ -3423,7 +3881,8 @@ def run_gui() -> int:
             self.body.addLayout(form)
 
             hint = QLabel(tr("调色只作用在这一段上：先调亮度/对比度/饱和度，"
-                             "再套 LUT。LUT 是 .cube 文件，目录在设置里指定。"))
+                             "再套 LUT。LUT 是 .cube 文件，目录在设置里指定，"
+                             "也可以从资源包装进来。"))
             hint.setWordWrap(True)
             hint.setObjectName("hint")
             self.body.addWidget(hint)
@@ -4520,9 +4979,10 @@ def run_gui() -> int:
         系统里换耳机/扬声器时自动跟着换（见 Window._follow_audio）。
         """
 
-        def __init__(self, settings: Settings, parent=None):
+        def __init__(self, settings: Settings, parent=None, project=None):
             super().__init__(parent, tr("设置"))
             self.s = settings
+            self.project = project
             self.setMinimumWidth(620)
             self.pro = settings["ui"] != "simple"
             self._pro_fields = []   # 简洁模式要藏起来的（标签和控件一起藏）
@@ -4786,6 +5246,33 @@ def run_gui() -> int:
             self.spin_sub_size.setValue(int(settings["subtitle_size"]))
             self.spin_sub_size.setSuffix(tr(" 像素"))
             add_row("字幕字号", self.spin_sub_size, pro=True)
+
+            add_sep("资源包", pro=True)
+            self.list_assets = QListWidget()
+            self.list_assets.setMinimumHeight(96)
+            add_row("已装资源包", self.list_assets, pro=True)
+            self.lbl_assets = QLabel(tr(
+                "字体包、LUT 包、转场预设包都能从 zip 装进来。"
+                "字体装好后能在这里的「字幕字体」里选，LUT 会出现在右键「调色…」里，"
+                "转场预设会出现在右键「转场」里。"))
+            self.lbl_assets.setObjectName("hint")
+            self.lbl_assets.setWordWrap(True)
+            self.lbl_assets.setMinimumWidth(360)
+            row_asset = QHBoxLayout()
+            row_asset.setContentsMargins(0, 0, 0, 0)
+            self.btn_asset_add = QPushButton(tr("导入 zip…"))
+            self.btn_asset_add.clicked.connect(self._import_asset)
+            self.btn_asset_del = QPushButton(tr("删除所选"))
+            self.btn_asset_del.clicked.connect(self._remove_asset)
+            row_asset.addWidget(self.btn_asset_add)
+            row_asset.addWidget(self.btn_asset_del)
+            row_asset.addStretch(1)
+            wrap_asset = QWidget()
+            wrap_asset.setLayout(row_asset)
+            add_row("导入 / 删除", wrap_asset, pro=True)
+            self._form().addRow(self.lbl_assets)
+            self._pro_fields.append(self.lbl_assets)
+            self._refresh_assets()
 
             add_sep("音乐", pro=True)
             self.spin_mstart = QDoubleSpinBox()
@@ -5137,6 +5624,69 @@ def run_gui() -> int:
                                    self.edit_dir.text() or "")
             if d:
                 self.edit_dir.setText(d)
+
+        # ---------------- 资源包
+        def _refresh_assets(self):
+            self.list_assets.clear()
+            pkgs = installed_asset_packages()
+            for pkg in pkgs:
+                ver = (" v" + pkg["version"]) if pkg["version"] else ""
+                item = QListWidgetItem(
+                    tr("{kind} · {name}{ver}",
+                       kind=tr(ASSET_KIND_LABELS[pkg["kind"]]),
+                       name=pkg["name"], ver=ver))
+                item.setData(Qt.ItemDataRole.UserRole, pkg)
+                self.list_assets.addItem(item)
+            self.btn_asset_del.setEnabled(bool(pkgs))
+
+        def _pick_asset(self):
+            item = self.list_assets.currentItem()
+            if item is None:
+                return None
+            data = item.data(Qt.ItemDataRole.UserRole)
+            return data if isinstance(data, dict) else None
+
+        def _import_asset(self):
+            files = FileDialog.get_open_files(
+                self, tr("选资源包"), "", tr("资源包 (*.zip)"))
+            if not files:
+                return
+            try:
+                pkg = install_asset_zip(files[0])
+            except AssetError as exc:
+                MsgBox.warn(self, tr("资源包没装上"), asset_error_text(exc))
+                return
+            if pkg["kind"] == "font":
+                register_asset_fonts()
+            self._refresh_assets()
+            self.list_assets.setCurrentRow(self.list_assets.count() - 1)
+            MsgBox.info(self, tr("资源包装好了"),
+                        tr("{kind}「{name}」已经装进资源目录。",
+                           kind=tr(ASSET_KIND_LABELS[pkg["kind"]]),
+                           name=pkg["name"]))
+
+        def _remove_asset(self):
+            pkg = self._pick_asset()
+            if not pkg:
+                return
+            if not MsgBox.ask(
+                    self, tr("删掉资源包"),
+                    tr("确定删掉「{name}」吗？正在用它的工程会找不到文件。",
+                       name=pkg["name"]),
+                    tr("删掉"), tr("算了"), danger=True):
+                return
+            used = asset_usage(self.project, pkg,
+                               self.cmb_sub_font.currentFont().family())
+            if not remove_asset_package(pkg):
+                MsgBox.warn(self, tr("删不掉"),
+                            tr("这个包的文件删不掉，可能被别的程序占着。"))
+                return
+            self._refresh_assets()
+            if used:
+                MsgBox.warn(
+                    self, tr("资源包已经删掉"),
+                    tr("当前工程里还有地方在用它：{what}。渲染前先把这些地方换掉。",
+                       what="、".join(used)))
 
         def _reset_shortcuts(self):
             for key, ed in self._seq.items():
@@ -6246,7 +6796,7 @@ def run_gui() -> int:
         # ---------------- 设置
         def on_settings(self):
             log("settings open")
-            dlg = SettingsDialog(self.settings, self)
+            dlg = SettingsDialog(self.settings, self, self.project)
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
             self.settings.save()
@@ -6302,6 +6852,7 @@ def run_gui() -> int:
                         crop_focus=s["crop_focus"],
                         subtitles=[dict(c) for c in self.project.cues],
                         subtitle_font=s["subtitle_font"],
+                        subtitle_fonts=font_lookup_dir(s["subtitle_font"]),
                         subtitle_size=subtitle_px(int(s["subtitle_size"]), h),
                         overlays=[o.copy() for o in self.project.overlays])
 
@@ -6731,6 +7282,20 @@ def run_gui() -> int:
                     act.triggered.connect(
                         lambda _c=False, t=targets, n=name:
                         self.on_set_transition(t, n))
+                presets = asset_transition_presets()
+                if presets:
+                    xm.addSeparator()
+                    for preset in presets:
+                        pact = xm.addAction(
+                            tr("{name}（资源包）", name=preset["name"]))
+                        pact.setToolTip("%s · %.2f 秒" % (
+                            preset["xfade"], preset["duration"]))
+                        pact.setCheckable(True)
+                        pact.setChecked(on_now and all(
+                            (n or "fade") == preset["xfade"] for n in cur_names))
+                        pact.triggered.connect(
+                            lambda _c=False, t=targets, pr=preset:
+                            self.on_set_transition_preset(t, pr))
                 xm.addSeparator()
                 dm = xm.addMenu(tr("转场时长"))
                 cur_dur = [self.project.clips[i].xfade_dur for i in targets
@@ -6841,6 +7406,25 @@ def run_gui() -> int:
                     c.xfade = False
                     c.xfade_name = ""
                     c.xfade_dur = None
+            self._refresh_all()
+            self._history_push(tr("转场"))
+            self._check_transitions()
+
+        def on_set_transition_preset(self, rows, preset):
+            """资源包里的转场预设：内置名 + 它自己的默认时长。"""
+            rows = [i for i in rows if 0 <= i < len(self.project.clips)]
+            if not rows:
+                return
+            name = preset.get("xfade") or "fade"
+            try:
+                dur = float(preset.get("duration") or 0.0)
+            except (TypeError, ValueError):
+                dur = 0.0
+            for i in rows:
+                c = self.project.clips[i]
+                c.xfade = True
+                c.xfade_name = name if name in XFADE_NAMES else "fade"
+                c.xfade_dur = dur if dur > 0 else None
             self._refresh_all()
             self._history_push(tr("转场"))
             self._check_transitions()
@@ -7427,6 +8011,7 @@ def run_gui() -> int:
 
     app = QApplication(sys.argv[:1])
     app.setStyle("Fusion")        # 统一画法：Qt 自带的图标/控件才跟得上配色
+    register_asset_fonts()
     ico = asset_path("icon.ico")
     if ico:
         app.setWindowIcon(QIcon(ico))
@@ -7550,7 +8135,7 @@ def run_gui() -> int:
                 outs.append(("audio2", [a.text() for a in m2.actions()],
                              m2.sizeHint().width()))
                 m2.close()
-            dlg = SettingsDialog(w.settings, w)
+            dlg = SettingsDialog(w.settings, w, w.project)
             dlg.show()
             QApplication.processEvents()
             for nm, cb in (("lang", dlg.cmb_lang), ("ratio", dlg.cmb_ratio),
@@ -7906,7 +8491,7 @@ def run_gui() -> int:
             return app.exec()
 
         def shot_settings():
-            dlg = SettingsDialog(w.settings, w)
+            dlg = SettingsDialog(w.settings, w, w.project)
             dlg.show()
 
             def after_dlg():
