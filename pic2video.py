@@ -1367,7 +1367,19 @@ def run_gui() -> int:
             self.btn_accent = QPushButton()
             self.btn_accent.setToolTip(tr("点开从色环里选主色，对撞色自动算"))
             self.btn_accent.clicked.connect(self._pick_accent)
-            add_row("主色", self.btn_accent)
+            self.cmb_preset = QComboBox()
+            self.cmb_preset.setToolTip(tr("照各家视频站的品牌色来，也能自己调"))
+            self.cmb_preset.addItem(tr("自定义"), "")
+            for _name, _hex in theme.PRESETS:
+                self.cmb_preset.addItem(tr(_name), _hex)
+            self.cmb_preset.activated.connect(self._on_preset)
+            row_accent = QHBoxLayout()
+            row_accent.setContentsMargins(0, 0, 0, 0)
+            row_accent.addWidget(self.cmb_preset, 2)
+            row_accent.addWidget(self.btn_accent, 3)
+            wrap_accent = QWidget()
+            wrap_accent.setLayout(row_accent)
+            add_row("主色", wrap_accent)
             self._sync_accent()
 
             add_sep("导出")
@@ -1644,6 +1656,16 @@ def run_gui() -> int:
             acc2 = theme.complementary(acc)
             self.btn_accent.setText(tr("{a}（对撞色 {b}）", a=acc, b=acc2))
             self.btn_accent.setIcon(self._swatch(acc))
+            idx = self.cmb_preset.findData(acc.lower())
+            self.cmb_preset.setCurrentIndex(idx if idx > 0 else 0)
+
+        def _on_preset(self, index: int):
+            hex_value = self.cmb_preset.itemData(index) or ""
+            if not hex_value:            # 「自定义」= 直接开色环
+                self._pick_accent()
+                return
+            self._accent = hex_value
+            self._sync_accent()
 
         def _pick_accent(self):
             dlg = ColorWheelDialog(self._accent, tr("选主色"), self)
@@ -2751,9 +2773,7 @@ def run_gui() -> int:
             dlg = SettingsDialog(w.settings, w)
             dlg.show()
 
-            def grab_dlg():
-                dlg.grab().save(os.path.join(os.path.dirname(shot),
-                                             "shot_settings" + tag + ".png"))
+            def after_dlg():
                 dlg.close()
                 wheel = ColorWheelDialog(w.settings["accent"], tr("选主色"), w)
                 wheel.show()
@@ -2766,6 +2786,30 @@ def run_gui() -> int:
                     w.on_preview()
 
                 QTimer.singleShot(600, grab_wheel)
+
+            def grab_dlg():
+                dlg.grab().save(os.path.join(os.path.dirname(shot),
+                                             "shot_settings" + tag + ".png"))
+                preset = os.environ.get("PIC2VIDEO_SHOT_PRESET")
+                if not preset:
+                    after_dlg()
+                    return
+
+                def grab_preset():
+                    print("PRESET:", dlg.cmb_preset.currentText(),
+                          dlg._accent, theme.complementary(dlg._accent),
+                          "| button:", dlg.btn_accent.text(), flush=True)
+                    dlg.grab().save(os.path.join(
+                        os.path.dirname(shot), "shot_settings_preset" + tag + ".png"))
+                    after_dlg()
+
+                def use_preset():
+                    i = int(preset)
+                    dlg.cmb_preset.setCurrentIndex(i)
+                    dlg._on_preset(i)
+                    QTimer.singleShot(400, grab_preset)
+
+                QTimer.singleShot(300, use_preset)
 
             QTimer.singleShot(700, grab_dlg)
 

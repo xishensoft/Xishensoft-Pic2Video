@@ -500,6 +500,28 @@ check("分隔线控件", 'setObjectName("sep")' in _src)
 check("简洁模式隐藏空组", 'add_sep("音乐", pro=True)' in _src
       and 'add_sep("其它", pro=True)' in _src)
 
+# 26 预设配色（各视频站品牌色）
+check("预设配色够多", len(TH.PRESETS) >= 8, len(TH.PRESETS))
+check("预设全是大写无关的小写十六进制",
+      all(raw == raw.lower() and p.is_hex_color(raw) for _, raw in TH.PRESETS))
+check("预设名不重复", len({n for n, _ in TH.PRESETS}) == len(TH.PRESETS))
+for _name, _hex in TH.PRESETS:
+    _comp = TH.complementary(_hex)
+    check(f"预设对撞色不同于原色 {_name}", _comp.lower() != _hex.lower(), _comp)
+    for _th in ("light", "dark"):
+        _pal = TH.palette(_th, _hex)
+        check(f"预设按钮文字看得清 {_name} {_th}",
+              TH.contrast(_pal["accent_fg"], _pal["accent"]) >= 4.5,
+              round(TH.contrast(_pal["accent_fg"], _pal["accent"]), 2))
+_sc = p.Settings()
+_sc.data["accent"] = TH.PRESETS[1][1]
+_sc._sanitize()
+check("预设主色能存下来", _sc["accent"] == TH.PRESETS[1][1], _sc["accent"])
+_sc.data["accent"] = "fk-7299"
+_sc._sanitize()
+check("坏主色回落默认", _sc["accent"] == TH.DEFAULT_ACCENT, _sc["accent"])
+check("预设下拉在设置里", "cmb_preset" in _src and "theme.PRESETS" in _src)
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)
