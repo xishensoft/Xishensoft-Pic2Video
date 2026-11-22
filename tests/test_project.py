@@ -1429,6 +1429,276 @@ check("切段走 split_at", "self.project.split_at(" in src)
 check("时间线标题显示实测长度",
       "dur=f\"{c.span:.1f}\"" in src or "c.span:.1f" in src)
 
+# ---------------- 45 字幕：SRT 解析
+
+srt_src = "\n".join([
+    "1",
+    "00:00:01,000 --> 00:00:03,500",
+    "第一行",
+    "第二行",
+    "",
+    "2",
+    "00:00:04,250 --> 00:00:06,000",
+    "第二条",
+    "",
+])
+cues = p.parse_srt(srt_src)
+check("SRT 解析出两条", len(cues) == 2, cues)
+check("SRT 第一条起止时间",
+      (cues[0]["start"], cues[0]["end"]) == (1.0, 3.5), cues[0])
+check("SRT 多行文字用换行连起来", cues[0]["text"] == "第一行\n第二行",
+      cues[0]["text"])
+check("SRT 第二条时间", (cues[1]["start"], cues[1]["end"]) == (4.25, 6.0),
+      cues[1])
+check("SRT 也带空的样式位", cues[0]["style"] == "", cues[0])
+
+cues = p.parse_srt("00:00:00.500 --> 00:00:02.000\r\n只有一句\r\n\r\n\r\n")
+check("SRT 可以不写序号、点当毫秒", len(cues) == 1 and cues[0]["start"] == 0.5,
+      cues)
+check("SRT 去掉行尾回车", cues and cues[0]["text"] == "只有一句", cues)
+
+srt_mixed = "\n".join(["1", "00:00:02,000 --> 00:00:01,000", "倒着的",
+                      "", "2", "00:00:05,000 --> 00:00:06,000", "好的"])
+check("SRT 时间倒着的丢掉",
+      [c["text"] for c in p.parse_srt(srt_mixed)] == ["好的"], srt_mixed)
+try:
+    p.parse_srt("1\n00:00:02,000 --> 00:00:01,000\n倒着的\n")
+    srt_none = ""
+except p.SubtitleError as e:
+    srt_none = e.reason
+check("SRT 一条都不剩报 bad-format", srt_none == "bad-format", srt_none)
+
+try:
+    p.parse_srt("这不是字幕\n")
+    srt_bad = ""
+except p.SubtitleError as e:
+    srt_bad = e.reason
+check("SRT 认不出报 bad-format", srt_bad == "bad-format", srt_bad)
+
+# ---------------- 46 字幕：ASS 解析与按扩展名读文件
+
+ass_src = "\n".join([
+    "[Script Info]",
+    "Title: t",
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize",
+    "Style: Default,Microsoft YaHei,48",
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
+    "Effect, Text",
+    "Dialogue: 0,0:00:01.00,0:00:03.50,Default,,0,0,0,,你好，世界",
+    "Dialogue: 0,0:00:04.00,0:00:05.00,Title,,0,0,0,,{\\i1}斜体{\\i0}",
+    "Comment: 0,0:00:06.00,0:00:07.00,Default,,0,0,0,,不算数",
+])
+cues = p.parse_ass(ass_src)
+check("ASS 只认 Dialogue 行", len(cues) == 2, cues)
+check("ASS 文字里的逗号留着", cues[0]["text"] == "你好，世界", cues[0]["text"])
+check("ASS 时间按百分秒算", (cues[0]["start"], cues[0]["end"]) == (1.0, 3.5),
+      cues[0])
+check("ASS 记下样式名", cues[1]["style"] == "Title", cues[1])
+check("ASS 去掉花括号里的排版指令", cues[1]["text"] == "斜体", cues[1]["text"])
+
+cues = p.parse_ass("\n".join([
+    "[Events]",
+    "Format: Layer, Start, End, Style, Text",
+    "Dialogue: 0,0:00:01.00,0:00:02.00,Default,上一句\\N下一句",
+]))
+check("ASS 的 \\N 当换行", cues and cues[0]["text"] == "上一句\n下一句", cues)
+
+try:
+    p.parse_ass("[Script Info]\nTitle: x\n")
+    ass_bad = ""
+except p.SubtitleError as e:
+    ass_bad = e.reason
+check("ASS 没有 Dialogue 报 bad-format", ass_bad == "bad-format", ass_bad)
+
+sub_dir = tempfile.mkdtemp(prefix="p2v_sub_t_")
+srt_path = os.path.join(sub_dir, "a.srt")
+with open(srt_path, "w", encoding="utf-8") as fh:
+    fh.write(srt_src)
+ass_path = os.path.join(sub_dir, "b.ass")
+with open(ass_path, "w", encoding="utf-8") as fh:
+    fh.write(ass_src)
+check("按 .srt 扩展名读 SRT", len(p.load_subtitles(srt_path)) == 2)
+check("按 .ass 扩展名读 ASS", len(p.load_subtitles(ass_path)) == 2)
+
+try:
+    p.load_subtitles(os.path.join(sub_dir, "nope.srt"))
+    sub_missing = ""
+except p.SubtitleError as e:
+    sub_missing = e.reason
+check("字幕文件不存在报 missing", sub_missing == "missing", sub_missing)
+
+try:
+    p.load_subtitles(os.path.join(sub_dir, "x.txt"))
+    sub_ext = ""
+except p.SubtitleError as e:
+    sub_ext = e.reason
+check("不认识的扩展名报 bad-format", sub_ext == "bad-format", sub_ext)
+
+# ---------------- 47 字幕：生成烧录用 .ass
+
+cues = [{"start": 1.0, "end": 3.5, "text": "第一行\n第二行", "style": ""},
+         {"start": 3661.234, "end": 3662.0, "text": "a{b}c", "style": ""}]
+ass = p.format_ass(cues, font="Microsoft YaHei", size=48, w=1280, h=720)
+check("生成的 .ass 有脚本头", ass.startswith("[Script Info]") and
+      "PlayResX: 1280" in ass and "PlayResY: 720" in ass, ass[:80])
+check("样式里写了字体与字号",
+      "Style: Default,Microsoft YaHei,48," in ass,
+      [ln for ln in ass.split("\n") if ln.startswith("Style:")])
+check("两条字幕两行 Dialogue",
+      sum(1 for ln in ass.split("\n") if ln.startswith("Dialogue:")) == 2)
+check("时间写成 时:分:秒.百分秒",
+      "Dialogue: 0,0:00:01.00,0:00:03.50,Default,第一行\\N第二行" in ass,
+      [ln for ln in ass.split("\n") if ln.startswith("Dialogue:")][0])
+check("超过一小时也写得下",
+      "0,1:01:01.23,1:01:02.00,Default," in ass,
+      [ln for ln in ass.split("\n") if ln.startswith("Dialogue:")][1])
+check("花括号转义，不会被当排版指令吃掉", "a\\{b\\}c" in ass,
+      [ln for ln in ass.split("\n") if ln.startswith("Dialogue:")][1])
+check("没有字幕就只有头，没有 Dialogue",
+      "Dialogue:" not in p.format_ass([], font="Arial", size=40))
+
+# ---------------- 48 字幕：滤镜串与挂到输出端
+
+f = p.ass_filter("C:\\tmp\\a b.ass", "Microsoft YaHei", 48)
+check("字幕滤镜：正斜杠 + 冒号转义 + 引号",
+      f == "subtitles=filename='C\\:/tmp/a b.ass':force_style="
+           "'FontName=Microsoft YaHei,FontSize=48'", f)
+f2 = p.ass_filter("C:\\tmp\\a.ass", "思源黑体", 42, "C:\\Windows\\Fonts")
+check("给了字体目录就带上 fontsdir",
+      ":fontsdir='C\\:/Windows/Fonts'" in f2 and "FontName=思源黑体" in f2, f2)
+
+pr = mk(2)
+g = p.build_graph(pr.frame_counts(), pr.total(), clips=pr.clips, fps=30,
+                  subtitle_file="C:\\tmp\\s.ass", subtitle_font="Arial",
+                  subtitle_size=40)
+out_chain = [s for s in g.split(";") if "[vout]" in s]
+check("字幕只挂一次，并且挂在产出 vout 的那一环",
+      g.count("subtitles=") == 1 and len(out_chain) == 1
+      and "subtitles=" in out_chain[0], out_chain)
+check("字幕接在色彩标记后面", ",subtitles=" in out_chain[0], out_chain[0][-120:])
+g2 = p.build_graph(pr.frame_counts(), pr.total(), clips=pr.clips, fps=30)
+check("没有字幕时不加滤镜", "subtitles=" not in g2)
+
+# ---------------- 49 字幕：跟着工程文件走
+
+pr = mk(3)
+check("新工程没字幕", pr.subtitles_path == "" and pr.cues == [],
+      (pr.subtitles_path, pr.cues))
+
+p.set_subtitles(pr, "C:\\subs\\a.srt",
+                [{"start": 0.5, "end": 2.0, "text": "你好", "style": ""},
+                 {"start": 2.0, "end": 4.0, "text": "第二行\n第二句", "style": "Big"}])
+doc = pr.to_doc()
+check("工程文档里带字幕（路径 + 内容）",
+      isinstance(doc.get("subtitles"), dict)
+      and doc["subtitles"].get("path") == "C:\\subs\\a.srt"
+      and len(doc["subtitles"].get("cues") or []) == 2, doc.get("subtitles"))
+json.dumps(doc)
+back = p.Project.from_doc(json.loads(json.dumps(doc)))
+check("字幕随工程往返，风格与换行都在",
+      back.subtitles_path == "C:\\subs\\a.srt" and len(back.cues) == 2
+      and back.cues[1]["text"] == "第二行\n第二句"
+      and back.cues[1]["style"] == "Big", back.cues)
+check("老工程没有字幕这个键 → 空字幕",
+      p.Project.from_doc({"version": 1, "clips": []}).cues == [])
+
+bad = {"version": 1, "clips": [], "subtitles": [1, 2]}
+try:
+    p.Project.from_doc(bad)
+    check("subtitles 不是对象 → bad-shape", False)
+except p.ProjectFileError as e:
+    check("subtitles 不是对象 → bad-shape", e.reason == "bad-shape", e.reason)
+
+mixed = {"version": 1, "clips": [], "subtitles": {"path": "a.srt", "cues": [
+    {"start": 0, "end": 1, "text": "ok"},
+    {"start": 1, "end": 1, "text": "end 等于 start 丢掉"},
+    {"start": 2, "end": 3},
+    "不是对象",
+]}}
+pr2 = p.Project.from_doc(mixed)
+check("坏条目丢掉、好条目留下",
+      len(pr2.cues) == 1 and pr2.cues[0]["text"] == "ok", pr2.cues)
+
+p.clear_subtitles(pr2)
+check("移除字幕清空路径与内容",
+      pr2.subtitles_path == "" and pr2.cues == [], pr2.subtitles_path)
+
+pr3 = mk(2)
+before = pr3.frame_counts(), pr3.total()
+p.set_subtitles(pr3, "a.srt", [{"start": 0, "end": 99, "text": "跨满全片"}])
+check("字幕不参与时长计算", (pr3.frame_counts(), pr3.total()) == before,
+      (before, (pr3.frame_counts(), pr3.total())))
+
+# ---------------- 50 字幕：设置默认值与界面接线
+
+s0 = p.Settings.__new__(p.Settings)
+s0.data = dict(p.Settings.DEFAULTS)
+check("默认字幕字体与字号",
+      p.Settings.DEFAULTS.get("subtitle_font") == "Microsoft YaHei"
+      and p.Settings.DEFAULTS.get("subtitle_size") == 48,
+      (p.Settings.DEFAULTS.get("subtitle_font"),
+       p.Settings.DEFAULTS.get("subtitle_size")))
+s1 = p.Settings.__new__(p.Settings)
+s1.data = dict(p.Settings.DEFAULTS, subtitle_font="  思源黑体  ",
+               subtitle_size=9999)
+s1._sanitize()
+check("字体名清洗后保留、字号夹到上限",
+      s1.data["subtitle_font"] == "思源黑体" and s1.data["subtitle_size"] == 120,
+      (s1.data.get("subtitle_font"), s1.data.get("subtitle_size")))
+s2 = p.Settings.__new__(p.Settings)
+s2.data = dict(p.Settings.DEFAULTS, subtitle_font="", subtitle_size=1)
+s2._sanitize()
+check("空字体回到默认、字号夹到下限",
+      s2.data["subtitle_font"] == "Microsoft YaHei"
+      and s2.data["subtitle_size"] == 16,
+      (s2.data.get("subtitle_font"), s2.data.get("subtitle_size")))
+
+i = src.index("        def _opts(self, preview=False):")
+opts_src = src[i:i + 1200]
+check("预览与导出都会把字幕交给渲染",
+      "subtitles" in opts_src and "project.cues" in opts_src,
+      opts_src[:300])
+check("字幕字体字号取自设置",
+      's["subtitle_font"]' in opts_src and 's["subtitle_size"]' in opts_src,
+      opts_src[-260:])
+check("界面能导入 / 移除字幕",
+      "load_subtitles(" in src and "set_subtitles(" in src
+      and "clear_subtitles(" in src)
+check("左栏有字幕页", 'left_tabs.addTab(' in src and 'tr("字幕")' in src
+      and "self.sub_tabs" in src or 'left_tabs.addTab(sub_page' in src)
+check("导入/移除有各自的动作",
+      "def on_import_subtitle" in src and "def on_clear_subtitle" in src)
+check("导入后刷新字幕页并标记改动",
+      "def _refresh_subtitles" in src and "_mark_dirty()" in src)
+check("设置页能改字幕字体与字号",
+      "字幕字体" in src and "字幕字号" in src
+      and 'self.s.update(' in src
+      and 'subtitle_font' in src.split('self.s.update(')[1][:4000])
+
+# ---------------- 51 字幕字号按画面高度等比缩放
+
+check("1080p 下字号就是设置值", p.subtitle_px(48, 1080) == 48,
+      p.subtitle_px(48, 1080))
+check("540p 预览字号减半", p.subtitle_px(48, 540) == 24,
+      p.subtitle_px(48, 540))
+check("720p 下 48 号约 32 像素", p.subtitle_px(48, 720) == 32,
+      p.subtitle_px(48, 720))
+check("再小的画面也不低于 8 像素", p.subtitle_px(16, 360) == 8,
+      p.subtitle_px(16, 360))
+check("字号是整数", isinstance(p.subtitle_px(48, 541), int),
+      type(p.subtitle_px(48, 541)))
+_j = src.index("        def _opts(self, preview=False):")
+check("_opts 里按实际画面高度换算字号",
+      "subtitle_px(" in src[_j:_j + 1200], src[_j:_j + 1200][-300:])
+
+check("长 filtergraph 走 filter_complex_script（不是拼错的 -/filter_complex）",
+      '"-filter_complex_script", graph_file' in src
+      and '"-/filter_complex"' not in src)
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

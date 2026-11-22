@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -311,6 +312,8 @@ class Settings:
         "music_start": 0.0,       # 背景音乐从第几秒开始用
         "music_len": 0.0,         # 音乐用多长；0 = 一直用到音乐结尾
         "crop_focus": "center",   # 裁切铺满时留中心 / 偏上 / 偏下
+        "subtitle_font": "Microsoft YaHei",   # 烧字幕用的字体
+        "subtitle_size": 48,      # 字号（按成片像素算）
         "open_after_export": True,   # 导出完自动打开所在文件夹
         "ask_export_dir": True,      # 导出时先问保存到哪（关掉就直接用默认目录）
         "win_w": 0,               # 窗口大小/位置，0 = 用默认
@@ -447,6 +450,14 @@ class Settings:
             d["motion"] = "none"
         if d.get("crop_focus") not in CROP_FOCUS:
             d["crop_focus"] = "center"
+        font = d.get("subtitle_font")
+        d["subtitle_font"] = (font.strip() if isinstance(font, str) else ""
+                              ) or "Microsoft YaHei"
+        try:
+            d["subtitle_size"] = int(min(120, max(16, int(
+                d.get("subtitle_size", 48)))))
+        except (TypeError, ValueError):
+            d["subtitle_size"] = 48
         sc = d.get("shortcuts")
         clean = {}
         if isinstance(sc, dict):
@@ -593,6 +604,8 @@ class Project:
         self.audio_len = 0.0          # 用多长；0 = 到音乐结尾
         self.total_setting = 10.0
         self.fps = int(fps)
+        self.subtitles_path = ""      # 导入的字幕文件（工程里记着，方便重定位）
+        self.cues: list[dict] = []    # 解析好的字幕条目，时间对齐成片总轴
 
     # -- 背景音乐：还是挂在第一条音频上，命令行/设置都靠它 ---------------
     @property
@@ -659,6 +672,8 @@ class Project:
             "audios": [{"path": a.path, "dur": a.dur, "start": a.start,
                         "volume": a.volume, "gap": bool(a.gap)}
                        for a in self.audios],
+            "subtitles": {"path": self.subtitles_path,
+                          "cues": [dict(c) for c in self.cues]},
         }
 
     @classmethod
@@ -684,6 +699,16 @@ class Project:
             raise ProjectFileError("bad-shape", "素材表不是列表")
         new_clips = [self._clip_from_doc(raw) for raw in clips]
         new_audios = [self._audio_from_doc(raw) for raw in audios]
+        raw_subs = doc.get("subtitles") or {}
+        if not isinstance(raw_subs, dict):
+            raise ProjectFileError("bad-shape", "字幕内容不是一个对象")
+        raw_cues = raw_subs.get("cues") or []
+        if not isinstance(raw_cues, list):
+            raise ProjectFileError("bad-shape", "字幕条目不是列表")
+        sub_path = raw_subs.get("path") or ""
+        if not isinstance(sub_path, str):
+            sub_path = ""
+        new_cues = _clean_cues(raw_cues)
         mode = doc.get("mode")
         self.clips = new_clips
         self.audios = new_audios
@@ -692,6 +717,8 @@ class Project:
         self.audio_len = _doc_num(doc.get("audio_len"), 0.0)
         self.total_setting = _doc_num(doc.get("total_setting"), 10.0)
         self.fps = 60 if _doc_num(doc.get("fps"), FPS) >= 50 else 30
+        self.subtitles_path = sub_path
+        self.cues = new_cues
 
     @staticmethod
     def _clip_from_doc(raw) -> Clip:
@@ -1119,6 +1146,254 @@ def load_project(path: str) -> "Project":
     return Project.from_doc(load_project_doc(path))
 
 
+# ---------------------------------------------------------------- 字幕
+
+class SubtitleError(Exception):
+    """字幕读不进来：missing 文件没了 / bad-format 认不出这个格式。"""
+
+    def __init__(self, reason: str, message: str = ""):
+        super().__init__(message or reason)
+        self.reason = reason
+        self.message = message or reason
+
+
+def _sub_time(text: str) -> float | None:
+    """字幕时间戳 -> 秒。SRT 用逗号毫秒，ASS 用百分秒，点号也收。"""
+    if not isinstance(text, str):
+        return None
+    raw = text.strip().replace(",", ".")
+    parts = raw.split(":")
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        nums = [float(x) for x in parts]
+    except ValueError:
+        return None
+    if len(nums) == 2:
+        nums = [0.0] + nums
+    h, m, s = nums
+    if min(h, m, s) < 0 or m >= 60 or s >= 60:
+        return None
+    return round(h * 3600 + m * 60 + s, 3)
+
+
+def _cue(start: float, end: float, text: str, style: str = "") -> dict:
+    return {"start": start, "end": end, "text": text, "style": style}
+
+
+def _sub_body(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def parse_srt(text: str) -> list[dict]:
+    """SRT -> cues。序号可省；多行文字用换行连起来；认不出就报 bad-format。"""
+    if not isinstance(text, str):
+        raise SubtitleError("bad-format", "字幕内容不是文本")
+    cues = []
+    for block in re.split(r"\n[ \t]*\n", _sub_body(text)):
+        lines = block.split("\n")
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        if not lines:
+            continue
+        at = 0
+        if "-->" not in lines[0]:
+            at = 1                       # 第一行是序号，时间在下一行
+        if at >= len(lines) or "-->" not in lines[at]:
+            continue
+        left, _, right = lines[at].partition("-->")
+        stamps = right.split()
+        start, end = _sub_time(left), _sub_time(stamps[0]) if stamps else None
+        if start is None or end is None or end <= start:
+            continue                     # 时间认不出或者倒着，这条不要
+        body = "\n".join(ln.rstrip() for ln in lines[at + 1:]).strip("\n")
+        cues.append(_cue(start, end, body))
+    if not cues:
+        raise SubtitleError("bad-format", "没有一条读得出来的字幕")
+    return cues
+
+
+def _ass_text(text: str) -> str:
+    r"""去掉 {\...} 排版指令，把 \N \n 还原成换行、\h 还原成空格。"""
+    out = re.sub(r"\{[^}]*\}", "", text)
+    out = out.replace("\\N", "\n").replace("\\n", "\n").replace("\\h", " ")
+    return out.strip()
+
+
+ASS_FIELDS = ["layer", "start", "end", "style", "name", "marginl", "marginr",
+              "marginv", "effect", "text"]
+
+
+def parse_ass(text: str) -> list[dict]:
+    """ASS/SSA 的 [Events] 段 -> cues（保留样式名，丢排版指令）。"""
+    if not isinstance(text, str):
+        raise SubtitleError("bad-format", "字幕内容不是文本")
+    in_events, fields, cues = False, None, []
+    for raw in _sub_body(text).split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        low = line.lower()
+        if low.startswith("[") and low.endswith("]"):
+            in_events = low == "[events]"
+            fields = None
+            continue
+        if not in_events:
+            continue
+        if low.startswith("format:"):
+            fields = [f.strip().lower()
+                      for f in line.split(":", 1)[1].split(",")]
+            continue
+        if not low.startswith("dialogue:"):
+            continue                  # Comment: / Picture: 之类不算
+        cols = fields or ASS_FIELDS
+        parts = line.split(":", 1)[1].split(",", len(cols) - 1)
+        if len(parts) < len(cols):
+            continue
+        row = {k: parts[i].strip() for i, k in enumerate(cols)}
+        start, end = _sub_time(row.get("start", "")), _sub_time(row.get("end", ""))
+        if start is None or end is None or end <= start:
+            continue
+        cues.append(_cue(start, end, _ass_text(row.get("text", "")),
+                         row.get("style", "")))
+    if not cues:
+        raise SubtitleError("bad-format", "没有一条 Dialogue 行")
+    return cues
+
+
+def load_subtitles(path: str) -> list[dict]:
+    """按扩展名读一份字幕：.srt / .ass / .ssa。"""
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in (".srt", ".ass", ".ssa"):
+        raise SubtitleError("bad-format", "只认 .srt / .ass 字幕文件")
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        raise SubtitleError("missing", path)
+    text = None
+    for enc in ("utf-8-sig", "gb18030"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        raise SubtitleError("bad-format", "字幕的编码认不出来（用 UTF-8 存一份）")
+    return parse_ass(text) if ext in (".ass", ".ssa") else parse_srt(text)
+
+
+def _clean_cues(raw_list) -> list:
+    """把外来字幕条目洗成干净的一份：坏条目直接丢掉，不炸整个工程。"""
+    out = []
+    for raw in raw_list or []:
+        if not isinstance(raw, dict):
+            continue
+        start = _doc_num(raw.get("start"), -1.0)
+        end = _doc_num(raw.get("end"), -1.0)
+        text = raw.get("text")
+        if start < 0 or end <= start or not isinstance(text, str):
+            continue
+        out.append(_cue(start, end, text, str(raw.get("style") or "")))
+    return out
+
+
+def set_subtitles(project, path: str, cues: list):
+    """挂一份字幕到工程上（工程只存路径 + 解析结果）。"""
+    project.subtitles_path = str(path or "")
+    project.cues = _clean_cues(cues)
+
+
+def clear_subtitles(project):
+    """把字幕从工程上摘掉。"""
+    project.subtitles_path = ""
+    project.cues = []
+
+
+def _ass_time(t: float) -> str:
+    """成片时间 → .ass 的 0:00:01.00 这种写法（百分秒）。"""
+    cs_all = int(round(max(0.0, float(t)) * 100))
+    h, rest = divmod(cs_all, 360000)
+    m, rest = divmod(rest, 6000)
+    s, cs = divmod(rest, 100)
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+
+def _ass_escape(text: str) -> str:
+    r"""字幕正文 → .ass 一行：花括号是排版指令，必须转义，换行写 \N。"""
+    t = str(text).replace("{", "\\{").replace("}", "\\}")
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    return t.replace("\n", "\\N")
+
+
+ASS_STYLE_FORMAT = (
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+    "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+    "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+    "Alignment, MarginL, MarginR, MarginV, Encoding")
+
+
+def format_ass(cues: list, font: str = "Microsoft YaHei", size: int = 48,
+               w: int = WIDTH, h: int = HEIGHT) -> str:
+    """把解析好的字幕写成一份 .ass（烧录用）。字号按像素，跟成片同尺寸。"""
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        "WrapStyle: 0",
+        "ScaledBorderAndShadow: yes",
+        f"PlayResX: {int(w)}",
+        f"PlayResY: {int(h)}",
+        "",
+        "[V4+ Styles]",
+        ASS_STYLE_FORMAT,
+        ("Style: Default,%s,%d,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+         "0,0,0,0,100,100,0,0,1,2.5,0,2,60,60,40,1" % (font, int(size))),
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Text",
+    ]
+    for c in cues or []:
+        lines.append("Dialogue: 0,%s,%s,%s,%s" % (
+            _ass_time(c.get("start", 0.0)), _ass_time(c.get("end", 0.0)),
+            c.get("style") or "Default", _ass_escape(c.get("text", ""))))
+    return "\n".join(lines) + "\n"
+
+
+def subtitle_px(size: int, height: int) -> int:
+    """字号按 1080p 定，实际按画面高度等比缩放（小窗预览才不会字撑满屏）。"""
+    return max(8, int(round(float(size) * float(height) / 1080.0)))
+
+
+def _write_ass(cues, w: int, h: int, font: str, size: int) -> str:
+    """把字幕写成临时 .ass，返回路径（用完由调用方删）。"""
+    text = format_ass(cues, font=font, size=size, w=w, h=h)
+    fd, path = tempfile.mkstemp(prefix="p2v_sub_", suffix=".ass")
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+    return path
+
+
+def _filter_path(path: str) -> str:
+    """滤镜里的路径：反斜杠换正斜杠，冒号转义，整体单引号包住。"""
+    return str(path).replace("\\", "/").replace(":", "\\:")
+
+
+def default_font_dir() -> str:
+    """字幕字体默认去系统字体目录找（libass 自己未必能翻到）。"""
+    win = os.environ.get("WINDIR") or os.environ.get("SystemRoot") or r"C:\Windows"
+    return os.path.join(win, "Fonts")
+
+
+def ass_filter(path: str, font: str = "Microsoft YaHei", size: int = 48,
+               fontsdir: str = "") -> str:
+    """一条 subtitles 滤镜：烧录临时 .ass，并强制字体/字号。"""
+    out = "subtitles=filename='%s'" % _filter_path(path)
+    if fontsdir:
+        out += ":fontsdir='%s'" % _filter_path(fontsdir)
+    out += ":force_style='FontName=%s,FontSize=%d'" % (font, int(size))
+    return out
+
+
 def project_error_text(exc: "ProjectFileError") -> str:
     """把工程读写出错翻译成一句人话（弹窗正文用）。"""
     detail = str(exc) if str(exc) != exc.reason else ""
@@ -1261,7 +1536,9 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
                 motion_amount: float = MOTION_AMOUNT, volume: float = 1.0,
                 crop_focus: str = "center", music_start: float = 0.0,
                 clips=None, timeline=None, extras=None,
-                xfade_sec: float = 0.3) -> str:
+                xfade_sec: float = 0.3, subtitle_file: str = "",
+                subtitle_font: str = "Microsoft YaHei", subtitle_size: int = 48,
+                subtitle_fonts: str = "") -> str:
     """一条 filtergraph：逐元素切片 → 拼接（可交叉淡化）→ 音频 → 总长。
 
     clips: Clip 列表（含片头片尾）；不传就按「全是图片」
@@ -1274,6 +1551,7 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
     motion: none 静帧；in 缓慢推近；out 缓慢拉远；inout 一张推近一张拉远
     volume: 背景音乐音量倍数（1.0 = 原样）
     crop_focus: 裁切铺满时留住 center / top / bottom
+    subtitle_file: 已经写好的 .ass，挂在成片最后一环烧进去（空 = 不加字幕）
     """
     K = len(counts)
     if K <= 0:
@@ -1385,7 +1663,12 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
             parts.append(f"{prev}[v{i}]concat=n=2:v=1:a=0[m{i}]")
             acc += segs[i]
         prev = f"[m{i}]"
-    parts.append(f"{prev}{COLOR_TAG}[vout]")
+    if subtitle_file:
+        sub = ass_filter(subtitle_file, subtitle_font, subtitle_size,
+                         subtitle_fonts or default_font_dir())
+        parts.append(f"{prev}{COLOR_TAG},{sub}[vout]")
+    else:
+        parts.append(f"{prev}{COLOR_TAG}[vout]")
 
     # ---------------- 音频 ----------------
     mstart = max(0.0, float(music_start))
@@ -1480,10 +1763,13 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
            fade_out=FADE_OUT, transition="none", transition_sec=0.3,
            bg_blur=True, pad_color="#000000", bg_path="", motion="none",
            volume=1.0, crop_focus="center", music_start=0.0, xfade_sec=0.3,
+           subtitles=None, subtitle_font="Microsoft YaHei",
+           subtitle_size=48, subtitle_fonts="",
            on_progress=None, proc_holder=None) -> str:
     """一条 filtergraph 渲完；on_progress(0..1) 回调。
 
     audio 可以是路径、AudioClip 列表或等价的 dict 列表。
+    subtitles 给一份 cues（解析好的字幕）就直接烧进成片；留空不烧。
     proc_holder 给一个 dict 时，把 ffmpeg 进程塞进 proc_holder["proc"]，
     外面就能 terminate() 取消这次渲染。
     """
@@ -1524,6 +1810,12 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
     bgm = next((a for a in items if a.get("gap")), None)
     extras = [a for a in items if not a.get("gap")]
 
+    sub_file = ""
+    if subtitles:
+        sub_file = _write_ass(subtitles, w, h, subtitle_font, subtitle_size)
+    sub_kw = dict(subtitle_file=sub_file, subtitle_font=subtitle_font,
+                  subtitle_size=subtitle_size, subtitle_fonts=subtitle_fonts)
+
     graph = build_graph(counts, total, w, h, fps=fps, fit=fit,
                         fade_in=fade_in, fade_out=fade_out,
                         transition=transition, transition_sec=transition_sec,
@@ -1533,7 +1825,7 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
                         motion=motion, volume=volume,
                         crop_focus=crop_focus, music_start=music_start,
                         clips=clips, timeline=timeline,
-                        extras=None, xfade_sec=xfade_sec)
+                        extras=None, xfade_sec=xfade_sec, **sub_kw)
     cmd = [FFMPEG, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
            "-progress", "pipe:1", "-nostats"]
     for c, nf in zip(clips, counts2):
@@ -1583,7 +1875,7 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
                             volume=volume, crop_focus=crop_focus,
                             music_start=music_start, clips=clips,
                             timeline=timeline, extras=extra_specs,
-                            xfade_sec=xfade_sec)
+                            xfade_sec=xfade_sec, **sub_kw)
 
     graph_file = None
     if len(graph) > 6000:
@@ -1591,7 +1883,7 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
         os.close(fd)
         with open(graph_file, "w", encoding="utf-8", newline="\n") as f:
             f.write(graph)
-        cmd += ["-/filter_complex", graph_file]
+        cmd += ["-filter_complex_script", graph_file]
     else:
         cmd += ["-filter_complex", graph]
 
@@ -1632,11 +1924,12 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
         ok = True
         return out_path
     finally:
-        if graph_file:
-            try:
-                os.remove(graph_file)
-            except OSError:
-                pass
+        for tmp in (graph_file, sub_file):
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
         if not ok and os.path.exists(out_path):
             try:
                 os.remove(out_path)
@@ -1810,6 +2103,7 @@ def run_gui() -> int:
     from PyQt6.QtWidgets import (
         QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QColorDialog,
         QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
+        QFontComboBox,
         QFormLayout, QFrame, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit,
         QListWidget,
         QListWidgetItem, QMainWindow, QMenu, QProgressBar,
@@ -3180,6 +3474,18 @@ def run_gui() -> int:
                 max(0, list(CROP_FOCUS).index(settings["crop_focus"])))
             add_row("裁切位置", self.cmb_crop, pro=True)
 
+            self.cmb_sub_font = QFontComboBox()
+            self.cmb_sub_font.setCurrentFont(QFont(str(settings["subtitle_font"])))
+            self.cmb_sub_font.setToolTip(
+                tr("烧进成片的字幕用这个字体；缺字体就换成别的"))
+            add_row("字幕字体", self.cmb_sub_font, pro=True)
+
+            self.spin_sub_size = QSpinBox()
+            self.spin_sub_size.setRange(16, 120)
+            self.spin_sub_size.setValue(int(settings["subtitle_size"]))
+            self.spin_sub_size.setSuffix(tr(" 像素"))
+            add_row("字幕字号", self.spin_sub_size, pro=True)
+
             add_sep("音乐", pro=True)
             self.spin_mstart = QDoubleSpinBox()
             self.spin_mstart.setRange(0.0, 36000.0)
@@ -3574,6 +3880,8 @@ def run_gui() -> int:
                 music_start=float(self.spin_mstart.value()),
                 music_len=float(self.spin_mlen.value()),
                 crop_focus=self.cmb_crop.currentData(),
+                subtitle_font=self.cmb_sub_font.currentFont().family(),
+                subtitle_size=int(self.spin_sub_size.value()),
                 transition_sec=float(self.spin_trans.value()),
                 win_mode=self.cmb_win.currentData(),
                 win_fixed_w=int(self.spin_win_w.value()),
@@ -4199,6 +4507,29 @@ def run_gui() -> int:
             hb.addStretch(1)
             hvp.addLayout(hb)
             self.left_tabs.addTab(hist_page, tr("历史"))
+            sub_page = QWidget()
+            svp = QVBoxLayout(sub_page)
+            svp.setContentsMargins(0, 0, 0, 0)
+            svp.setSpacing(6)
+            self.lbl_subs = QLabel(tr("还没有字幕"))
+            self.lbl_subs.setWordWrap(True)
+            svp.addWidget(self.lbl_subs)
+            self.sub_list = QListWidget()
+            self.sub_list.setAlternatingRowColors(True)
+            self.sub_list.setSelectionMode(
+                QAbstractItemView.SelectionMode.SingleSelection)
+            svp.addWidget(self.sub_list, 1)
+            sb = QHBoxLayout()
+            self.btn_sub_add = QPushButton(tr("导入字幕…"))
+            self.btn_sub_add.setToolTip(tr("支持 .srt 与 .ass，烧进成片"))
+            self.btn_sub_add.clicked.connect(self.on_import_subtitle)
+            self.btn_sub_del = QPushButton(tr("移除字幕"))
+            self.btn_sub_del.clicked.connect(self.on_clear_subtitle)
+            sb.addWidget(self.btn_sub_add)
+            sb.addWidget(self.btn_sub_del)
+            sb.addStretch(1)
+            svp.addLayout(sb)
+            self.left_tabs.addTab(sub_page, tr("字幕"))
             split.addWidget(self.left_tabs)
 
             right = QWidget()
@@ -4301,6 +4632,9 @@ def run_gui() -> int:
             self.btn_redo.setText(tr("还原"))
             self.left_tabs.setTabText(0, tr("素材"))
             self.left_tabs.setTabText(1, tr("历史"))
+            self.left_tabs.setTabText(2, tr("字幕"))
+            self.btn_sub_add.setText(tr("导入字幕…"))
+            self.btn_sub_del.setText(tr("移除字幕"))
             self.btn_settings.setText(tr("设置"))
             self.btn_settings.setToolTip(
                 tr("导出目录、画幅比例、分辨率、帧率、画质、铺底、转场、默认节奏"))
@@ -4458,8 +4792,62 @@ def run_gui() -> int:
                 self.on_edit_dur(item)
 
         # ---------------- 状态刷新
+        # ---------------- 字幕
+        def _refresh_subtitles(self):
+            self.sub_list.clear()
+            n = len(self.project.cues)
+            path = self.project.subtitles_path
+            if n:
+                head = tr("已导入 {n} 条字幕", n=n)
+                self.lbl_subs.setText(head + (("\n" + path) if path else ""))
+            elif path:
+                self.lbl_subs.setText(tr("字幕里没有一条能用的") + "\n" + path)
+            else:
+                self.lbl_subs.setText(tr("还没有字幕"))
+            self.btn_sub_del.setEnabled(bool(n or path))
+            for c in self.project.cues:
+                text = str(c.get("text", "")).replace("\n", " / ")
+                self.sub_list.addItem("%.1fs → %.1fs  %s"
+                                      % (c["start"], c["end"], text))
+
+        def on_import_subtitle(self):
+            base = (os.path.dirname(self.project.subtitles_path)
+                    or self._project_dir())
+            picked = FileDialog.get_open_files(
+                self, tr("选字幕文件"), base,
+                tr("字幕 (*.srt *.ass)"))
+            if not picked:
+                return
+            path = picked[0]
+            try:
+                cues = load_subtitles(path)
+            except SubtitleError as e:
+                if e.reason == "missing":
+                    msg = tr("文件不在了：") + path
+                else:
+                    msg = tr("字幕认不出来，换一份 UTF-8 的 .srt / .ass 试试")
+                MsgBox.warn(self, tr("读不了字幕"), msg)
+                return
+            set_subtitles(self.project, path, cues)
+            self._refresh_subtitles()
+            self._mark_dirty()
+            self._history_push(tr("导入字幕"))
+            self._mark_stale()
+            self.lbl_status.setText(tr("已导入 {n} 条字幕", n=len(cues)))
+
+        def on_clear_subtitle(self):
+            if not (self.project.cues or self.project.subtitles_path):
+                return
+            clear_subtitles(self.project)
+            self._refresh_subtitles()
+            self._mark_dirty()
+            self._history_push(tr("移除字幕"))
+            self._mark_stale()
+            self.lbl_status.setText(tr("字幕已移除"))
+
         def _refresh_all(self):
             self._refresh_list()
+            self._refresh_subtitles()
             self.timeline.update()
             self._mark_stale()
             m = self.project.mode
@@ -4592,7 +4980,10 @@ def run_gui() -> int:
                         motion=s["motion"],
                         volume=float(s["music_volume"]),
                         music_start=float(s["music_start"]),
-                        crop_focus=s["crop_focus"])
+                        crop_focus=s["crop_focus"],
+                        subtitles=[dict(c) for c in self.project.cues],
+                        subtitle_font=s["subtitle_font"],
+                        subtitle_size=subtitle_px(int(s["subtitle_size"]), h))
 
         # ---------------- 动作
         def on_add(self):

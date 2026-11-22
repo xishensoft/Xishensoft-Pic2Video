@@ -1,4 +1,6 @@
 __pycache__/
+_*.log
+_*.txt
 *.pyc
 build/
 build2/

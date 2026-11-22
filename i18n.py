@@ -2114,3 +2114,119 @@ _TR_EXTRA27 = {
 for _k, _trs in _TR_EXTRA27.items():
     for _lang, _v in _trs.items():
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA28 = {
+    '字幕': {
+        'zh-TW': '字幕',
+        'en': 'Subtitles',
+        'ja': '字幕',
+        'ko': '자막',
+    },
+    '字幕 (*.srt *.ass)': {
+        'zh-TW': '字幕 (*.srt *.ass)',
+        'en': 'Subtitles (*.srt *.ass)',
+        'ja': '字幕 (*.srt *.ass)',
+        'ko': '자막 (*.srt *.ass)',
+    },
+    '导入字幕…': {
+        'zh-TW': '匯入字幕…',
+        'en': 'Import subtitles…',
+        'ja': '字幕を読み込む…',
+        'ko': '자막 가져오기…',
+    },
+    '导入字幕': {
+        'zh-TW': '匯入字幕',
+        'en': 'Import subtitles',
+        'ja': '字幕を読み込む',
+        'ko': '자막 가져오기',
+    },
+    '移除字幕': {
+        'zh-TW': '移除字幕',
+        'en': 'Remove subtitles',
+        'ja': '字幕を削除',
+        'ko': '자막 제거',
+    },
+    '字幕已移除': {
+        'zh-TW': '字幕已移除',
+        'en': 'Subtitles removed',
+        'ja': '字幕を削除しました',
+        'ko': '자막을 제거했습니다',
+    },
+    '已导入 {n} 条字幕': {
+        'zh-TW': '已匯入 {n} 條字幕',
+        'en': 'Imported {n} subtitle cues',
+        'ja': '{n} 件の字幕を取り込みました',
+        'ko': '{n}개 자막을 가져왔습니다',
+    },
+    '字幕里没有一条能用的': {
+        'zh-TW': '字幕裡沒有一條能用的',
+        'en': 'No usable cues in this subtitle file',
+        'ja': 'この字幕に使える行がありません',
+        'ko': '이 자막에 쓸 수 있는 항목이 없습니다',
+    },
+    '字幕认不出来，换一份 UTF-8 的 .srt / .ass 试试': {
+        'zh-TW': '字幕認不出來，換一份 UTF-8 的 .srt / .ass 試試',
+        'en': "Can't read this subtitle file; try a UTF-8 .srt or .ass",
+        'ja': '字幕を読み取れません。UTF-8 の .srt / .ass をお試しください',
+        'ko': '자막을 읽을 수 없습니다. UTF-8 .srt / .ass 파일을 사용해 보세요',
+    },
+    '读不了字幕': {
+        'zh-TW': '讀不了字幕',
+        'en': "Can't read subtitles",
+        'ja': '字幕を読み込めません',
+        'ko': '자막을 읽을 수 없습니다',
+    },
+    '选字幕文件': {
+        'zh-TW': '選字幕檔',
+        'en': 'Choose a subtitle file',
+        'ja': '字幕ファイルを選ぶ',
+        'ko': '자막 파일 선택',
+    },
+    '字幕字体': {
+        'zh-TW': '字幕字型',
+        'en': 'Subtitle font',
+        'ja': '字幕フォント',
+        'ko': '자막 글꼴',
+    },
+    '字幕字号': {
+        'zh-TW': '字幕字級',
+        'en': 'Subtitle size',
+        'ja': '字幕サイズ',
+        'ko': '자막 크기',
+    },
+    ' 像素': {
+        'zh-TW': ' 像素',
+        'en': ' px',
+        'ja': ' px',
+        'ko': ' px',
+    },
+    '烧进成片的字幕用这个字体；缺字体就换成别的': {
+        'zh-TW': '燒進成片的字幕用這個字型；缺字型就換成別的',
+        'en': 'Font burned into the video; pick another if this one is missing',
+        'ja': '動画に焼き込む字幕のフォント。無い場合は別のものを選んでください',
+        'ko': '영상에 굽는 자막 글꼴입니다. 없으면 다른 글꼴을 고르세요',
+    },
+    '支持 .srt 与 .ass，烧进成片': {
+        'zh-TW': '支援 .srt 與 .ass，燒進成片',
+        'en': 'Supports .srt and .ass, burned into the video',
+        'ja': '.srt と .ass に対応、動画に焼き込みます',
+        'ko': '.srt 및 .ass 지원, 영상에 굽습니다',
+    },
+}
+
+for _k, _trs in _TR_EXTRA28.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA29 = {
+    '还没有字幕': {
+        'zh-TW': '還沒有字幕',
+        'en': 'No subtitles yet',
+        'ja': '字幕はまだありません',
+        'ko': '아직 자막이 없습니다',
+    },
+}
+
+for _k, _trs in _TR_EXTRA29.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)
