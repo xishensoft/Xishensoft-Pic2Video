@@ -94,4 +94,7 @@ python tests/scan_keys.py        # 检查 tr() 的中文都有四种译文
 
 ## 许可
 
-个人自用工具，暂未附许可证文件。
+[MIT](LICENSE) © 2026 Xishensoft
+
+用到的第三方组件各有自己的许可：ffmpeg（GPL 构建）、PyQt6（GPL-3.0 / 商业双授权）、yt-dlp（Unlicense）、
+本项目自己的代码是 MIT；如果你要把本项目再分发，注意 ffmpeg 与 PyQt6 的许可是要一并遵守的。
