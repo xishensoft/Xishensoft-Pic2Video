@@ -2386,6 +2386,185 @@ check("调色词条四语齐全",
       all(_k in tbl for _k in _c58_keys for tbl in _i18n.values()),
       [k for k in _c58_keys if not all(k in tbl for tbl in _i18n.values())])
 
+
+# ---------------- 59 音频：每段增益 / 音量包络 / 波形缓存 ----------------
+_ac59 = p.AudioClip("x.m4a", 3.0)
+check("音频默认没有增益", _ac59.gain_db == 0.0 and _ac59.points == [])
+_ac59.gain_db = p.clamp_gain_db(99)
+check("增益上限夹到 +12 dB", _ac59.gain_db == 12.0, _ac59.gain_db)
+check("增益下限夹到 -24 dB", p.clamp_gain_db(-99) == -24.0)
+check("增益读不出来当 0", p.clamp_gain_db("abc") == 0.0 and p.clamp_gain_db(None) == 0.0)
+check("0 dB 就是原样", abs(p.audio_level(0) - 1.0) < 1e-9)
+check("-6 dB 约一半", abs(p.audio_level(-6) - 0.50119) < 0.01, p.audio_level(-6))
+check("+6 dB 约两倍", abs(p.audio_level(6) - 1.99526) < 0.02, p.audio_level(6))
+check("离谱增益按夹后的算", p.audio_level(100) == p.audio_level(12))
+
+_pts59 = p.clean_env_points([(2.0, 0.4), (0.5, 1.5), (-1, 0.5), (2.0, 0.2),
+                             ("x", 1), (3.0, "y"), (0.5, 0.8)])
+check("包络点会排序", [t for t, g in _pts59] == sorted(t for t, g in _pts59), _pts59)
+check("包络点夹在 0..1", all(0.0 <= g <= 1.0 for t, g in _pts59), _pts59)
+check("同一时刻只留最后一个", abs(_pts59[-1][1] - 0.2) < 1e-9, _pts59)
+check("负时间抬回 0", min(t for t, g in _pts59) >= 0.0)
+check("坏包络点丢掉不炸", p.clean_env_points(None) == [] and p.clean_env_points("oops") == [])
+
+check("没包络点就不出表达式", p.envelope_expr([]) == "" and p.envelope_expr(None) == "")
+_ex59 = p.envelope_expr([(0.0, 1.0), (2.0, 0.2)])
+check("包络表达式是 volume eval=frame", _ex59.startswith("volume=volume='") and "eval=frame" in _ex59, _ex59)
+check("包络表达式按时间分段", _ex59.count("if(lt(t,") >= 2, _ex59)
+check("包络表达式带斜率", "*(t-0.000)" in _ex59, _ex59)
+_ex59b = p.envelope_expr([(1.0, 1.0), (2.0, 0.5)], base=0.5, t0=1.5)
+check("偏移时间轴用 (t-1.500)", "(t-1.500)" in _ex59b and "eval=frame" in _ex59b, _ex59b)
+check("包络乘上增益底数", "0.50000" in _ex59b, _ex59b)
+
+check("没有增益也没有包络就不加滤镜", p.audio_fx(0.0, []) == "")
+check("只有增益就一个 volume", p.audio_fx(-6.0, []) == "volume=0.50119", p.audio_fx(-6.0, []))
+check("包络配增益走表达式", "eval=frame" in p.audio_fx(-6.0, [(0.0, 1.0), (1.0, 0.5)]))
+
+_ac59b = p.AudioClip(TONE, 6.0, 1.0, 1.0, False, -6.0, [(0.0, 1.0), (2.0, 0.4)])
+check("AudioClip 存住增益与包络",
+      _ac59b.gain_db == -6.0 and len(_ac59b.points) == 2, _ac59b.points)
+
+# 工程文件往返
+_pj59 = p.Project()
+_pj59.add_images([IMG[0]])
+_pj59.audios = [p.AudioClip(TONE, 6.0, 0.0, 1.0, gap=True, gain_db=-4.5,
+                            points=[(0.0, 1.0), (3.0, 0.25)])]
+_doc59 = _pj59.to_doc()
+check("工程文件里音频带增益", _doc59["audios"][0]["gain_db"] == -4.5)
+check("工程文件里包络是列表的列表",
+      _doc59["audios"][0]["points"] == [[0.0, 1.0], [3.0, 0.25]],
+      _doc59["audios"][0]["points"])
+_rt59 = p.Project.from_doc(json.loads(json.dumps(_doc59)))
+check("工程往返保住增益与包络",
+      _rt59.audios[0].gain_db == -4.5 and _rt59.audios[0].points == [(0.0, 1.0), (3.0, 0.25)],
+      _rt59.audios[0].points)
+_old59 = p.Project.from_doc({"version": 1, "clips": [], "audios": [
+    {"path": "a.m4a", "dur": 2.0, "start": 0.0, "volume": 1.0, "gap": True}]})
+check("老工程读成没有增益与包络", _old59.audios[0].gain_db == 0.0 and _old59.audios[0].points == [])
+_bad59 = p.Project.from_doc({"version": 2, "clips": [], "audios": [
+    {"path": "a.m4a", "dur": 2.0, "gain_db": 99, "points": [[1.0, 2.0], "junk"]}]})
+check("坏增益坏包络都洗掉",
+      _bad59.audios[0].gain_db == 12.0 and _bad59.audios[0].points == [(1.0, 1.0)],
+      (_bad59.audios[0].gain_db, _bad59.audios[0].points))
+
+# 滤镜串
+_pj59g = p.Project(); _pj59g.add_images([IMG[0], IMG[1]])
+_c59 = _pj59g.frame_counts()
+_g59 = p.build_graph(_c59, 4.0, 320, 180, fps=30, clips=_pj59g.clips,
+                     bgm_gain=-6.0)
+check("增益进了 bgm 那一路", "volume=0.50119" in _g59, _g59[-300:])
+_g59b = p.build_graph(_c59, 4.0, 320, 180, fps=30, clips=_pj59g.clips,
+                      bgm_points=[(0.0, 1.0), (2.0, 0.2)])
+check("包络进了 bgm 那一路", "eval=frame" in _g59b and "if(lt(t," in _g59b)
+_g59c = p.build_graph(_c59, 4.0, 320, 180, fps=30, clips=_pj59g.clips,
+                      extras=[{"index": 99, "start": 1.0, "dur": 2.0,
+                               "volume": 1.0, "gain_db": 0.0,
+                               "points": [(0.0, 1.0), (1.0, 0.3)]}])
+check("额外音频的包络用输出时间轴", "(t-1.000)" in _g59c, _g59c[-400:])
+
+def _mean59(mp4, ss, t):
+    out = subprocess.run(
+        [p.FFMPEG, "-v", "info", "-ss", str(ss), "-t", str(t), "-i", mp4,
+         "-vn", "-af", "volumedetect", "-f", "null", "-"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace").stderr
+    line = [ln for ln in out.splitlines() if "mean_volume" in ln]
+    if not line:
+        return None
+    return float(line[0].split("mean_volume:")[1].split("dB")[0])
+
+if not p.missing_tools() and os.path.isfile(TONE):
+    _outs59 = {}
+    for tag, kw in (("plain", {}),
+                    ("quiet", {"gain_db": -12.0}),
+                    ("env", {"gain_db": 0.0,
+                             "points": [(0.0, 1.0), (1.5, 1.0), (3.0, 0.02)]})):
+        au = p.AudioClip(TONE, 3.0, 0.0, 1.0, gap=True,
+                         gain_db=kw.get("gain_db", 0.0),
+                         points=kw.get("points"))
+        dst = os.path.join(tmp, "audio_" + tag + ".mp4")
+        p.render([p.Clip(IMG[0], 3.0)], [90], [au], dst, w=160, h=88, fps=30,
+                 crf=35, preset="ultrafast", fade_in=0.0, fade_out=0.0)
+        _outs59[tag] = dst
+    _plain59 = _mean59(_outs59["plain"], 0.2, 2.4)
+    _quiet59 = _mean59(_outs59["quiet"], 0.2, 2.4)
+    check("每段 -12 dB 真的变小了",
+          _plain59 is not None and _quiet59 is not None and _plain59 - _quiet59 > 8,
+          (_plain59, _quiet59))
+    _early59 = _mean59(_outs59["env"], 0.2, 0.8)
+    _late59 = _mean59(_outs59["env"], 2.5, 0.4)
+    _plainlate59 = _mean59(_outs59["plain"], 2.5, 0.4)
+    check("包络让尾巴变轻",
+          _early59 is not None and _late59 is not None
+          and _early59 - _late59 > 8,
+          (_early59, _late59, _plainlate59))
+
+# 波形缓存
+if os.path.isfile(TONE):
+    _pk59 = p.audio_peaks(TONE)
+    check("波形峰值解出来了", len(_pk59) > 100, len(_pk59))
+    check("峰值都在 0..1", all(0.0 <= v <= 1.0 for v in _pk59))
+    _cache59 = p._peaks_cache_path(TONE)
+    check("峰值缓存写下来了", os.path.isfile(_cache59), _cache59)
+    _orig59 = p._decode_peaks
+    p._decode_peaks = lambda path: [1.0] * 7      # 命中缓存就不该再解码
+    try:
+        _again59 = p.audio_peaks(TONE)
+    finally:
+        p._decode_peaks = _orig59
+    check("第二次读的是缓存", _again59 == _pk59, len(_again59))
+    _copy59 = os.path.join(tmp, "copy" + os.path.splitext(TONE)[1])
+    with open(TONE, "rb") as _fh:
+        _bytes59 = _fh.read()
+    with open(_copy59, "wb") as _fh:
+        _fh.write(_bytes59)
+    _k59a = p.wave_key(_copy59)
+    _pk59a = p.audio_peaks(_copy59)
+    check("换了文件是另一份缓存",
+          _pk59a == _pk59 and p.wave_key(_copy59) == _k59a, (len(_pk59a), _k59a))
+    import time as _time59
+    os.utime(_copy59, (_time59.time() + 5, _time59.time() + 5))
+    check("改了修改时间就算失效", p.wave_key(_copy59) != _k59a)
+    _pk59b = p.audio_peaks(_copy59)
+    check("失效后重算还是对的", _pk59b == _pk59, len(_pk59b))
+    check("文件不在就没有波形", p.audio_peaks(os.path.join(tmp, "nope.m4a")) == [])
+
+# ---------------- 60 音频：界面接线与词条 ----------------
+_src60 = open(os.path.join(ROOT, "pic2video.py"), encoding="utf-8").read()
+check("时间线有包络改动的信号", "envelopeChanged = pyqtSignal(int)" in _src60)
+check("时间线能算包络点的坐标", "def _env_xy(" in _src60 and "def _env_from_pos(" in _src60)
+check("时间线能命中包络点", "def _hit_env(" in _src60 and "def _x_at(" in _src60)
+check("时间线有波形缓存", "def _wave(" in _src60 and "audio_peaks(" in _src60)
+check("波形按 WAVE_RATE 画",
+      "WAVE_RATE" in _src60 and "peaks[idx] / wmax * half" in _src60)
+check("Alt + 点音频块加包络点",
+      "AltModifier" in _src60 and "clean_env_points(list(a.points)" in _src60)
+check("拖动包络点会改值和重排",
+      'kind == "env"' in _src60 and "a.points[j] = (t, g)" in _src60)
+check("右键包络点就删掉", "a.points.pop(ej)" in _src60)
+check("窗口接上包络改动",
+      "self.timeline.envelopeChanged.connect(self.on_envelope_changed)" in _src60)
+check("音频菜单有增益与清空包络",
+      'tr("增益…")' in _src60 and 'tr("清空包络")' in _src60)
+check("三个音频处理器都在",
+      all(("def " + _n + "(self") in _src60
+          for _n in ("on_ask_gain", "on_clear_envelope",
+                     "on_envelope_changed")))
+check("音频轨的底边不低于顶边+16",
+      "return top, max(top + 16, self.height() - 4)" in _src60)
+check("音频行按轨道高度分",
+      "row = max(10.0, (bottom - top) / n)" in _src60)
+check("增益对话框带 dB 后缀", 'suffix=tr(" dB")' in _src60)
+check("数字对话框能带后缀",
+      'suffix: str = ""' in _src60
+      and 'self.spin.setSuffix(suffix or tr(" 秒"))' in _src60)
+
+_c60_keys = ("增益…", "增益", "这条音频的增益（dB，0 就是原样）：", " dB",
+             "清空包络", "音量包络")
+check("音频词条四语齐全",
+      all(_k in tbl for _k in _c60_keys for tbl in _i18n.values()),
+      [k for k in _c60_keys if not all(k in tbl for tbl in _i18n.values())])
+
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

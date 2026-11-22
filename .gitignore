@@ -1,4 +1,5 @@
 __pycache__/
+peaks/
 _*.log
 _*.txt
 *.pyc

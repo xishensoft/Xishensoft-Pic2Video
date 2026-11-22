@@ -16,6 +16,7 @@ bilibili 链接整条取下来（不分离人声）。
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -794,15 +795,19 @@ class AudioClip:
     别的音频从 start 开始按自己长度播。
     """
 
-    __slots__ = ("path", "dur", "start", "volume", "gap")
+    __slots__ = ("path", "dur", "start", "volume", "gap",
+                 "gain_db", "points")
 
     def __init__(self, path: str, dur: float, start: float = 0.0,
-                 volume: float = 1.0, gap: bool = False):
+                 volume: float = 1.0, gap: bool = False,
+                 gain_db: float = 0.0, points=None):
         self.path = path
         self.dur = float(dur)
         self.start = max(0.0, float(start))
         self.volume = max(0.0, min(2.0, float(volume)))
         self.gap = bool(gap)
+        self.gain_db = clamp_gain_db(gain_db)
+        self.points = clean_env_points(points)
 
     @property
     def name(self) -> str:
@@ -810,6 +815,157 @@ class AudioClip:
 
     def __repr__(self):
         return f"AudioClip({self.name!r}, {self.dur:.2f}, @{self.start:.2f})"
+
+
+AUDIO_GAIN_MIN, AUDIO_GAIN_MAX = -24.0, 12.0
+
+
+def clamp_gain_db(value) -> float:
+    """每段的增益（dB）：读不出来就当没加，夹在 -24..+12 之间。"""
+    db = _doc_num(value, 0.0)
+    return max(AUDIO_GAIN_MIN, min(AUDIO_GAIN_MAX, db))
+
+
+def audio_level(gain_db) -> float:
+    """dB 换成线性倍数：-6 dB ≈ 0.50，+6 dB ≈ 2.00。"""
+    return 10.0 ** (clamp_gain_db(gain_db) / 20.0)
+
+
+def clean_env_points(points) -> list:
+    """音量包络点 [(秒, 增益 0..1)]：排好序、夹范围、同一时刻只留最后一个。"""
+    out = []
+    for raw in points or []:
+        try:
+            t = float(raw[0])
+            g = float(raw[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        if not math.isfinite(t) or not math.isfinite(g):
+            continue
+        out.append((max(0.0, t), max(0.0, min(1.0, g))))
+    out.sort(key=lambda p: p[0])
+    ded = []
+    for t, g in out:
+        if ded and abs(t - ded[-1][0]) < 0.01:
+            ded[-1] = (ded[-1][0], g)      # 同一时刻以最后写的为准
+        else:
+            ded.append((t, g))
+    return ded
+
+
+def envelope_expr(points, base: float = 1.0, t0: float = 0.0) -> str:
+    """把包络点拼成 ffmpeg 的 volume 表达式；没点就返回空串。
+
+    points 的时间是相对音频段自己的起点；t0 是这个段在输出时间轴上的起点，
+    给 extras 用（它们先 adelay 再套 volume，t 已经是输出时间）。
+    两头的做法：第一个点之前保持第一个点的值，最后一个点之后保持最后一个。
+    """
+    pts = clean_env_points(points)
+    if not pts:
+        return ""
+    tvar = "t" if abs(t0) < 1e-6 else "(t-%.3f)" % t0
+    expr = "%.5f" % (pts[-1][1] * base)
+    for i in range(len(pts) - 1, 0, -1):
+        ta, ga = pts[i - 1]
+        tb, gb = pts[i]
+        slope = (gb - ga) / max(1e-4, tb - ta)
+        seg = "%.5f+%.5f*(%s-%.3f)" % (ga * base, slope * base, tvar, ta)
+        expr = "if(lt(%s,%.3f),%s,%s)" % (tvar, tb, seg, expr)
+    expr = "if(lt(%s,%.3f),%.5f,%s)" % (tvar, pts[0][0], pts[0][1] * base, expr)
+    return "volume=volume='%s':eval=frame" % expr
+
+
+def audio_fx(gain_db, points, t0: float = 0.0) -> str:
+    """一段音频该接的增益/包络滤镜；两样都没有就返回空串。"""
+    level = audio_level(gain_db)
+    pts = clean_env_points(points)
+    if not pts:
+        if abs(level - 1.0) < 0.005:
+            return ""
+        return "volume=%.5f" % level
+    return envelope_expr(pts, base=level, t0=t0)
+
+
+WAVE_RATE = 50            # 波形每秒取多少个峰
+WAVE_CHUNK = 160          # 8 kHz 下 160 个采样 = 20 ms
+
+
+def peaks_dir() -> str:
+    """波形缓存目录：跟 settings.json 放一起，删了下次自己重建。"""
+    d = os.path.join(components.data_dir(), "peaks")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        pass
+    return d
+
+
+def wave_key(path: str) -> str:
+    """缓存指纹：文件大小 + 修改时间；文件不在就是空串。"""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return ""
+    return "%d:%d" % (st.st_size, st.st_mtime_ns)
+
+
+def _peaks_cache_path(path: str) -> str:
+    import hashlib
+    name = hashlib.sha1(os.path.abspath(path).encode("utf-8")).hexdigest()
+    return os.path.join(peaks_dir(), name + ".peak")
+
+
+def _decode_peaks(path: str) -> list:
+    """用 ffmpeg 解成单声道 8 kHz，每 20 ms 取一个峰（0..1）。"""
+    import array
+    cmd = [FFMPEG, "-v", "error", "-i", path, "-vn", "-ac", "1",
+           "-ar", "8000", "-f", "s16le", "-"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if res.returncode != 0:
+        return []
+    data = res.stdout
+    data = data[:len(data) - len(data) % 2]
+    samples = array.array("h")
+    samples.frombytes(data)
+    peaks = []
+    for i in range(0, len(samples), WAVE_CHUNK):
+        chunk = samples[i:i + WAVE_CHUNK]
+        if not chunk:
+            break
+        top = max(max(chunk), -min(chunk))
+        peaks.append(round(min(1.0, top / 32768.0), 3))
+    return peaks
+
+
+def audio_peaks(path: str, force: bool = False) -> list:
+    """一段音频的波形峰值；按「大小+修改时间」缓存，改了文件就重算。
+
+    读不出来（文件不在、解码失败）就给空表，界面那边画成一根平线。
+    """
+    key = wave_key(path)
+    if not key:
+        return []
+    cache = _peaks_cache_path(path)
+    if not force:
+        try:
+            with open(cache, encoding="utf-8") as fh:
+                cached = json.load(fh)
+            if cached.get("key") == key and isinstance(cached.get("peaks"), list):
+                return [float(x) for x in cached["peaks"]]
+        except (OSError, ValueError, TypeError):
+            pass
+    peaks = _decode_peaks(path)
+    if not peaks:
+        return []
+    try:
+        with open(cache, "w", encoding="utf-8") as fh:
+            json.dump({"key": key, "rate": WAVE_RATE, "peaks": peaks}, fh)
+    except OSError:
+        pass
+    return peaks
 
 
 def _media_dur(path: str) -> float:
@@ -994,7 +1150,9 @@ class Project:
                        "saturation": c.saturation, "lut": c.lut}
                       for c in self.clips],
             "audios": [{"path": a.path, "dur": a.dur, "start": a.start,
-                        "volume": a.volume, "gap": bool(a.gap)}
+                        "volume": a.volume, "gap": bool(a.gap),
+                        "gain_db": a.gain_db,
+                        "points": [[t, g] for t, g in a.points]}
                        for a in self.audios],
             "overlays": [{"path": o.path, "start": o.start, "end": o.end,
                           "scale": o.scale, "anchor": o.anchor,
@@ -1118,10 +1276,14 @@ class Project:
         path = raw.get("path", "")
         if not isinstance(path, str):
             raise ProjectFileError("bad-shape", "音频条目的 path 不是文字")
+        raw_points = raw.get("points")
+        if not isinstance(raw_points, list):
+            raw_points = []
         return AudioClip(path, max(0.0, _doc_num(raw.get("dur"), 0.0)),
                          _doc_num(raw.get("start"), 0.0),
                          _doc_num(raw.get("volume"), 1.0),
-                         bool(raw.get("gap", False)))
+                         bool(raw.get("gap", False)),
+                         raw.get("gain_db"), raw_points)
 
     # 撤销栈沿用的老名字，底下就是工程格式，别再长两套
     def to_state(self) -> dict:
@@ -1989,7 +2151,8 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
                 clips=None, timeline=None, extras=None,
                 xfade_sec: float = 0.3, subtitle_file: str = "",
                 subtitle_font: str = "Microsoft YaHei", subtitle_size: int = 48,
-                subtitle_fonts: str = "", overlays=None) -> str:
+                subtitle_fonts: str = "", overlays=None,
+                bgm_gain: float = 0.0, bgm_points=None) -> str:
     """一条 filtergraph：逐元素切片 → 拼接（可交叉淡化）→ 音频 → 总长。
 
     clips: Clip 列表（含片头片尾）；不传就按「全是图片」
@@ -2004,6 +2167,7 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
     crop_focus: 裁切铺满时留住 center / top / bottom
     subtitle_file: 已经写好的 .ass，挂在成片最后一环烧进去（空 = 不加字幕）
     overlays: overlay_specs() 的产物，画中画压在成片上、字幕之前
+    bgm_gain / bgm_points: 背景音乐这一段的增益（dB）与音量包络点
     """
     K = len(counts)
     if K <= 0:
@@ -2186,6 +2350,9 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
     audio = head + pre
     if filters:
         audio += "," + ",".join(filters)
+    fx = audio_fx(bgm_gain, bgm_points)
+    if fx:
+        audio += "," + fx
 
     if extras:
         # 主音频先落到一个标签上，才接得进 amix（否则把整条链塞进 input 列表就废了）
@@ -2199,7 +2366,13 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
             if abs(vol - 1.0) > 0.005:
                 ch += f",volume={max(0.0, vol):.3f}"
             ms = int(round(max(0.0, float(ex["start"])) * 1000))
-            ch += f",adelay={ms}|{ms}[ax{k}]"
+            ch += f",adelay={ms}|{ms}"
+            # 包络在 adelay 之后接，表达式里的 t 已经是输出时间轴
+            ex_fx = audio_fx(ex.get("gain_db", 0.0), ex.get("points"),
+                             t0=max(0.0, float(ex["start"])))
+            if ex_fx:
+                ch += "," + ex_fx
+            ch += f"[ax{k}]"
             parts.append(ch)
             mix.append(f"[ax{k}]")
         parts.append("".join(mix) +
@@ -2223,7 +2396,8 @@ def _audio_items(audio) -> list[dict]:
             items.append(a)
         elif isinstance(a, AudioClip):
             items.append({"path": a.path, "start": a.start, "dur": a.dur,
-                          "volume": a.volume, "gap": a.gap})
+                          "volume": a.volume, "gap": a.gap,
+                          "gain_db": a.gain_db, "points": list(a.points)})
         else:  # 路径字符串
             items.append({"path": a, "start": 0.0,
                           "dur": probe_duration(a), "volume": 1.0, "gap": True})
@@ -2288,6 +2462,8 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
     items = _audio_items(audio)
     bgm = next((a for a in items if a.get("gap")), None)
     extras = [a for a in items if not a.get("gap")]
+    bgm_gain = bgm.get("gain_db", 0.0) if bgm else 0.0
+    bgm_points = bgm.get("points") if bgm else None
     for ov in overlays or []:
         if not ov.path or not os.path.exists(ov.path):
             raise RenderError(tr("叠加的素材读不出来：{name}",
@@ -2315,6 +2491,7 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
                         crop_focus=crop_focus, music_start=music_start,
                         clips=clips, timeline=timeline,
                         extras=None, xfade_sec=xfade_sec, overlays=ov_specs,
+                        bgm_gain=bgm_gain, bgm_points=bgm_points,
                         **sub_kw)
     cmd = [FFMPEG, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
            "-progress", "pipe:1", "-nostats"]
@@ -2353,7 +2530,9 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
         dur = ex.get("dur") or probe_duration(ex["path"])
         extra_specs.append({"index": idx, "start": ex.get("start", 0.0),
                             "dur": max(0.05, dur),
-                            "volume": ex.get("volume", 1.0)})
+                            "volume": ex.get("volume", 1.0),
+                            "gain_db": ex.get("gain_db", 0.0),
+                            "points": ex.get("points")})
     for ov in ov_specs:
         span = max(0.1, ov["end"] - ov["start"]) + 0.5
         if ov["path"].lower().endswith(tuple(MEDIA_EXTS)):
@@ -2373,7 +2552,9 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
                             volume=volume, crop_focus=crop_focus,
                             music_start=music_start, clips=clips,
                             timeline=timeline, extras=extra_specs,
-                            xfade_sec=xfade_sec, overlays=ov_specs, **sub_kw)
+                            xfade_sec=xfade_sec, overlays=ov_specs,
+                            bgm_gain=bgm_gain, bgm_points=bgm_points,
+                            **sub_kw)
 
     graph_file = None
     if len(graph) > 6000:
@@ -3305,7 +3486,8 @@ def run_gui() -> int:
         """要一个数字的输入框（改每张图显示多久用）。"""
 
         def __init__(self, parent, title: str, label: str, value: float,
-                     minimum: float, maximum: float, decimals: int = 1):
+                     minimum: float, maximum: float, decimals: int = 1,
+                     suffix: str = ""):
             super().__init__(parent, title)
             lab = QLabel(label)
             self.body.addWidget(lab)
@@ -3313,7 +3495,7 @@ def run_gui() -> int:
             self.spin.setRange(minimum, maximum)
             self.spin.setDecimals(decimals)
             self.spin.setSingleStep(0.5)
-            self.spin.setSuffix(tr(" 秒"))
+            self.spin.setSuffix(suffix or tr(" 秒"))
             self.spin.setValue(value)
             self.spin.selectAll()
             self.body.addWidget(self.spin)
@@ -3332,8 +3514,9 @@ def run_gui() -> int:
         @classmethod
         def get_double(cls, parent, title: str, label: str, value: float,
                        minimum: float, maximum: float,
-                       decimals: int = 1):
-            dlg = cls(parent, title, label, value, minimum, maximum, decimals)
+                       decimals: int = 1, suffix: str = ""):
+            dlg = cls(parent, title, label, value, minimum, maximum, decimals,
+                      suffix)
             ok = dlg.exec() == QDialog.DialogCode.Accepted
             return float(dlg.spin.value()), bool(ok)
 
@@ -3644,6 +3827,7 @@ def run_gui() -> int:
         moved = pyqtSignal(int, float)
         audioMoved = pyqtSignal(int, float)
         audioVolume = pyqtSignal(int, float)
+        envelopeChanged = pyqtSignal(int)
         overlayMoved = pyqtSignal(int, float)
         menu = pyqtSignal(str, int, object)
 
@@ -3660,6 +3844,8 @@ def run_gui() -> int:
             self.selected: list[int] = []
             self.sel_audio: list[int] = []
             self.sel_overlay: list[int] = []
+            self.sel_env = (-1, -1)
+            self._waves = {}
             self.play_pos = 0.0
             self._drag = None
             self._press = 0.0
@@ -3681,7 +3867,7 @@ def run_gui() -> int:
 
         def _audio_rect(self):
             top = self._overlay_rect()[1] + 14
-            return top, max(16, self.height() - top - 4)
+            return top, max(top + 16, self.height() - 4)
 
         def _total(self) -> float:
             return sum(c.span for c in self.project.clips) or 1.0
@@ -3713,11 +3899,56 @@ def run_gui() -> int:
                 out.append((x0, max(x0 + 3, x1), o))
             return out
 
+        def _x_at(self, t: float) -> float:
+            total = self._total()
+            return self.width() * max(0.0, min(total, t)) / total
+
+        def _wave(self, path: str):
+            """波形峰值：内存里按「路径+指纹」缓一份，画的时候只查表。"""
+            key = (path, wave_key(path))
+            if key not in self._waves:
+                if len(self._waves) > 8:
+                    self._waves.pop(next(iter(self._waves)))
+                self._waves[key] = audio_peaks(path)
+            return self._waves[key]
+
+        def _env_xy(self, k: int, j: int):
+            """第 k 条音频第 j 个包络点画在哪。"""
+            spans = self._audio_spans()
+            rows = self._audio_rows(len(spans))
+            x0, x1, a = spans[k]
+            ry0, ry1 = rows[k]
+            t, g = a.points[j]
+            x = self._x_at(a.start + t)
+            span = max(4.0, ry1 - ry0 - 4)
+            y = ry1 - 2 - g * span
+            return x, y
+
+        def _env_from_pos(self, k: int, x: float, y: float):
+            """鼠标位置 → 这条音频的相对时间与增益。"""
+            spans = self._audio_spans()
+            rows = self._audio_rows(len(spans))
+            x0, x1, a = spans[k]
+            ry0, ry1 = rows[k]
+            t = (x - x0) / max(1.0, x1 - x0) * max(0.0, a.dur)
+            span = max(4.0, ry1 - ry0 - 4)
+            g = (ry1 - 2 - y) / span
+            return max(0.0, min(a.dur, t)), max(0.0, min(1.0, g))
+
+        def _hit_env(self, x, y):
+            for k in range(len(self.project.audios)):
+                a = self.project.audios[k]
+                for j in range(len(a.points)):
+                    ex, ey = self._env_xy(k, j)
+                    if abs(ex - x) <= 6 and abs(ey - y) <= 6:
+                        return k, j
+            return -1, -1
+
         def _audio_rows(self, count: int):
             """多条音频各自一行，能并排看到叠在一起的效果。"""
-            top, h = self._audio_rect()
+            top, bottom = self._audio_rect()
             n = max(1, count)
-            row = max(10.0, h / n)
+            row = max(10.0, (bottom - top) / n)
             return [(top + i * row, top + (i + 1) * row - 2) for i in range(n)]
 
         def set_colors(self, colors):
@@ -3815,11 +4046,39 @@ def run_gui() -> int:
                     col = QColor(self.c["piece_b"])
                 p.fillRect(int(x0), int(ry0) + 1, max(2, int(x1 - x0)),
                            max(4, int(ry1 - ry0) - 1), col)
+                # 波形：每个像素列画一根竖线，高度取最近 20 ms 的峰
+                peaks = self._wave(a.path) if a.path else []
+                if peaks and x1 - x0 > 4:
+                    # 按这一条自己的最大峰归一化：安静的素材也看得出起伏
+                    wmax = max(peaks) or 1.0
+                    mid = (ry0 + ry1) / 2.0
+                    half = max(2.0, (ry1 - ry0) / 2.0 - 3)
+                    p.setPen(QPen(QColor(255, 255, 255, 120), 1))
+                    for xi in range(int(x0), int(x1)):
+                        t = total * xi / max(1, self.width()) - a.start
+                        idx = int(t * WAVE_RATE)
+                        if 0 <= idx < len(peaks):
+                            v = peaks[idx] / wmax * half
+                            p.drawLine(xi, int(mid - v), xi, int(mid + v))
                 if x1 - x0 > 34:
                     p.setPen(QColor(theme.contrast_text(col.name())))
+                    gain = (f"  {a.gain_db:+.1f} dB"
+                            if abs(a.gain_db) > 0.04 else "")
                     p.drawText(int(x0) + 5, int(ry0) + 12,
                                f"{os.path.basename(a.path)[:18]}  "
-                               f"{int(round(a.volume * 100))}%")
+                               f"{int(round(a.volume * 100))}%{gain}")
+                if a.points:
+                    p.setPen(QPen(QColor(self.c["playhead"]), 1.5))
+                    poly = [QPointF(self._env_xy(k, j)[0],
+                                    self._env_xy(k, j)[1])
+                            for j in range(len(a.points))]
+                    p.drawPolyline(QPolygonF(poly))
+                    for j in range(len(a.points)):
+                        ex, ey = self._env_xy(k, j)
+                        rad = 4 if (k, j) == self.sel_env else 2.5
+                        p.setBrush(QColor(self.c["playhead"]))
+                        p.drawEllipse(QPointF(ex, ey), rad, rad)
+                    p.setBrush(Qt.BrushStyle.NoBrush)
 
             px = int(self.width() * min(1.0, self.play_pos / total))
             p.setPen(QPen(QColor(self.c["playhead"]), 2))
@@ -3859,6 +4118,15 @@ def run_gui() -> int:
             x, y = ev.position().x(), ev.position().y()
             self._press = x
             if ev.button() == Qt.MouseButton.RightButton:
+                ek, ej = self._hit_env(x, y)
+                if ek >= 0:
+                    a = self.project.audios[ek]
+                    if 0 <= ej < len(a.points):
+                        a.points.pop(ej)
+                    self.sel_env = (-1, -1)
+                    self.update()
+                    self.envelopeChanged.emit(ek)
+                    return
                 i, _ = self._hit_video(x, y)
                 if i >= 0:
                     if i not in self.selected:
@@ -3891,6 +4159,22 @@ def run_gui() -> int:
                 return
             if ev.button() != Qt.MouseButton.LeftButton:
                 return
+
+            # Alt + 点音频块：在这一刻加一个包络点
+            if ev.modifiers() & Qt.KeyboardModifier.AltModifier:
+                k = self._hit_audio(x, y)
+                if k >= 0:
+                    a = self.project.audios[k]
+                    t, g = self._env_from_pos(k, x, y)
+                    a.points = clean_env_points(list(a.points) + [(t, g)])
+                    idx = min(range(len(a.points)),
+                              key=lambda j: abs(a.points[j][0] - t))
+                    self.sel_env = (k, idx)
+                    self._drag = ("env", k, idx, x)
+                    self.setCursor(Qt.CursorShape.SizeVerCursor)
+                    self.update()
+                    self.envelopeChanged.emit(k)
+                    return
 
             i, edge_x = self._hit_video(x, y)
             if i >= 0:
@@ -4001,6 +4285,19 @@ def run_gui() -> int:
                 self.play_pos = self._time_at(x)
                 self.update()
                 return
+            if kind == "env":
+                _t, k, j, x0 = self._drag
+                a = self.project.audios[k]
+                if 0 <= j < len(a.points):
+                    t, g = self._env_from_pos(k, x, y)
+                    a.points[j] = (t, g)
+                    a.points = clean_env_points(a.points)
+                    idx = min(range(len(a.points)),
+                              key=lambda q: abs(a.points[q][0] - t))
+                    self.sel_env = (k, idx)
+                    self._drag = ("env", k, idx, x0)
+                self.update()
+                return
             if kind == "audio":
                 _k, idx, x0, start0 = self._drag
                 _spans, total = self._spans()
@@ -4026,6 +4323,9 @@ def run_gui() -> int:
                 i = drag[1]
                 if abs(x - drag[2]) > 6:
                     self.moved.emit(i, self._time_at(x))
+                return
+            if kind == "env":
+                self.envelopeChanged.emit(drag[1])
                 return
             if kind == "overlay":
                 _k, idx, x0, start0 = drag
@@ -5589,6 +5889,7 @@ def run_gui() -> int:
             self.timeline.moved.connect(self.on_timeline_move)
             self.timeline.audioMoved.connect(self.on_audio_move)
             self.timeline.audioVolume.connect(self.on_audio_volume)
+            self.timeline.envelopeChanged.connect(self.on_envelope_changed)
             self.timeline.overlayMoved.connect(self.on_overlay_moved)
             self.timeline.menu.connect(self.on_timeline_menu)
             v.addWidget(self.timeline)
@@ -6479,6 +6780,15 @@ def run_gui() -> int:
                     q.triggered.connect(
                         lambda _c=False, t=targets, v=pct / 100.0:
                         self.on_audio_set_volume(t, value=v))
+                gain = m.addAction(tr("增益…"))
+                gain.triggered.connect(
+                    lambda _c=False, t=targets: self.on_ask_gain(t))
+                clr = m.addAction(tr("清空包络"))
+                clr.setEnabled(any(self.project.audios[i].points
+                                   for i in targets
+                                   if 0 <= i < len(self.project.audios)))
+                clr.triggered.connect(
+                    lambda _c=False, t=targets: self.on_clear_envelope(t))
                 m.addSeparator()
                 add = m.addAction(tr("添加音频文件…"))
                 add.triggered.connect(lambda _c=False: self.on_add_audio())
@@ -6571,6 +6881,36 @@ def run_gui() -> int:
                 self.project.set_duration(clip_row, dur)
             self._refresh_all()
             self._history_push(tr("铺满音频"))
+
+        def on_ask_gain(self, rows):
+            """每段增益（dB）：0 就是原样，负数压下去、正数抬起来。"""
+            rows = [k for k in rows if 0 <= k < len(self.project.audios)]
+            if not rows:
+                return
+            cur = self.project.audios[rows[0]].gain_db
+            val, ok = NumberDialog.get_double(
+                self, tr("增益"), tr("这条音频的增益（dB，0 就是原样）："),
+                cur, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX, 1, suffix=tr(" dB"))
+            if not ok:
+                return
+            for k in rows:
+                self.project.audios[k].gain_db = clamp_gain_db(val)
+            self._refresh_all()
+            self._history_push(tr("增益"))
+
+        def on_clear_envelope(self, rows):
+            rows = [k for k in rows if 0 <= k < len(self.project.audios)]
+            if not rows:
+                return
+            for k in rows:
+                self.project.audios[k].points = []
+            self._refresh_all()
+            self._history_push(tr("清空包络"))
+
+        def on_envelope_changed(self, k):
+            """时间线上加了 / 拖了 / 删了包络点。"""
+            self._refresh_all()
+            self._history_push(tr("音量包络"))
 
         def on_ask_volume(self, rows):
             rows = [k for k in rows if 0 <= k < len(self.project.audios)]

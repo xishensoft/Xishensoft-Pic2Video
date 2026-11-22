@@ -2539,3 +2539,21 @@ _TR_EXTRA34 = {
 for _k, _trs in _TR_EXTRA34.items():
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA35 = {
+    "增益…": ("增益…", "Gain…", "ゲイン…", "게인…"),
+    "增益": ("增益", "Gain", "ゲイン", "게인"),
+    "这条音频的增益（dB，0 就是原样）：": (
+        "這條音訊的增益（dB，0 就是原樣）：",
+        "Gain for this clip (dB, 0 = unchanged):",
+        "この音声のゲイン（dB、0 でそのまま）：",
+        "이 오디오의 게인(dB, 0이면 그대로):"),
+    " dB": (" dB", " dB", " dB", " dB"),
+    "清空包络": ("清空包絡", "Clear envelope", "エンベロープを消す",
+             "엔벨로프 지우기"),
+    "音量包络": ("音量包絡", "Volume envelope", "音量エンベロープ",
+             "볼륨 엔벨로프"),
+}
+for _k, _trs in _TR_EXTRA35.items():
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
+        TR[_lang].setdefault(_k, _v)
