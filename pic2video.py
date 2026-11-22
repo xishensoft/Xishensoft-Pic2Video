@@ -188,7 +188,7 @@ SETTINGS_PATH = components.settings_path()   # 打包后跟着 exe 走，目录�
 
 # ---------------------------------------------------------------- 工程文件
 # .p2v 是带版本号的 JSON。改格式就 +1，并在这里写往上迁移的分支。
-PROJECT_VERSION = 1
+PROJECT_VERSION = 2
 PROJECT_SUFFIX = ".p2v"
 PROJECT_FILTER = "Pic2Video 工程 (*.p2v)"
 
@@ -728,6 +728,82 @@ def _doc_num(value, default: float) -> float:
         return float(default)
 
 
+# ---------------------------------------------------------------- 叠加层（画中画）
+# 叠加层故意不挂在 Clip 上：它的进出时间、位置跟段链无关，
+# 硬塞进 clips 会把 _xfade_plan / frame_counts 一起污染。
+OVERLAY_ANCHORS = ("tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br")
+OVERLAY_ANCHOR_POS = {"tl": (0.0, 0.0), "tc": (0.5, 0.0), "tr": (1.0, 0.0),
+                      "ml": (0.0, 0.5), "mc": (0.5, 0.5), "mr": (1.0, 0.5),
+                      "bl": (0.0, 1.0), "bc": (0.5, 1.0), "br": (1.0, 1.0)}
+OVERLAY_ANCHOR_LABELS = {"tl": "左上", "tc": "中上", "tr": "右上",
+                         "ml": "左中", "mc": "正中", "mr": "右中",
+                         "bl": "左下", "bc": "中下", "br": "右下"}
+OVERLAY_MIN_SCALE, OVERLAY_MAX_SCALE = 5.0, 100.0
+OVERLAY_MIN_SPAN = 0.1
+
+
+class Overlay:
+    """压在成片上的一层画面（画中画）：从 start 到 end 出现在哪个位置。
+
+    scale 是相对成片宽度的百分比；anchor 是九宫格位置（tl…br），
+    dx / dy 是在九宫格基础上的偏移（也是百分比，正数往右 / 往下）。
+    opacity 是 0..100 的不透明度。
+    """
+
+    __slots__ = ("path", "start", "end", "scale", "anchor", "dx", "dy",
+                 "opacity")
+
+    def __init__(self, path: str, start: float, end: float,
+                 scale: float = 40.0, anchor: str = "tr", dx: float = 0.0,
+                 dy: float = 0.0, opacity: float = 100.0):
+        self.path = path if isinstance(path, str) else ""
+        self.start = max(0.0, _doc_num(start, 0.0))
+        stop = _doc_num(end, self.start + 1.0)
+        if stop - self.start < OVERLAY_MIN_SPAN:
+            stop = self.start + OVERLAY_MIN_SPAN
+        self.end = stop
+        self.scale = min(OVERLAY_MAX_SCALE,
+                         max(OVERLAY_MIN_SCALE, _doc_num(scale, 40.0)))
+        self.anchor = anchor if anchor in OVERLAY_ANCHORS else "tr"
+        self.dx = min(100.0, max(-100.0, _doc_num(dx, 0.0)))
+        self.dy = min(100.0, max(-100.0, _doc_num(dy, 0.0)))
+        self.opacity = min(100.0, max(0.0, _doc_num(opacity, 100.0)))
+
+    @property
+    def span(self) -> float:
+        return max(0.0, self.end - self.start)
+
+    def anchor_pos(self) -> tuple[float, float]:
+        return OVERLAY_ANCHOR_POS.get(self.anchor, (1.0, 0.0))
+
+    def copy(self):
+        return Overlay(self.path, self.start, self.end, self.scale,
+                       self.anchor, self.dx, self.dy, self.opacity)
+
+    def __repr__(self):
+        return (f"Overlay({os.path.basename(self.path)!r}, "
+                f"{self.start:.2f}-{self.end:.2f}, {self.scale:.0f}%)")
+
+
+def overlay_specs(overlays, base_index: int, total: float = 0.0) -> list[dict]:
+    """把 Overlay 列表翻成 build_graph 要的规格（带上 ffmpeg 输入下标）。"""
+    out: list[dict] = []
+    for ov in overlays or []:
+        start = max(0.0, float(ov.start))
+        end = float(ov.end)
+        if total and total > 0:
+            start = min(start, float(total))
+            end = min(end, float(total))
+        if end - start < 0.05:
+            continue
+        ax, ay = ov.anchor_pos()
+        out.append({"index": base_index + len(out), "path": ov.path,
+                    "start": start, "end": end, "scale": float(ov.scale),
+                    "ax": ax, "ay": ay, "dx": float(ov.dx),
+                    "dy": float(ov.dy), "opacity": float(ov.opacity)})
+    return out
+
+
 class Project:
     """时间线模型：片头 + 图片序列 + 片尾，外加一条或多条音频。
 
@@ -741,6 +817,7 @@ class Project:
     def __init__(self, fps: int = FPS):
         self.clips: list[Clip] = []
         self.audios: list[AudioClip] = []
+        self.overlays: list[Overlay] = []    # 画中画：压在成片上的那几层
         self.mode = "bgm"
         self.audio_start = 0.0        # 背景音乐从第几秒开始用
         self.audio_len = 0.0          # 用多长；0 = 到音乐结尾
@@ -816,6 +893,10 @@ class Project:
             "audios": [{"path": a.path, "dur": a.dur, "start": a.start,
                         "volume": a.volume, "gap": bool(a.gap)}
                        for a in self.audios],
+            "overlays": [{"path": o.path, "start": o.start, "end": o.end,
+                          "scale": o.scale, "anchor": o.anchor,
+                          "dx": o.dx, "dy": o.dy, "opacity": o.opacity}
+                         for o in self.overlays],
             "subtitles": {"path": self.subtitles_path,
                           "cues": [dict(c) for c in self.cues]},
             "export_preset": self.export_preset,
@@ -842,8 +923,15 @@ class Project:
         audios = doc.get("audios", [])
         if not isinstance(clips, list) or not isinstance(audios, list):
             raise ProjectFileError("bad-shape", "素材表不是列表")
+        raw_overlays = doc.get("overlays")
+        if raw_overlays is None:
+            raw_overlays = []
+        if not isinstance(raw_overlays, list):
+            raise ProjectFileError("bad-shape", "叠加层不是列表")
         new_clips = [self._clip_from_doc(raw) for raw in clips]
         new_audios = [self._audio_from_doc(raw) for raw in audios]
+        new_overlays = [ov for ov in (self._overlay_from_doc(raw)
+                                      for raw in raw_overlays) if ov is not None]
         raw_subs = doc.get("subtitles") or {}
         if not isinstance(raw_subs, dict):
             raise ProjectFileError("bad-shape", "字幕内容不是一个对象")
@@ -859,6 +947,7 @@ class Project:
         mode = doc.get("mode")
         self.clips = new_clips
         self.audios = new_audios
+        self.overlays = new_overlays
         self.mode = mode if mode in MODE_LABELS else "bgm"
         self.audio_start = _doc_num(doc.get("audio_start"), 0.0)
         self.audio_len = _doc_num(doc.get("audio_len"), 0.0)
@@ -898,6 +987,22 @@ class Project:
                     src_in, src_out, name, xfade_dur)
 
     @staticmethod
+    def _overlay_from_doc(raw) -> "Overlay | None":
+        """坏条目丢掉就好：一层画中画不值得废掉整份工程。"""
+        if not isinstance(raw, dict):
+            return None
+        path = raw.get("path")
+        if not isinstance(path, str) or not path:
+            return None
+        return Overlay(path, _doc_num(raw.get("start"), 0.0),
+                       _doc_num(raw.get("end"), 1.0),
+                       _doc_num(raw.get("scale"), 40.0),
+                       raw.get("anchor") or "tr",
+                       _doc_num(raw.get("dx"), 0.0),
+                       _doc_num(raw.get("dy"), 0.0),
+                       _doc_num(raw.get("opacity"), 100.0))
+
+    @staticmethod
     def _audio_from_doc(raw) -> AudioClip:
         if not isinstance(raw, dict):
             raise ProjectFileError("bad-shape", "音频条目不是对象")
@@ -923,6 +1028,7 @@ class Project:
         """工程里登记了、磁盘上已经不在了的素材（按出现顺序，去重）。"""
         out: list[str] = []
         for path in ([c.path for c in self.clips]
+                     + [o.path for o in self.overlays]
                      + [a.path for a in self.audios]):
             if path and path not in out and not os.path.exists(path):
                 out.append(path)
@@ -936,6 +1042,10 @@ class Project:
         for clip in self.clips:
             if clip.path == old:
                 clip.path = new
+                n += 1
+        for overlay in self.overlays:
+            if overlay.path == old:
+                overlay.path = new
                 n += 1
         for audio in self.audios:
             if audio.path == old:
@@ -1766,7 +1876,7 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
                 clips=None, timeline=None, extras=None,
                 xfade_sec: float = 0.3, subtitle_file: str = "",
                 subtitle_font: str = "Microsoft YaHei", subtitle_size: int = 48,
-                subtitle_fonts: str = "") -> str:
+                subtitle_fonts: str = "", overlays=None) -> str:
     """一条 filtergraph：逐元素切片 → 拼接（可交叉淡化）→ 音频 → 总长。
 
     clips: Clip 列表（含片头片尾）；不传就按「全是图片」
@@ -1780,6 +1890,7 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
     volume: 背景音乐音量倍数（1.0 = 原样）
     crop_focus: 裁切铺满时留住 center / top / bottom
     subtitle_file: 已经写好的 .ass，挂在成片最后一环烧进去（空 = 不加字幕）
+    overlays: overlay_specs() 的产物，画中画压在成片上、字幕之前
     """
     K = len(counts)
     if K <= 0:
@@ -1893,6 +2004,21 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
             parts.append(f"{prev}[v{i}]concat=n=2:v=1:a=0[m{i}]")
             acc += segs[i]
         prev = f"[m{i}]"
+    for k, ov in enumerate(overlays or []):
+        tw = max(2, even(int(round(w * ov["scale"] / 100.0))))
+        op = min(1.0, max(0.0, ov["opacity"] / 100.0))
+        dx = w * ov["dx"] / 100.0
+        dy = h * ov["dy"] / 100.0
+        parts.append(
+            f"[{ov['index']}:v]scale={tw}:-2,format=rgba,"
+            f"colorchannelmixer=aa={op:.3f},fps={fps},"
+            f"setpts=PTS-STARTPTS+{ov['start']:.3f}/TB[ov{k}]")
+        parts.append(
+            f"{prev}[ov{k}]overlay=x=(W-w)*{ov['ax']:.3f}{dx:+.1f}:"
+            f"y=(H-h)*{ov['ay']:.3f}{dy:+.1f}:"
+            f"enable='between(t,{ov['start']:.3f},{ov['end']:.3f})':"
+            f"eof_action=pass[o{k}]")
+        prev = f"[o{k}]"
     if subtitle_file:
         sub = ass_filter(subtitle_file, subtitle_font, subtitle_size,
                          subtitle_fonts or default_font_dir())
@@ -1994,7 +2120,7 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
            bg_blur=True, pad_color="#000000", bg_path="", motion="none",
            volume=1.0, crop_focus="center", music_start=0.0, xfade_sec=0.3,
            subtitles=None, subtitle_font="Microsoft YaHei",
-           subtitle_size=48, subtitle_fonts="", ab="192k",
+           subtitle_size=48, subtitle_fonts="", ab="192k", overlays=None,
            on_progress=None, proc_holder=None) -> str:
     """一条 filtergraph 渲完；on_progress(0..1) 回调。
 
@@ -2042,12 +2168,22 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
     items = _audio_items(audio)
     bgm = next((a for a in items if a.get("gap")), None)
     extras = [a for a in items if not a.get("gap")]
+    for ov in overlays or []:
+        if not ov.path or not os.path.exists(ov.path):
+            raise RenderError(tr("叠加的素材读不出来：{name}",
+                                 name=os.path.basename(ov.path) or "?"))
+        if (not ov.path.lower().endswith(tuple(MEDIA_EXTS))
+                and not image_ok(ov.path)):
+            raise RenderError(tr("叠加的素材读不出来：{name}",
+                                 name=os.path.basename(ov.path)))
 
     sub_file = ""
     if subtitles:
         sub_file = _write_ass(subtitles, w, h, subtitle_font, subtitle_size)
     sub_kw = dict(subtitle_file=sub_file, subtitle_font=subtitle_font,
                   subtitle_size=subtitle_size, subtitle_fonts=subtitle_fonts)
+    ov_base = len(counts) + (1 if add_bg else 0) + 1 + len(extras)
+    ov_specs = overlay_specs(overlays or [], ov_base, total)
 
     graph = build_graph(counts, total, w, h, fps=fps, fit=fit,
                         fade_in=fade_in, fade_out=fade_out,
@@ -2058,7 +2194,8 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
                         motion=motion, volume=volume,
                         crop_focus=crop_focus, music_start=music_start,
                         clips=clips, timeline=timeline,
-                        extras=None, xfade_sec=xfade_sec, **sub_kw)
+                        extras=None, xfade_sec=xfade_sec, overlays=ov_specs,
+                        **sub_kw)
     cmd = [FFMPEG, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
            "-progress", "pipe:1", "-nostats"]
     for c, nf in zip(clips, counts2):
@@ -2097,6 +2234,14 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
         extra_specs.append({"index": idx, "start": ex.get("start", 0.0),
                             "dur": max(0.05, dur),
                             "volume": ex.get("volume", 1.0)})
+    for ov in ov_specs:
+        span = max(0.1, ov["end"] - ov["start"]) + 0.5
+        if ov["path"].lower().endswith(tuple(MEDIA_EXTS)):
+            cmd += ["-stream_loop", "-1", "-t", f"{span:.3f}",
+                    "-i", ov["path"]]
+        else:
+            cmd += ["-loop", "1", "-framerate", str(fps), "-t",
+                    f"{span:.3f}", "-i", ov["path"]]
     if extra_specs:
         graph = build_graph(counts, total, w, h, fps=fps, fit=fit,
                             fade_in=fade_in, fade_out=fade_out,
@@ -2108,7 +2253,7 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
                             volume=volume, crop_focus=crop_focus,
                             music_start=music_start, clips=clips,
                             timeline=timeline, extras=extra_specs,
-                            xfade_sec=xfade_sec, **sub_kw)
+                            xfade_sec=xfade_sec, overlays=ov_specs, **sub_kw)
 
     graph_file = None
     if len(graph) > 6000:
@@ -2805,6 +2950,132 @@ def run_gui() -> int:
                 return None
             return dlg.plan()
 
+    class OverlayDialog(FramelessDialog):
+        """画中画的参数：素材、进出时间、九宫格位置、偏移、大小、透明度。"""
+
+        def __init__(self, parent, ov: Overlay, total: float):
+            super().__init__(parent, tr("画中画"))
+            self.total = max(0.1, float(total or 0.0))
+            self.setMinimumWidth(520)
+            self._path = ov.path
+
+            self.lbl_file = QLabel(os.path.basename(ov.path or tr("没选素材")))
+            self.lbl_file.setWordWrap(True)
+            self.lbl_file.setObjectName("hint")
+            btn_file = QPushButton(tr("换素材…"))
+            btn_file.clicked.connect(self._pick_file)
+            row_file = QHBoxLayout()
+            row_file.setContentsMargins(0, 0, 0, 0)
+            row_file.addWidget(self.lbl_file, 1)
+            row_file.addWidget(btn_file)
+            wrap_file = QWidget()
+            wrap_file.setLayout(row_file)
+
+            self.spin_start = QDoubleSpinBox()
+            self.spin_start.setRange(0.0, self.total)
+            self.spin_start.setDecimals(1)
+            self.spin_start.setSingleStep(0.1)
+            self.spin_start.setSuffix(tr(" 秒"))
+            self.spin_end = QDoubleSpinBox()
+            self.spin_end.setRange(0.1, self.total)
+            self.spin_end.setDecimals(1)
+            self.spin_end.setSingleStep(0.1)
+            self.spin_end.setSuffix(tr(" 秒"))
+
+            self.cmb_anchor = QComboBox()
+            for key in OVERLAY_ANCHORS:
+                self.cmb_anchor.addItem(tr(OVERLAY_ANCHOR_LABELS[key]), key)
+            self.spin_scale = QSpinBox()
+            self.spin_scale.setRange(int(OVERLAY_MIN_SCALE),
+                                     int(OVERLAY_MAX_SCALE))
+            self.spin_scale.setSuffix("%")
+            self.spin_scale.setToolTip(tr("相对成片宽度；40% 差不多是右上角一块"))
+            self.spin_dx = QDoubleSpinBox()
+            self.spin_dx.setRange(-100.0, 100.0)
+            self.spin_dx.setDecimals(1)
+            self.spin_dx.setSuffix("%")
+            self.spin_dy = QDoubleSpinBox()
+            self.spin_dy.setRange(-100.0, 100.0)
+            self.spin_dy.setDecimals(1)
+            self.spin_dy.setSuffix("%")
+            self.spin_opacity = QSpinBox()
+            self.spin_opacity.setRange(0, 100)
+            self.spin_opacity.setSuffix("%")
+
+            form = QFormLayout()
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+            form.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            form.addRow(tr("素材"), wrap_file)
+            form.addRow(tr("出现时间"), self.spin_start)
+            form.addRow(tr("消失时间"), self.spin_end)
+            form.addRow(tr("九宫格位置"), self.cmb_anchor)
+            form.addRow(tr("水平偏移"), self.spin_dx)
+            form.addRow(tr("垂直偏移"), self.spin_dy)
+            form.addRow(tr("缩放"), self.spin_scale)
+            form.addRow(tr("不透明度"), self.spin_opacity)
+            self.body.addLayout(form)
+
+            hint = QLabel(tr("时间线上可以直接拖画中画改进出时间；"
+                             "偏移是相对九宫格的位置，正数往右 / 往下。"))
+            hint.setWordWrap(True)
+            hint.setObjectName("hint")
+            self.body.addWidget(hint)
+
+            row = QHBoxLayout()
+            row.addStretch(1)
+            ok = QPushButton(tr("好了"))
+            ok.setDefault(True)
+            ok.clicked.connect(self.accept)
+            cancel = QPushButton(tr("取消"))
+            cancel.clicked.connect(self.reject)
+            row.addWidget(ok)
+            row.addWidget(cancel)
+            self.body.addLayout(row)
+
+            self.spin_start.setValue(max(0.0, ov.start))
+            self.spin_end.setValue(max(ov.start + OVERLAY_MIN_SPAN,
+                                       min(self.total, ov.end)))
+            idx = self.cmb_anchor.findData(ov.anchor)
+            self.cmb_anchor.setCurrentIndex(max(0, idx))
+            self.spin_dx.setValue(ov.dx)
+            self.spin_dy.setValue(ov.dy)
+            self.spin_scale.setValue(int(round(ov.scale)))
+            self.spin_opacity.setValue(int(round(ov.opacity)))
+
+        def _pick_file(self):
+            base = (os.path.dirname(self._path) if self._path
+                    else os.path.expanduser("~"))
+            picked = FileDialog.get_open_files(
+                self, tr("选叠加素材"), base,
+                tr("图片或视频 (*.jpg *.jpeg *.png *.bmp *.webp *.mp4"
+                   " *.mov *.mkv *.webm *.avi)"))
+            if picked:
+                self._path = picked[0]
+                self.lbl_file.setText(os.path.basename(self._path))
+
+        def overlay(self) -> Overlay:
+            start = self.spin_start.value()
+            end = self.spin_end.value()
+            if end <= start:
+                end = start + OVERLAY_MIN_SPAN
+            if end > self.total:
+                end = self.total
+                start = max(0.0, min(start, end - OVERLAY_MIN_SPAN))
+            return Overlay(self._path, start, end,
+                           scale=float(self.spin_scale.value()),
+                           anchor=self.cmb_anchor.currentData() or "tr",
+                           dx=self.spin_dx.value(), dy=self.spin_dy.value(),
+                           opacity=float(self.spin_opacity.value()))
+
+        @classmethod
+        def get_overlay(cls, parent, ov: Overlay, total: float):
+            dlg = cls(parent, ov, total)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return None
+            out = dlg.overlay()
+            return out if out.path else None
+
     class NumberDialog(FramelessDialog):
         """要一个数字的输入框（改每张图显示多久用）。"""
 
@@ -3148,24 +3419,27 @@ def run_gui() -> int:
         moved = pyqtSignal(int, float)
         audioMoved = pyqtSignal(int, float)
         audioVolume = pyqtSignal(int, float)
+        overlayMoved = pyqtSignal(int, float)
         menu = pyqtSignal(str, int, object)
 
         DEFAULT_COLORS = {"bg": "#1f2329", "empty": "#9ca3af",
                           "piece_a": "#b86b6b", "piece_b": "#b8a05f",
                           "piece_text": "#111827", "playhead": "#f59e0b",
                           "selected_edge": "#3b82f6", "audio": "#2f6f5e",
-                          "audio_sel": "#3f9d84"}
+                          "audio_sel": "#3f9d84", "overlay": "#566bb0",
+                          "overlay_sel": "#7c8fe0"}
 
         def __init__(self, project, parent=None):
             super().__init__(parent)
             self.project = project
             self.selected: list[int] = []
             self.sel_audio: list[int] = []
+            self.sel_overlay: list[int] = []
             self.play_pos = 0.0
             self._drag = None
             self._press = 0.0
             self.c = dict(self.DEFAULT_COLORS)
-            self.setMinimumHeight(112)
+            self.setMinimumHeight(150)
             self.setMouseTracking(True)
             self.setCursor(Qt.CursorShape.PointingHandCursor)
             self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -3173,10 +3447,15 @@ def run_gui() -> int:
         # -- 几何 ------------------------------------------------------
         def _video_rect(self):
             h = self.height()
-            return 4, max(30, int(h * 0.60))
+            return 4, max(30, int(h * 0.46))
+
+        def _overlay_rect(self):
+            """画中画轨：夹在画面块和音频块中间。"""
+            top = self._video_rect()[1] + 12
+            return top, top + max(14, int(self.height() * 0.14))
 
         def _audio_rect(self):
-            top = self._video_rect()[1] + 14
+            top = self._overlay_rect()[1] + 14
             return top, max(16, self.height() - top - 4)
 
         def _total(self) -> float:
@@ -3198,6 +3477,15 @@ def run_gui() -> int:
                 x0 = self.width() * max(0.0, a.start) / total
                 x1 = self.width() * min(total, a.start + a.dur) / total
                 out.append((x0, max(x0 + 3, x1), a))
+            return out
+
+        def _overlay_spans(self):
+            total = self._total()
+            out = []
+            for o in self.project.overlays:
+                x0 = self.width() * max(0.0, o.start) / total
+                x1 = self.width() * min(total, o.end) / total
+                out.append((x0, max(x0 + 3, x1), o))
             return out
 
         def _audio_rows(self, count: int):
@@ -3269,6 +3557,25 @@ def run_gui() -> int:
                                   Qt.PenStyle.DotLine))
                     p.drawLine(int(x1), top, int(x1), top + vh - top)
 
+            # 画中画轨
+            otop, obottom = self._overlay_rect()
+            p.setPen(QColor(self.c["empty"]))
+            p.drawText(4, otop - 4, tr("画中画"))
+            for k, (x0, x1, ov) in enumerate(self._overlay_spans()):
+                col = QColor(self.c["overlay_sel"] if k in self.sel_overlay
+                             else self.c["overlay"])
+                p.fillRect(int(x0), otop, max(2, int(x1 - x0)),
+                           max(4, obottom - otop - 1), col)
+                if k in self.sel_overlay:
+                    p.setPen(QPen(QColor(self.c["selected_edge"]), 2))
+                    p.drawRect(int(x0), otop, max(2, int(x1 - x0)),
+                               max(4, obottom - otop - 1))
+                if x1 - x0 > 34:
+                    p.setPen(QColor(theme.contrast_text(col.name())))
+                    p.drawText(int(x0) + 5, otop + 12,
+                               f"{os.path.basename(ov.path)[:16]}  "
+                               f"{int(round(ov.scale))}%")
+
             # 音频轨
             aspans = self._audio_spans()
             rows = self._audio_rows(len(aspans))
@@ -3304,6 +3611,15 @@ def run_gui() -> int:
                     return i, x1
             return -1, 0.0
 
+        def _hit_overlay(self, x, y):
+            top, bottom = self._overlay_rect()
+            if y < top - 3 or y > bottom + 3:
+                return -1
+            for k, (x0, x1, _o) in enumerate(self._overlay_spans()):
+                if x0 - 3 <= x <= x1 + 3:
+                    return k
+            return -1
+
         def _hit_audio(self, x, y):
             top, bottom = self._audio_rect()
             if y < top - 3 or y > bottom + 3:
@@ -3325,6 +3641,19 @@ def run_gui() -> int:
                     self.picked.emit(i)
                     self.update()
                     self.menu.emit("video", i, ev.globalPosition().toPoint())
+                    return
+                k = self._hit_overlay(x, y)
+                if k >= 0:
+                    if k not in self.sel_overlay:
+                        self.sel_overlay = [k]
+                    self.update()
+                    self.menu.emit("overlay", k,
+                                   ev.globalPosition().toPoint())
+                    return
+                _otop, _obottom = self._overlay_rect()
+                if _otop - 3 <= y <= _obottom + 3:
+                    self.menu.emit("overlay_empty", -1,
+                                   ev.globalPosition().toPoint())
                     return
                 k = self._hit_audio(x, y)
                 if k >= 0:
@@ -3374,6 +3703,16 @@ def run_gui() -> int:
                 self.seeked.emit(start)
                 self.play_pos = start
                 self._drag = ("clip", i, x, x0)
+                self.update()
+                return
+
+            k = self._hit_overlay(x, y)
+            if k >= 0:
+                ov = self.project.overlays[k]
+                self.sel_overlay = [k]
+                self._drag = ("overlay", k, x, ov.start)
+                self.play_pos = self._time_at(x)
+                self.seeked.emit(self.play_pos)
                 self.update()
                 return
 
@@ -3433,6 +3772,10 @@ def run_gui() -> int:
                 self.resized.emit(
                     i, d0 + (x - x0) * total / max(1, self.width()))
                 return
+            if kind == "overlay":
+                self.play_pos = self._time_at(x)
+                self.update()
+                return
             if kind == "audio":
                 _k, idx, x0, start0 = self._drag
                 _spans, total = self._spans()
@@ -3458,6 +3801,14 @@ def run_gui() -> int:
                 i = drag[1]
                 if abs(x - drag[2]) > 6:
                     self.moved.emit(i, self._time_at(x))
+                return
+            if kind == "overlay":
+                _k, idx, x0, start0 = drag
+                if abs(x - x0) <= 6:
+                    return
+                total = self._total()
+                delta = (x - x0) * total / max(1, self.width())
+                self.overlayMoved.emit(idx, max(0.0, start0 + delta))
                 return
             if kind == "audio":
                 _k, idx, x0, start0 = drag
@@ -4833,6 +5184,9 @@ def run_gui() -> int:
                 return b
             self.btn_add = btn(tr("加图片"), self.on_add)
             self.btn_add.setMinimumWidth(78)
+            self.btn_overlay = btn(
+                tr("画中画"), self.on_add_overlay,
+                tr("压一层画面在成片上：图片或视频都行"))
             self.btn_up = btn(tr("上移"), lambda: self.on_move(-1))
             self.btn_down = btn(tr("下移"), lambda: self.on_move(1))
             self.btn_remove = btn(tr("删除"), self.on_remove)
@@ -4990,6 +5344,7 @@ def run_gui() -> int:
             self.timeline.moved.connect(self.on_timeline_move)
             self.timeline.audioMoved.connect(self.on_audio_move)
             self.timeline.audioVolume.connect(self.on_audio_volume)
+            self.timeline.overlayMoved.connect(self.on_overlay_moved)
             self.timeline.menu.connect(self.on_timeline_menu)
             v.addWidget(self.timeline)
 
@@ -5034,6 +5389,9 @@ def run_gui() -> int:
             self.btn_project.setText(tr("工程"))
             self.btn_project.setToolTip(tr("新建 / 打开 / 保存工程（Ctrl+S 保存）"))
             self.btn_add.setText(tr("加图片"))
+            self.btn_overlay.setText(tr("画中画"))
+            self.btn_overlay.setToolTip(
+                tr("压一层画面在成片上：图片或视频都行"))
             self.btn_up.setText(tr("上移"))
             self.btn_down.setText(tr("下移"))
             self.btn_remove.setText(tr("删除"))
@@ -5279,6 +5637,8 @@ def run_gui() -> int:
             extra = ""
             if self.project.intro() or self.project.outro():
                 extra = tr("（含片头片尾）")
+            if self.project.overlays:
+                extra += tr("（{n} 层画中画）", n=len(self.project.overlays))
             self.lbl_status.setText(
                 tr("{n} 张图 · 总长 {total} · {src}", n=n,
                    total=human_time(self.project.total()), src=src) + extra)
@@ -5396,7 +5756,8 @@ def run_gui() -> int:
                         crop_focus=s["crop_focus"],
                         subtitles=[dict(c) for c in self.project.cues],
                         subtitle_font=s["subtitle_font"],
-                        subtitle_size=subtitle_px(int(s["subtitle_size"]), h))
+                        subtitle_size=subtitle_px(int(s["subtitle_size"]), h),
+                        overlays=[o.copy() for o in self.project.overlays])
 
         # ---------------- 动作
         def on_add(self):
@@ -5705,6 +6066,66 @@ def run_gui() -> int:
                 self.lbl_status.setText(tr("音量 {pct}%", pct=int(round(
                     self.project.audios[rows[0]].volume * 100))))
 
+        # ---------------- 画中画
+        def on_add_overlay(self):
+            base = (self.settings["last_export_dir"] or self._project_dir())
+            picked = FileDialog.get_open_files(
+                self, tr("选叠加素材"), base,
+                tr("图片或视频 (*.jpg *.jpeg *.png *.bmp *.webp *.mp4"
+                   " *.mov *.mkv *.webm *.avi)"))
+            if not picked:
+                return
+            path = picked[0]
+            if not os.path.exists(path):
+                MsgBox.warn(self, tr("素材不在了"), path)
+                return
+            if (not path.lower().endswith(tuple(MEDIA_EXTS))
+                    and not image_ok(path)):
+                MsgBox.warn(self, tr("这个文件读不出来"), path)
+                return
+            total = max(0.1, self._export_total())
+            ov = OverlayDialog.get_overlay(
+                self, Overlay(path, 0.0, min(total, 3.0)), total)
+            if ov is None:
+                return
+            self.project.overlays.append(ov)
+            self.timeline.sel_overlay = [len(self.project.overlays) - 1]
+            self._refresh_all()
+            self.lbl_status.setText(tr("加了一层画中画"))
+            self._history_push(tr("加画中画"))
+
+        def on_edit_overlay(self, k):
+            if not (0 <= k < len(self.project.overlays)):
+                return
+            total = max(0.1, self._export_total())
+            ov = OverlayDialog.get_overlay(
+                self, self.project.overlays[k], total)
+            if ov is None:
+                return
+            self.project.overlays[k] = ov
+            self._refresh_all()
+            self.lbl_status.setText(tr("画中画改好了"))
+            self._history_push(tr("改画中画"))
+
+        def on_remove_overlay(self, k):
+            if not (0 <= k < len(self.project.overlays)):
+                return
+            self.project.overlays.pop(k)
+            self.timeline.sel_overlay = []
+            self._refresh_all()
+            self.lbl_status.setText(tr("删掉一层画中画"))
+            self._history_push(tr("删画中画"))
+
+        def on_overlay_moved(self, k, start):
+            if not (0 <= k < len(self.project.overlays)):
+                return
+            ov = self.project.overlays[k]
+            span = max(OVERLAY_MIN_SPAN, ov.end - ov.start)
+            ov.start = max(0.0, float(start))
+            ov.end = ov.start + span
+            self._refresh_all()
+            self._history_push(tr("移动画中画"))
+
         def on_timeline_menu(self, kind, index, pos):
             m = self.timeline_menu(kind, index)
             if m is not None:
@@ -5713,6 +6134,20 @@ def run_gui() -> int:
         def timeline_menu(self, kind, index):
             rows = list(self.timeline.selected)
             arows = list(self.timeline.sel_audio)
+            if kind in ("overlay", "overlay_empty"):
+                m = QMenu(self)
+                add = m.addAction(tr("加画中画…"))
+                add.triggered.connect(
+                    lambda _c=False: self.on_add_overlay())
+                if kind == "overlay":
+                    m.addSeparator()
+                    edit = m.addAction(tr("编辑画中画…"))
+                    edit.triggered.connect(
+                        lambda _c=False, k=index: self.on_edit_overlay(k))
+                    rm = m.addAction(tr("删除画中画"))
+                    rm.triggered.connect(
+                        lambda _c=False, k=index: self.on_remove_overlay(k))
+                return m
             if kind == "empty":
                 return None
             m = QMenu(self)

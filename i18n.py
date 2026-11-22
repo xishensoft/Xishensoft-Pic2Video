@@ -2411,3 +2411,97 @@ _TR_EXTRA31 = {
 for _k, _trs in _TR_EXTRA31.items():
     for _lang, _v in _trs.items():
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA32 = {
+    '叠加的素材读不出来：{name}': {
+        'zh-TW': '疊加的素材讀不出來：{name}',
+        'en': "Can't read the overlay clip: {name}",
+        'ja': '重ねる素材を読み込めません：{name}',
+        'ko': '올릴 소재를 읽을 수 없습니다: {name}',
+    },
+}
+
+for _k, _trs in _TR_EXTRA32.items():
+    for _lang, _v in _trs.items():
+        TR[_lang].setdefault(_k, _v)
+
+
+# ---------------------------------------------------------------- 画中画
+_TR_EXTRA33 = {
+    "画中画": ("畫中畫", "Picture-in-picture", "ピクチャーインピクチャー",
+              "부분 화면"),
+    "没选素材": ("沒選素材", "No clip chosen", "素材未選択", "소재 미선택"),
+    "换素材…": ("換素材…", "Change clip…", "素材を変更…", "소재 변경…"),
+    "相对成片宽度；40% 差不多是右上角一块": (
+        "相對成片寬度；40% 差不多是右上角一塊",
+        "Percent of the final width; 40% is about a corner block",
+        "完成尺に対する割合。40% で右上の一区画くらい",
+        "최종 화면 너비 대비 비율. 40%면 오른쪽 위 한 칸 정도"),
+    "出现时间": ("出現時間", "Appear at", "表示開始", "나타나는 시각"),
+    "消失时间": ("消失時間", "Disappear at", "表示終了", "사라지는 시각"),
+    "九宫格位置": ("九宮格位置", "Anchor", "9分割の位置", "9분할 위치"),
+    "水平偏移": ("水平偏移", "Horizontal offset", "横オフセット",
+              "가로 오프셋"),
+    "垂直偏移": ("垂直偏移", "Vertical offset", "縦オフセット", "세로 오프셋"),
+    "不透明度": ("不透明度", "Opacity", "不透明度", "불투명도"),
+    "缩放": ("縮放", "Scale", "拡大縮小", "크기"),
+    "时间线上可以直接拖画中画改进出时间；偏移是相对九宫格的位置，正数往右 / 往下。": (
+        "時間線上可以直接拖畫中畫改進出時間；偏移是相對九宮格的位置，正數往右 / 往下。",
+        "Drag the overlay on the timeline to change its timing; offsets"
+        " shift it from the anchor (positive = right / down).",
+        "タイムライン上で重ねをドラッグすると表示区間を変えられます。"
+        "オフセットは 9分割位置からのずれ（正で右 / 下）。",
+        "타임라인에서 겹치기를 끌면 표시 구간이 바뀝니다. 오프셋은 9분할"
+        " 위치에서의 이동(양수면 오른쪽 / 아래)입니다."),
+    "好了": ("好了", "Done", "完了", "확인"),
+    "选叠加素材": ("選疊加素材", "Pick an overlay clip", "重ねる素材を選ぶ",
+               "올릴 소재 선택"),
+    "图片或视频 (*.jpg *.jpeg *.png *.bmp *.webp *.mp4 *.mov *.mkv"
+    " *.webm *.avi)": (
+        "圖片或影片 (*.jpg *.jpeg *.png *.bmp *.webp *.mp4 *.mov *.mkv"
+        " *.webm *.avi)",
+        "Images or videos (*.jpg *.jpeg *.png *.bmp *.webp *.mp4 *.mov"
+        " *.mkv *.webm *.avi)",
+        "画像または動画 (*.jpg *.jpeg *.png *.bmp *.webp *.mp4 *.mov"
+        " *.mkv *.webm *.avi)",
+        "이미지 또는 동영상 (*.jpg *.jpeg *.png *.bmp *.webp *.mp4 *.mov"
+        " *.mkv *.webm *.avi)"),
+    "素材不在了": ("素材不在了", "The clip is gone", "素材が見つかりません",
+              "소재가 없습니다"),
+    "这个文件读不出来": ("這個檔案讀不出來", "Can't read this file",
+                 "このファイルを読み込めません",
+                 "이 파일을 읽을 수 없습니다"),
+    "加了一层画中画": ("加了一層畫中畫", "Added one overlay",
+                "重ねを 1 枚追加しました", "겹치기 1개 추가"),
+    "加画中画": ("加畫中畫", "Add overlay", "重ねを追加", "겹치기 추가"),
+    "画中画改好了": ("畫中畫改好了", "Overlay updated", "重ねを更新しました",
+               "겹치기 수정됨"),
+    "改画中画": ("改畫中畫", "Edit overlay", "重ねを変更", "겹치기 편집"),
+    "删掉一层画中画": ("刪掉一層畫中畫", "Removed one overlay",
+                "重ねを 1 枚削除しました", "겹치기 1개 삭제"),
+    "删画中画": ("刪畫中畫", "Remove overlay", "重ねを削除", "겹치기 삭제"),
+    "移动画中画": ("移動畫中畫", "Move overlay", "重ねを移動", "겹치기 이동"),
+    "加画中画…": ("加畫中畫…", "Add overlay…", "重ねを追加…", "겹치기 추가…"),
+    "编辑画中画…": ("編輯畫中畫…", "Edit overlay…", "重ねを編集…",
+               "겹치기 편집…"),
+    "删除画中画": ("刪除畫中畫", "Delete overlay", "重ねを削除", "겹치기 삭제"),
+    "（{n} 层画中画）": ("（{n} 層畫中畫）", " ({n} overlay(s))",
+                  "（重ね {n} 枚）", " (겹치기 {n}개)"),
+    "压一层画面在成片上：图片或视频都行": (
+        "壓一層畫面在成片上：圖片或影片都行",
+        "Put one layer on top: image or video",
+        "完成映像の上に 1 枚重ねます：画像でも動画でも可",
+        "완성 영상 위에 한 겹 올리기: 이미지나 동영상 모두 가능"),
+    "左上": ("左上", "Top left", "左上", "좌상"),
+    "中上": ("中上", "Top center", "中央上", "중상"),
+    "右上": ("右上", "Top right", "右上", "우상"),
+    "左中": ("左中", "Middle left", "左中", "좌중"),
+    "正中": ("正中", "Center", "中央", "중앙"),
+    "右中": ("右中", "Middle right", "右中", "우중"),
+    "左下": ("左下", "Bottom left", "左下", "좌하"),
+    "中下": ("中下", "Bottom center", "中央下", "중하"),
+    "右下": ("右下", "Bottom right", "右下", "우하"),
+}
+for _k, _trs in _TR_EXTRA33.items():
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
+        TR[_lang].setdefault(_k, _v)

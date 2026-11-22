@@ -1005,7 +1005,7 @@ _pr34.audios.append(p.AudioClip(os.path.join(FIXTURES, "tone6.m4a"), 6.0, 1.5, 0
 _pr34.mode = "total"
 _pr34.total_setting = 9.0
 _doc34 = _pr34.to_doc()
-check("工程格式带版本号", _doc34.get("version") == p.PROJECT_VERSION == 1,
+check("工程格式带版本号", _doc34.get("version") == p.PROJECT_VERSION == 2,
       _doc34.get("version"))
 check("工程格式：片段是 dict 不是元组",
       isinstance(_doc34["clips"][0], dict)
@@ -1072,7 +1072,7 @@ _pr35.clips = [p.Clip(_cn35, 2.0)]
 _cn_doc35 = os.path.join(_dir35, "中文工程.p2v")
 p.save_project(_pr35, _cn_doc35)
 _raw35 = open(_cn_doc35, encoding="utf-8").read()
-check("存盘带版本号", '"version": 1' in _raw35, _raw35[:40])
+check("存盘带版本号", '"version": 2' in _raw35, _raw35[:40])
 check("存盘不转义中文", "中文素材" in _raw35)
 check("中文路径能读回", p.load_project(_cn_doc35).clips[0].path == _cn35)
 
@@ -1982,6 +1982,234 @@ try:
     check("成片不在时封面要报错", False)
 except p.RenderError as _exc:
     check("成片不在时封面要报错", "成片不在" in str(_exc), str(_exc))
+
+# ---------------- 54 画中画：工程格式（叠加层） ----------------
+_ov0 = p.Project()
+check("工程格式版本升到 2", _ov0.to_doc()["version"] == 2)
+check("新工程没有叠加层", _ov0.to_doc().get("overlays") == [])
+
+_ov0.overlays.append(p.Overlay(IMG[0], 1.0, 4.0))
+_doc_ov = _ov0.to_doc()
+check("叠加层写进工程", len(_doc_ov["overlays"]) == 1)
+_ov_raw = _doc_ov["overlays"][0]
+check("叠加层字段齐全",
+      set(_ov_raw) == {"path", "start", "end", "scale", "anchor",
+                       "dx", "dy", "opacity"}, sorted(_ov_raw))
+check("叠加层默认右上角铺四成",
+      _ov_raw["anchor"] == "tr" and _ov_raw["scale"] == 40.0
+      and _ov_raw["opacity"] == 100.0 and _ov_raw["dx"] == 0.0
+      and _ov_raw["dy"] == 0.0, _ov_raw)
+check("叠加层能过 JSON", json.loads(json.dumps(_doc_ov))["overlays"][0]["end"] == 4.0)
+
+_ov0.overlays[0].anchor = "bl"
+_ov0.overlays[0].scale = 55.0
+_ov0.overlays[0].dx = 12.5
+_ov0.overlays[0].dy = -8.0
+_ov0.overlays[0].opacity = 70.0
+_ov_back = p.Project.from_doc(_ov0.to_doc())
+check("叠加层原样读回", len(_ov_back.overlays) == 1)
+_b0 = _ov_back.overlays[0]
+check("叠加层读回每个字段",
+      (_b0.path, _b0.start, _b0.end, _b0.scale, _b0.anchor,
+       _b0.dx, _b0.dy, _b0.opacity)
+      == (IMG[0], 1.0, 4.0, 55.0, "bl", 12.5, -8.0, 70.0),
+      (_b0.path, _b0.start, _b0.end, _b0.scale, _b0.anchor,
+       _b0.dx, _b0.dy, _b0.opacity))
+check("叠加层长度就是进出之差", _b0.span == 3.0, _b0.span)
+
+_old_ov = p.Project.from_doc({"version": 1, "clips": []})
+check("老工程没有叠加层也能读", _old_ov.overlays == [])
+_bad_ov = p.Project.from_doc({"version": 2, "clips": [], "overlays": [
+    {"path": IMG[1], "start": 0, "end": 2},
+    {"path": ""},
+    {"start": 0, "end": 2},
+    "nope"]})
+check("坏叠加条目丢掉、好条目留下",
+      len(_bad_ov.overlays) == 1 and _bad_ov.overlays[0].path == IMG[1])
+_ov_bad_shape = False
+try:
+    p.Project.from_doc({"version": 2, "clips": [], "overlays": {}})
+except p.ProjectFileError as _e:
+    _ov_bad_shape = _e.reason == "bad-shape"
+check("叠加层不是列表算坏工程", _ov_bad_shape)
+
+_crazy = p.Overlay(IMG[0], -5.0, -1.0, scale=900.0, anchor="middle",
+                   dx=-300.0, dy=300.0, opacity=180.0)
+check("叠加层起点不早于 0", _crazy.start == 0.0, _crazy.start)
+check("叠加层至少留一点时间", _crazy.end > _crazy.start, _crazy.end)
+check("缩放夹在 5..100", _crazy.scale == 100.0, _crazy.scale)
+check("认不出的位置退回右上", _crazy.anchor == "tr", _crazy.anchor)
+check("偏移夹在 -100..100", (_crazy.dx, _crazy.dy) == (-100.0, 100.0),
+      (_crazy.dx, _crazy.dy))
+check("不透明度夹在 0..100", _crazy.opacity == 100.0, _crazy.opacity)
+
+_ov_missing = p.Project()
+_ov_missing.clips = [p.Clip(IMG[0], 2.0)]
+_ov_missing.overlays = [p.Overlay(os.path.join(tmp, "gone_overlay.png"),
+                                  0.0, 1.0)]
+check("缺的叠加素材也进清单", len(_ov_missing.missing_media()) == 1,
+      _ov_missing.missing_media())
+check("叠加素材能重新定位", _ov_missing.relink_media(
+    os.path.join(tmp, "gone_overlay.png"), IMG[0]) == 1
+      and _ov_missing.overlays[0].path == IMG[0])
+
+# ---------------- 55 画中画：滤镜串 ----------------
+_ovs = [p.Overlay(IMG[0], 1.0, 4.0, scale=40.0, anchor="tr"),
+        p.Overlay(IMG[1], 2.0, 8.0, scale=25.0, anchor="bl", dx=10.0,
+                  dy=-5.0, opacity=50.0)]
+_specs = p.overlay_specs(_ovs, 7, total=10.0)
+check("叠加规格条数对", len(_specs) == 2, _specs)
+check("叠加输入下标从视频输入数开始",
+      [s["index"] for s in _specs] == [7, 8], [s["index"] for s in _specs])
+check("右上角锚点换算成 1,0",
+      (_specs[0]["ax"], _specs[0]["ay"]) == (1.0, 0.0),
+      (_specs[0]["ax"], _specs[0]["ay"]))
+check("左下角锚点换算成 0,1",
+      (_specs[1]["ax"], _specs[1]["ay"]) == (0.0, 1.0))
+check("叠加规格保留进出时间与不透明度",
+      (_specs[0]["start"], _specs[0]["end"], _specs[0]["opacity"])
+      == (1.0, 4.0, 100.0)
+      and (_specs[1]["start"], _specs[1]["end"], _specs[1]["opacity"])
+      == (2.0, 8.0, 50.0))
+check("叠加超出成片长度的部分被截掉",
+      p.overlay_specs([p.Overlay(IMG[0], 9.0, 15.0)], 0, total=10.0)[0]["end"]
+      == 10.0)
+check("整段都在成片之外的叠加不出现",
+      p.overlay_specs([p.Overlay(IMG[0], 12.0, 15.0)], 0, total=10.0) == [])
+
+_gov = p.build_graph([60, 60], 4.0, 1280, 720, fps=30,
+                     clips=[p.Clip(IMG[0], 2.0), p.Clip(IMG[1], 2.0)],
+                     overlays=_specs)
+_ov_line = [ln for ln in _gov.split(";") if "overlay=x=" in ln]
+check("叠加层接进滤镜串", len(_ov_line) == 2, len(_ov_line))
+check("叠加层用成片宽度四成铺开", "scale=512:-2" in _gov, _gov[:80])
+check("缩放后面接 rgba 与透明度",
+      "format=rgba,colorchannelmixer=aa=1.000" in _gov
+      and "colorchannelmixer=aa=0.500" in _gov)
+check("叠加层出现在窗口里",
+      "enable='between(t,1.000,4.000)'" in _gov
+      and "enable='between(t,2.000,8.000)'" in _gov)
+check("右上角贴在右下角表达式上",
+      "x=(W-w)*1.000+0.0" in _gov and "y=(H-h)*0.000+0.0" in _gov)
+check("偏移按成片百分比加进坐标",
+      "x=(W-w)*0.000+128.0" in _gov and "y=(H-h)*1.000-36.0" in _gov)
+check("叠加输入按起点挪到时间轴上", "setpts=PTS-STARTPTS+1.000/TB" in _gov)
+_vout_line = [ln for ln in _gov.split(";") if "[vout]" in ln][0]
+check("叠加在字幕之前、vout 最后一环",
+      "overlay=x=" not in _vout_line and "[o1]" in _vout_line, _vout_line)
+_gno = p.build_graph([60], 2.0, 1280, 720, fps=30,
+                     clips=[p.Clip(IMG[0], 2.0)])
+check("没有叠加就不出现 mixerkw", "colorchannelmixer" not in _gno)
+
+# ---------------- 56 画中画：真渲染 ----------------
+def _frame_rgb(path, at, w=320, h=180):
+    """抽一帧出来当 RGB 字节，方便比某个像素。"""
+    pr = subprocess.run(
+        [p.FFMPEG, "-v", "error", "-ss", "%.3f" % at, "-i", path,
+         "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        capture_output=True)
+    if pr.returncode != 0 or len(pr.stdout) < w * h * 3:
+        return None
+    return pr.stdout
+
+
+def _pixel(buf, w, x, y):
+    i = (y * w + x) * 3
+    return tuple(buf[i:i + 3])
+
+
+def _close(a, b, tol=10):
+    return a is not None and b is not None and all(
+        abs(x - y) <= tol for x, y in zip(a, b))
+
+
+if p.missing_tools():
+    print("  (没 ffmpeg，跳过画中画实测)")
+else:
+    _base_out = os.path.join(tmp, "ov_base.mp4")
+    p.render([p.Clip(IMG[0], 3.0)], [90], TONE, _base_out, w=320, h=180,
+             fps=30, crf=28)
+    _pip_out = os.path.join(tmp, "ov_pip.mp4")
+    p.render([p.Clip(IMG[0], 3.0)], [90], TONE, _pip_out, w=320, h=180,
+             fps=30, crf=28,
+             overlays=[p.Overlay(IMG[1], 0.5, 2.0, scale=40.0, anchor="tr")])
+    _fb = _frame_rgb(_base_out, 1.0)
+    _fp = _frame_rgb(_pip_out, 1.0)
+    _px = (256, 36)          # 右上角那块（x = 80% 宽，y = 20% 高）
+    check("画中画真的压在右上角",
+          not _close(_pixel(_fb, 320, *_px), _pixel(_fp, 320, *_px)),
+          (_pixel(_fb, 320, *_px), _pixel(_fp, 320, *_px)))
+    check("画中画只盖住一角，别处不动",
+          _close(_pixel(_fb, 320, 20, 160), _pixel(_fp, 320, 20, 160)),
+          (_pixel(_fb, 320, 20, 160), _pixel(_fp, 320, 20, 160)))
+    _fb2 = _frame_rgb(_base_out, 2.6)
+    _fp2 = _frame_rgb(_pip_out, 2.6)
+    check("过了退出时间画中画就消失",
+          _close(_pixel(_fb2, 320, *_px), _pixel(_fp2, 320, *_px)),
+          (_pixel(_fb2, 320, *_px), _pixel(_fp2, 320, *_px)))
+
+    _clear_out = os.path.join(tmp, "ov_clear.mp4")
+    p.render([p.Clip(IMG[0], 3.0)], [90], TONE, _clear_out, w=320, h=180,
+             fps=30, crf=28,
+             overlays=[p.Overlay(IMG[1], 0.5, 2.0, scale=40.0, anchor="tr",
+                                 opacity=0.0)])
+    _fc = _frame_rgb(_clear_out, 1.0)
+    check("不透明度 0 等于看不见",
+          _close(_pixel(_fb, 320, *_px), _pixel(_fc, 320, *_px)),
+          (_pixel(_fb, 320, *_px), _pixel(_fc, 320, *_px)))
+
+    _dur_pip = subprocess.run(
+        [p.FFPROBE, "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", _pip_out], capture_output=True, text=True)
+    check("画中画不改成片总长",
+          abs(float((_dur_pip.stdout or "0").strip() or 0) - 3.0) < 0.15,
+          _dur_pip.stdout.strip())
+
+    try:
+        p.render([p.Clip(IMG[0], 2.0)], [60], TONE,
+                 os.path.join(tmp, "ov_missing.mp4"), w=320, h=180, fps=30,
+                 overlays=[p.Overlay(os.path.join(tmp, "nope_pip.png"),
+                                     0.0, 1.0)])
+        check("叠加素材不在要报错", False)
+    except p.RenderError as _e:
+        check("叠加素材不在要报错", "叠加" in str(_e), str(_e))
+
+# ---------------- 57 画中画：界面接线与词条
+_src57 = open(os.path.join(ROOT, "pic2video.py"), encoding="utf-8").read()
+check("时间线有画中画轨",
+      "def _overlay_rect" in _src57 and "def _overlay_spans" in _src57)
+check("时间线能命中画中画", "def _hit_overlay" in _src57)
+check("时间线能拖画中画", '"overlay", k, x, ov.start' in _src57)
+check("时间线会报告画中画移动",
+      "overlayMoved = pyqtSignal(int, float)" in _src57
+      and "self.overlayMoved.emit(idx" in _src57)
+check("右键画中画有菜单",
+      '"overlay_empty"' in _src57 and "加画中画…" in _src57
+      and "编辑画中画…" in _src57 and "删除画中画" in _src57)
+check("窗口有画中画按钮", "self.btn_overlay = btn(" in _src57)
+check("窗口有加/改/删画中画", all(k in _src57 for k in (
+    "def on_add_overlay", "def on_edit_overlay", "def on_remove_overlay",
+    "def on_overlay_moved")))
+check("窗口接了移动信号",
+      "self.timeline.overlayMoved.connect(self.on_overlay_moved)" in _src57)
+check("预览与导出都带 overlays",
+      "overlays=[o.copy() for o in self.project.overlays]" in _src57)
+check("有画中画对话框",
+      "class OverlayDialog(FramelessDialog)" in _src57
+      and "OverlayDialog.get_overlay(" in _src57)
+check("对话框有九宫格与不透明度",
+      "OVERLAY_ANCHOR_LABELS" in _src57 and "self.spin_opacity" in _src57)
+check("状态栏报画中画层数", "（{n} 层画中画）" in _src57)
+for _name in ("画中画", "九宫格位置", "不透明度", "出现时间", "消失时间",
+              "水平偏移", "垂直偏移", "缩放", "换素材…", "加画中画…"):
+    check("画中画词条四语：" + _name,
+          bool(_i18n) and all(_name in tbl for tbl in _i18n.values()))
+for _anchor, _lab in (("tl", "左上"), ("tc", "中上"), ("tr", "右上"),
+                      ("ml", "左中"), ("mc", "正中"), ("mr", "右中"),
+                      ("bl", "左下"), ("bc", "中下"), ("br", "右下")):
+    check("九宫格词条：" + _anchor,
+          p.OVERLAY_ANCHOR_LABELS.get(_anchor) == _lab
+          and all(_lab in tbl for tbl in _i18n.values()))
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
