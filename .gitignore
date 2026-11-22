@@ -4,3 +4,7 @@ settings.json
 tools/
 .venv/
 probe/testout/
+tests/shot_*.png
+tests/out_*.mp4
+tests/*.mp4
+!tests/fixtures/*
