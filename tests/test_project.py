@@ -320,6 +320,18 @@ except p.RenderError as e:
 except Exception as e:   # noqa: BLE001
     check("坏图在渲染前就报错", False, f"{type(e).__name__}: {e}")
 
+# 18b 拖文件夹 / 拖文件
+fold = os.path.join(tmp, "photos")
+os.makedirs(os.path.join(fold, "sub"), exist_ok=True)
+for nm in ("b.png", "a.png", "c.png"):
+    open(os.path.join(fold, nm), "wb").close()
+got = p.expand_paths([fold, IMG[0]])
+check("文件夹展开成里面的文件", len(got) == 4, got)
+check("文件夹里按名字排序", [os.path.basename(x) for x in got[:3]] == ["a.png", "b.png", "c.png"], got[:3])
+check("单个文件原样留着", got[3] == IMG[0], got[3])
+check("不存在的路径也留着交给后面报错", p.expand_paths([os.path.join(tmp, "nope.bin")]) == [os.path.join(tmp, "nope.bin")])
+check("空输入得到空列表", p.expand_paths([]) == [])
+
 # 19 进度/导出的新文案在四种语言里都能格式化
 import i18n as I
 for lang in ("zh-TW", "en", "ja", "ko"):

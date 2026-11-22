@@ -973,3 +973,20 @@ _TR_EXTRA5 = {
 }
 for _lang, _extra5 in _TR_EXTRA5.items():
     TR[_lang].update(_extra5)
+
+_TR_EXTRA6 = {
+    "zh-TW": {
+        "导出完自动打开所在文件夹": "匯出完自動開啟所在資料夾",
+    },
+    "en": {
+        "导出完自动打开所在文件夹": "Open the folder after exporting",
+    },
+    "ja": {
+        "导出完自动打开所在文件夹": "書き出し後にフォルダーを開く",
+    },
+    "ko": {
+        "导出完自动打开所在文件夹": "내보낸 뒤 폴더 열기",
+    },
+}
+for _lang, _extra6 in _TR_EXTRA6.items():
+    TR[_lang].update(_extra6)

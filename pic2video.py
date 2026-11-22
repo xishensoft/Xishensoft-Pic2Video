@@ -59,6 +59,22 @@ def missing_tools() -> list[str]:
     return miss
 
 
+def expand_paths(paths) -> list:
+    """拖进来的路径展开成文件列表：目录按名字排序取里面的文件，文件原样留着。"""
+    out = []
+    for p in paths:
+        if os.path.isdir(p):
+            try:
+                names = sorted(os.listdir(p))
+            except OSError:
+                continue
+            out += [q for q in (os.path.join(p, n) for n in names)
+                    if not os.path.isdir(q)]      # 只取一层，子文件夹不递归
+        else:
+            out.append(p)
+    return out
+
+
 _IMG_OK: dict = {}
 
 
@@ -204,6 +220,7 @@ class Settings:
         "ui": "simple",           # 界面模式：simple 简洁（默认）/ pro 专业
         "theme": "auto",          # 外观：auto 跟随系统 / light / dark
         "accent": theme.DEFAULT_ACCENT,   # 主色（对撞色由它自动算）
+        "open_after_export": True,  # 导出完自动打开所在文件夹
         "win_w": 0,               # 窗口大小/位置，0 = 用默认
         "win_h": 0,
         "win_x": -1,
@@ -285,6 +302,8 @@ class Settings:
             d["theme"] = "auto"
         if not is_hex_color(d.get("accent", "")):
             d["accent"] = theme.DEFAULT_ACCENT
+        if not isinstance(d.get("open_after_export"), bool):
+            d["open_after_export"] = True
         for key, lo, hi in (("win_w", 0, 8000), ("win_h", 0, 8000),
                             ("win_x", -1, 8000), ("win_y", -1, 8000)):
             try:
@@ -1239,6 +1258,10 @@ def run_gui() -> int:
             wrap.setLayout(row)
             add_row("默认导出目录", wrap)
 
+            self.chk_open = QCheckBox(tr("导出完自动打开所在文件夹"))
+            self.chk_open.setChecked(bool(settings["open_after_export"]))
+            form.addRow(self.chk_open)   # 自带文字，不需要左边标签
+
             # 画面
             self._syncing = True
             self.cmb_ratio = QComboBox()
@@ -1532,6 +1555,7 @@ def run_gui() -> int:
                 theme=self.cmb_theme.currentData(),
                 accent=self._accent,
                 export_dir=self.edit_dir.text().strip(),
+                open_after_export=bool(self.chk_open.isChecked()),
                 ratio=self.cmb_ratio.currentData(),
                 width=even(self.spin_w.value()),
                 height=even(self.spin_h.value()),
@@ -2319,6 +2343,13 @@ def run_gui() -> int:
             self.lbl_status.setText(tr("导出完成：{path}", path=path))
             if os.environ.get("PIC2VIDEO_SHOT"):
                 return
+            if self.settings["open_after_export"]:
+                try:
+                    subprocess.Popen(["explorer", "/select,",
+                                      os.path.normpath(path)])
+                except OSError:
+                    pass
+                return
             box = QMessageBox(self)
             box.setWindowTitle(tr("导出完成"))
             box.setText(tr("视频已生成：\n{path}", path=path))
@@ -2340,8 +2371,10 @@ def run_gui() -> int:
                 ev.acceptProposedAction()
 
         def dropEvent(self, ev):
-            paths = [u.toLocalFile() for u in ev.mimeData().urls()
-                     if u.isLocalFile()]
+            # 拖一整个文件夹进来 = 里面能用的全要
+            paths = expand_paths([u.toLocalFile()
+                                  for u in ev.mimeData().urls()
+                                  if u.isLocalFile()])
             imgs = [p for p in paths if os.path.splitext(p)[1].lower() in IMG_EXTS]
             audio = [p for p in paths
                      if os.path.splitext(p)[1].lower() in AUDIO_EXTS]
