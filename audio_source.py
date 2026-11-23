@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""audio_source —— 统一取音源：B 站 / 其它平台（yt-dlp）/ 本地文件。
+"""audio_source —— 统一取音源：B站 / 其它平台（yt-dlp）/ 本地文件。
 
 用户拍板的分工：
-  B 站：用仓内已验证的 bili_audio.py（纯标准库，无 Cookie，取整条音轨）；
+  B站：用仓内已验证的 bili_audio.py（纯标准库，无 Cookie，取整条音轨）；
   抖音 / YouTube / 快手 / 小红书 / 微博等：用 yt-dlp。它**不随工具发布**，
       第一次要用时在设置里点一下「下载音源组件」（pip --target 到 tools/），
       不想用了点「删除」就干净移除，工具本身永远能跑。
@@ -141,7 +141,7 @@ def fetch_audio(source: str, out_path: str = None, progress=None,
                 timeout: int = 900) -> tuple:
     """把任意来源变成一条本地音轨文件。
 
-    source: B 站链接/BV 号、其它平台链接、或本地音视频路径
+    source: B站链接/BV 号、其它平台链接、或本地音视频路径
     返回 (path, kind)，kind 为 "bili" / "web" / "local"
     """
     src = (source or "").strip().strip('"')
@@ -164,7 +164,7 @@ def fetch_audio(source: str, out_path: str = None, progress=None,
     if kind == "bili":
         from bili_audio import bili_audio
         if progress:
-            progress(tr("正在取 B 站音轨…"))
+            progress(tr("正在取 B站音轨…"))
         return bili_audio(src, out_path=out_path, timeout=timeout // 10), "bili"
 
     # 其它平台：yt-dlp

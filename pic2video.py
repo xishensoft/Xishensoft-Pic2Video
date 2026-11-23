@@ -5,7 +5,7 @@
 bilibili 链接整条取下来（不分离人声）。
 
 用法：
-  双击「启动.bat」打开窗口：拖图 → 粘 B 站链接 → 预览 → 导出。
+  双击「启动.bat」打开窗口：拖图 → 粘 B站链接 → 预览 → 导出。
   命令行（脚本/测试用）：
     python pic2video.py --export 输出.mp4 --audio 本地音频.m4a 图1 图2 ...
     python pic2video.py --export 输出.mp4 --bili BV1xx411c7mD 图1 图2 ... --total 12
@@ -357,7 +357,7 @@ def is_hex_color(value: str) -> bool:
 EXPORT_PRESETS = {
     "generic": {"label": "通用（沿用设置）", "w": None, "h": None,
                 "fps": None, "crf": None, "ab": None, "suffix": ""},
-    "bilibili": {"label": "B 站 1080p60", "w": 1920, "h": 1080,
+    "bilibili": {"label": "B站 1080p60", "w": 1920, "h": 1080,
                  "fps": 60, "crf": 18, "ab": "192k", "suffix": "_bilibili"},
     "douyin": {"label": "抖音 1080×1920", "w": 1080, "h": 1920,
                "fps": 30, "crf": 20, "ab": "128k", "suffix": "_douyin"},
@@ -418,7 +418,7 @@ def estimate_kbps(plan: dict) -> int:
 def rescale_counts(counts, from_fps: int, to_fps: int) -> list[int]:
     """按另一个帧率重算每段帧数；工程不动，成片时长不变。
 
-    导出预设会换帧率（B 站 60，其它 30），而时间线帧数是按设置里的帧率
+    导出预设会换帧率（B站 60，其它 30），而时间线帧数是按设置里的帧率
     存的；不换算成片就会变短或变长，所以渲染前先换一遍。
     """
     f = int(from_fps or 30)
@@ -4360,7 +4360,7 @@ def cli_export(argv: list[str]) -> int:
     ap.add_argument("--export", required=True, help=tr("输出 mp4 路径"))
     ap.add_argument("--audio",
                     help=tr("本地音视频文件，或抖音 / YouTube 等视频链接"))
-    ap.add_argument("--bili", help=tr("B 站链接或 BV 号（同 --audio）"))
+    ap.add_argument("--bili", help=tr("B站链接或 BV 号（同 --audio）"))
     ap.add_argument("--total", type=float, help=tr("每段素材的秒数（默认均分音乐）"))
     ap.add_argument("--keep-audio", action="store_true",
                     help=tr("保留取下来的音频文件"))
@@ -4828,7 +4828,7 @@ def run_gui() -> int:
 
             self.cmb_fps = QComboBox()
             for value in EXPORT_FPS:
-                self.cmb_fps.addItem("%d fps" % value, value)
+                self.cmb_fps.addItem(tr("%d 帧/秒") % value, value)
             self.spin_crf = QSpinBox()
             self.spin_crf.setRange(0, 51)
             self.spin_crf.setToolTip(tr("数字越小越清晰、文件越大；常见 18～23"))
@@ -5323,7 +5323,7 @@ def run_gui() -> int:
                 parent, caption, directory) or ""
 
     class FetchWorker(QThread):
-        """取音源：B 站走自带解析，其它平台走 yt-dlp，本地文件直接用。"""
+        """取音源：B站走自带解析，其它平台走 yt-dlp，本地文件直接用。"""
 
         ok = pyqtSignal(str, float)
         bad = pyqtSignal(str)
@@ -8787,7 +8787,7 @@ def run_gui() -> int:
             bgm.addWidget(self.lbl_bgm)
             self.edit_bgm = QLineEdit()
             self.edit_bgm.setPlaceholderText(
-                tr("B 站 / 抖音 / YouTube / 快手等链接，或把本地音视频拖进来，自动取整条音轨"))
+                tr("B站 / 抖音 / YouTube / 快手等链接，或把本地音视频拖进来，自动取整条音轨"))
             self.edit_bgm.textEdited.connect(self.on_bgm_typed)
             self.edit_bgm.returnPressed.connect(self.start_fetch)
             bgm.addWidget(self.edit_bgm, 1)
@@ -8953,7 +8953,7 @@ def run_gui() -> int:
             self.spin_total.setSuffix(tr(" 秒"))
             self.lbl_bgm.setText(tr("音乐链接"))
             self.edit_bgm.setPlaceholderText(
-                tr("B 站 / 抖音 / YouTube / 快手等链接，或把本地音视频拖进来，自动取整条音轨"))
+                tr("B站 / 抖音 / YouTube / 快手等链接，或把本地音视频拖进来，自动取整条音轨"))
             self.btn_retry.setText(tr("重试"))
             self.btn_export.setText(tr("导出视频"))
             tier = ui_tier(self.settings["ui"])
@@ -11045,7 +11045,7 @@ def run_gui() -> int:
             self.fetch_worker.start()
 
         def _offer_ytdlp(self) -> bool:
-            """非 B 站链接需要音源组件时问一句，点了就后台装。"""
+            """非 B站链接需要音源组件时问一句，点了就后台装。"""
             yes = MsgBox.ask(
                 self, tr("需要音源组件"),
                 tr("这个平台的链接要靠 yt-dlp 解析（约 25 MB，"
