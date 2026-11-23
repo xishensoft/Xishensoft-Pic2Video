@@ -46,7 +46,7 @@ components.prepend_path()      # tools/ 里的 ffmpeg 优先于系统那份
 # exe 是窗口程序，没有控制台：起子进程时别让它继承无效的句柄
 CREATION_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.2.0"
 
 WIDTH, HEIGHT, FPS = 1920, 1080, 30
 PREVIEW_W, PREVIEW_H = 960, 540
@@ -1872,7 +1872,11 @@ class Project:
     def normalize(self):
         if self.mode == "material":
             self.apply_material()
-            return
+        else:
+            self._normalize_durations()
+        self.fit_transitions()
+
+    def _normalize_durations(self):
         t = self.target()
         imgs = self.images()
         if t is None or not imgs:
@@ -1908,6 +1912,7 @@ class Project:
         imgs = self.images()
         if t is None:
             clip.dur = max(MIN_DUR, value)
+            self.fit_transitions()
             return
         room = max(MIN_DUR * len(imgs), t - self.fixed_span())
         pos = imgs.index(clip)
@@ -1919,6 +1924,7 @@ class Project:
         for c, d in zip(imgs, durs):
             c.dur = d
         self._fix_sum(room)
+        self.fit_transitions()
 
     def set_video_len(self, index: int, value: float):
         """改片头 / 片尾这类视频元素播多久：比原片短就截短，长就循环。"""
@@ -1928,6 +1934,7 @@ class Project:
         if not clip.is_video:
             return
         clip.dur = max(MIN_DUR, float(value))
+        self.fit_transitions()
         t = self.target()
         imgs = self.images()
         if t is not None and imgs:
@@ -1942,6 +1949,7 @@ class Project:
         end = clip.dur if clip.src_out is None else clip.src_out
         room = max(0.0, end - self._min_frame())
         clip.src_in = max(0.0, min(float(value), room))
+        self.fit_transitions()
 
     def set_src_out(self, index: int, value: float):
         """拖右边 / 按 O：改出点，最长到源时长，最短留一帧。"""
@@ -1950,6 +1958,32 @@ class Project:
             return
         clip.src_out = max(clip.src_in + self._min_frame(),
                            min(float(value), clip.dur))
+        self.fit_transitions()
+
+    def fit_transitions(self) -> int:
+        """切段/改时长后，把放不下的转场缩到能放下，免得导出时才报错。
+
+        只动「手动定了时长」的转场：跟随全局的那些由 _xfade_plan 按可用空间收，
+        本来就放得下。返回被改动的边界数。
+        """
+        changed = 0
+        for i, clip in enumerate(self.clips):
+            if clip.xfade_dur is None:
+                continue
+            if not (clip.xfade or clip.xfade_name):
+                continue
+            nxt = self.clips[i + 1] if i + 1 < len(self.clips) else None
+            room = min(clip.span, nxt.span if nxt is not None else 0.0) / 2.0
+            if clip.xfade_dur <= room + 1e-9:
+                continue
+            if room < XFADE_MIN:
+                clip.xfade = False
+                clip.xfade_name = ""
+                clip.xfade_dur = None
+            else:
+                clip.xfade_dur = round(room, 2)
+            changed += 1
+        return changed
 
     def _video_at(self, index: int):
         if not (0 <= index < len(self.clips)):
@@ -2079,6 +2113,7 @@ class Project:
                     right = Clip(c.path, span - off, c.kind, c.fade, c.xfade)
                     c.dur = off
                 self.clips.insert(i + 1, right)
+                self.fit_transitions()
                 return True
             acc += span
         return False
@@ -2776,7 +2811,13 @@ class Scene:
             d_next = (self.overlaps[i] / float(self.fps)
                       if i < len(self.overlaps) else 0.0)
             acc += seg - d_next
-        self.overlays = [dict(o) for o in (overlays or [])]
+        specs: list[dict] = []
+        for item in overlays or []:
+            if isinstance(item, dict):
+                specs.append(dict(item))
+            else:                      # 直接传 Overlay 对象（界面走这条）
+                specs.extend(overlay_specs([item], 0, self.total))
+        self.overlays = specs
 
     # -- 画面 -----------------------------------------------------------
     def _blank(self, color="#000000"):
@@ -7868,7 +7909,7 @@ def run_gui() -> int:
             if row < 0:
                 self.timeline.set_selection([])
             else:
-                rows = [i.row() for i in self.list.selectedItems()]
+                rows = [self.list.row(it) for it in self.list.selectedItems()]
                 self.timeline.set_selection(rows or [row])
 
         def on_mode(self, mode):
@@ -7934,6 +7975,10 @@ def run_gui() -> int:
             return -1, 0.0
 
         def _playhead(self) -> float:
+            # 还没有音源（刚打开工程、混音没跑完）时播放器位置恒为 0，
+            # 这时用时间线上的播放头，免得设入点/切段读到 0。
+            if self.player.source().isEmpty():
+                return max(0.0, self.timeline.play_pos)
             return max(0.0, self.player.position() / 1000.0)
 
         def _text_focused(self) -> bool:

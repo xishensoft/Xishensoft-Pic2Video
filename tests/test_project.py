@@ -3224,6 +3224,42 @@ else:
     _sv68.close()
     check("关掉场景会放掉视频管道", not _sv68._readers)
 
+# 54 切段 / 改时长后自动收转场（免得导出时才报「转场放不下」）
+_pj54 = p.Project()
+_pj54.clips = [p.Clip(IMG[0], 2.0, xfade=True, xfade_name="wipeleft",
+                       xfade_dur=1.5), p.Clip(IMG[1], 2.0)]
+_n54 = _pj54.fit_transitions()
+check("转场超过可用的一半就缩到一半",
+      _n54 == 1 and abs(_pj54.clips[0].xfade_dur - 1.0) < 1e-9,
+      (_n54, _pj54.clips[0].xfade_dur))
+_pj54.clips[1].dur = 0.1
+_n54 = _pj54.fit_transitions()
+check("连最短转场都塞不下就让开",
+      _n54 == 1 and not _pj54.clips[0].xfade
+      and _pj54.clips[0].xfade_name == ""
+      and _pj54.clips[0].xfade_dur is None,
+      (_pj54.clips[0].xfade, _pj54.clips[0].xfade_name))
+_pj54b = p.Project()
+_pj54b.clips = [p.Clip(IMG[0], 3.0, xfade=True, xfade_name="radial",
+                       xfade_dur=0.8), p.Clip(IMG[1], 3.0)]
+_pj54b.split_at(0.5)
+check("切一刀顺手收转场（0.5 秒的段只放 0.25）",
+      abs(_pj54b.clips[0].xfade_dur - 0.25) < 1e-9,
+      _pj54b.clips[0].xfade_dur)
+_pj54c = p.Project()
+_pj54c.mode = "free"
+_pj54c.clips = [p.Clip(IMG[0], 2.0, xfade=True, xfade_name="fade",
+                       xfade_dur=0.8), p.Clip(IMG[1], 2.0)]
+_pj54c.set_duration(0, 0.6)
+check("改短一张也顺手收",
+      _pj54c.clips[0].xfade_dur <= 0.3 + 1e-9, _pj54c.clips[0].xfade_dur)
+_pj54d = p.Project()
+_pj54d.clips = [p.Clip(IMG[0], 2.0, xfade=True, xfade_name="fade"),
+                p.Clip(IMG[1], 2.0)]
+check("跟随全局时长的转场不被动",
+      _pj54d.fit_transitions() == 0 and _pj54d.clips[0].xfade_dur is None,
+      _pj54d.clips[0].xfade_dur)
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

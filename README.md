@@ -293,7 +293,7 @@ components.py    ffmpeg / yt-dlp 的按需下载与删除
 theme.py         主题、主色/对撞色、QSS
 i18n.py          五种语言的词条
 启动.bat          双击开窗口
-tests/           单元检查（867 条）
+tests/           单元检查（938 条）
 docs/            研究笔记、设计记录（wayfinder 票）与原始探针脚本
 screenshots/     README 里的截图
 ```
