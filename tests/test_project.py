@@ -3788,6 +3788,55 @@ check("三档词条四语齐全",
       [k for k in _tier_keys
        if any(k not in _i18n.get(l) for l in ("zh-TW", "en", "ja", "ko"))])
 
+# ---------------- 76 配音页：设置、接线与词条
+_s76 = p.Settings(os.path.join(tmp, "settings_tts.json"))
+check("配音默认走 Edge", _s76["tts_provider"] == "edge")
+check("配音默认音色是晓晓", _s76["tts_voice"] == "zh-CN-XiaoxiaoNeural")
+check("配音默认原速", _s76["tts_rate"] == 0)
+check("配音默认段间停 0.6 秒", abs(float(_s76["tts_gap"]) - 0.6) < 1e-6)
+check("配音默认开清理", _s76["tts_cleanup"] is True)
+check("key 默认是空表", _s76["tts_keys"] == {})
+
+_s76b = p.Settings(os.path.join(tmp, "settings_tts2.json"))
+_s76b.update(tts_provider="nope", tts_rate=999, tts_gap=-3, tts_cleanup="x",
+             tts_keys={"gemini": "  g-key  ", "azure": 5, "evil": "z"})
+check("认不出的服务商回落 edge", _s76b["tts_provider"] == "edge")
+check("语速夹到上限", _s76b["tts_rate"] == p.tts_engine.TTS_MAX_RATE)
+check("段间停顿夹到 0", _s76b["tts_gap"] == 0.0)
+check("清理开关非 bool 回 True", _s76b["tts_cleanup"] is True)
+check("key 只收认识的、去空白",
+      _s76b["tts_keys"] == {"gemini": "g-key"}, _s76b["tts_keys"])
+
+check("配音工作线程在", "class TtsWorker(QThread)" in _src)
+check("工作线程把 Event 交给引擎", "cancel=self._stop, **self.kwargs)" in _src)
+check("工作线程调 synth_plan", "tts_engine.synth_plan(" in _src)
+check("左栏有配音页", 'addTab(voice_page, tr("配音"))' in _src)
+check("配音页只在标准以上出现",
+      "self.left_tabs.setTabVisible(3, advanced)" in _src)
+check("配音页有开始/取消/试听", all(x in _src for x in (
+    "self.btn_tts_start", "self.btn_tts_cancel", "self.btn_tts_audition")))
+check("配音页有提供方与音色下拉",
+      "self.cmb_tts_provider" in _src and "self.cmb_tts_voice" in _src)
+check("合成就写旁白", "set_narration(self.project" in _src)
+check("合完切跟旁白模式", "set_narration(" in _src)
+check("设置页有四个 key 输入框", all(x in _src for x in (
+    "self.edit_key_gemini", "self.edit_key_azure", "self.edit_key_openai")))
+check("设置页存 key", "tts_keys={" in _src.replace(" ", ""))
+check("设置页有代理与停顿",
+      "self.edit_tts_proxy" in _src and "self.spin_tts_gap" in _src)
+check("配音页词条四语齐全",
+      all(k in _i18n.get(lang, {}) for k in (
+          "配音", "配音服务", "音色", "语速", "开始合成", "试听",
+          "还没有旁白", "旁白好了：{dur}", "配音失败")
+          for lang in ("zh-TW", "en", "ja", "ko")),
+      [k for k in ("配音", "配音服务", "音色", "语速", "开始合成", "试听")
+       if any(k not in _i18n.get(l) for l in ("zh-TW", "en", "ja", "ko"))])
+check("提供方名字有译文",
+      all(k in _i18n.get(lang, {}) for k in (
+          "Edge（免费）", "Azure 语音", "OpenAI 兼容端点")
+          for lang in ("zh-TW", "en", "ja", "ko")))
+
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

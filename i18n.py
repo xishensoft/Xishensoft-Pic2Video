@@ -2876,3 +2876,114 @@ _TR_EXTRA43 = {
 for _k, _trs in _TR_EXTRA43.items():
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA44 = {
+    "跟旁白": ("跟旁白", "Follow narration", "ナレーションに合わせる", "내레이션에 맞추기"),
+    "按配音页生成的旁白长度铺满画面，画面不会比声音长": (
+        "依配音頁生成的旁白長度鋪滿畫面，畫面不會比聲音長",
+        "Fill the pictures to the narration length made on the Voice tab, "
+        "so the picture never outlasts the sound",
+        "音声タブで作ったナレーションの長さに合わせて画面を埋めます。"
+        "映像が音より長くなることはありません",
+        "더빙 탭에서 만든 내레이션 길이에 맞춰 화면을 채웁니다. "
+        "화면이 소리보다 길어지지 않습니다"),
+    "另存 .srt…": ("另存 .srt…", "Save as .srt…", ".srt で保存…", ".srt로 저장…"),
+    "把当前字幕存成 .srt：时间轴按成片时间算，能直接贴到别处": (
+        "把目前字幕存成 .srt：時間軸按成片時間算，能直接貼到別處",
+        "Save the current subtitles as .srt, timed on the finished film, "
+        "so you can paste them elsewhere",
+        "今の字幕を .srt で保存します。時間は完成品の時間軸なので、"
+        "そのまま他所に貼れます",
+        "지금 자막을 .srt로 저장합니다. 시간은 완성본 기준이라 "
+        "그대로 다른 곳에 붙일 수 있습니다"),
+    "先导入字幕，或者到「配音」页生成，再来另存。": (
+        "先匯入字幕，或者到「配音」頁生成，再來另存。",
+        "Import subtitles first, or make them on the Voice tab, then save.",
+        "先に字幕を読み込むか、「音声」タブで作ってから保存してください。",
+        "먼저 자막을 가져오거나 '더빙' 탭에서 만든 뒤 저장하세요."),
+    "字幕另存为…": ("字幕另存為…", "Save subtitles as…", "字幕を別名で保存…",
+                "자막 다른 이름으로 저장…"),
+    "字幕没存下去": ("字幕沒存下去", "Could not save the subtitles",
+                "字幕を保存できませんでした", "자막을 저장하지 못했습니다"),
+    "字幕已存到：{path}": ("字幕已存到：{path}", "Subtitles saved to: {path}",
+                     "字幕を保存しました：{path}", "자막 저장됨: {path}"),
+    "旁白 {name}": ("旁白 {name}", "Narration {name}", "ナレーション {name}",
+                 "내레이션 {name}"),
+}
+for _k, _trs in _TR_EXTRA44.items():
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
+        TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA45 = {
+    "字幕 (*.srt)": ("字幕 (*.srt)", "Subtitles (*.srt)", "字幕 (*.srt)",
+                     "자막 (*.srt)"),
+}
+for _k, _trs in _TR_EXTRA45.items():
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
+        TR[_lang].setdefault(_k, _v)
+
+# ---- 配音页（TTS）
+_TR_EXTRA46 = [
+    ('0 是原速；正数更快，负数更慢', '0 是原速；正數更快，負數更慢', '0 is normal speed; positive is faster, negative slower', '0 が標準速度。正の値で速く、負の値で遅くなります', '0은 원래 속도, 양수는 더 빠르게, 음수는 더 느리게'),
+    ('Edge 配音免费、不用 key；Gemini / Azure / OpenAI 兼容端点要填自己的 key。key 明文存在本机设置文件里，不会上传到别处。', 'Edge 配音免費、不用 key；Gemini / Azure / OpenAI 相容端點要填自己的 key。key 以明文存在本機設定檔裡，不會上傳到別處。', 'Edge is free and needs no key; Gemini, Azure and OpenAI-compatible endpoints need your own key. Keys are stored in plain text in the local settings file and are never uploaded.', 'Edge は無料で key 不要です。Gemini / Azure / OpenAI 互換エンドポイントはご自身の key が必要です。key はローカルの設定ファイルに平文で保存され、外部へ送信されません。', 'Edge는 무료이며 key가 필요 없습니다. Gemini / Azure / OpenAI 호환 엔드포인트는 각자 key가 필요합니다. key는 로컬 설정 파일에 평문으로 저장되며 외부로 전송되지 않습니다.'),
+    ('{name} 得先在「设置 → 配音」里填自己的 key。', '{name} 得先在「設定 → 配音」裡填自己的 key。', 'Fill in your key for {name} under Settings → Voice first.', 'まず「設定 → 音声」で {name} の key を入力してください。', "먼저 '설정 → 더빙'에서 {name}의 key를 입력하세요."),
+    ('{name} 要自己的 key：填在「设置 → 配音」里。', '{name} 要自己的 key：填在「設定 → 配音」裡。', '{name} needs your own key: enter it under Settings → Voice.', '{name} はご自身の key が必要です。「設定 → 音声」で入力してください。', "{name}은(는) 각자 key가 필요합니다. '설정 → 더빙'에서 입력하세요."),
+    ('下拉里是常用音色，也能直接敲服务商的音色名', '下拉裡是常用音色，也能直接敲服務商的音色名', 'The list has common voices; you can also type any voice name the provider supports', '一覧はよく使う音色です。サービス側の音色名を直接入力もできます', '목록은 자주 쓰는 음성이며, 서비스의 음성 이름을 직접 입력할 수도 있습니다'),
+    ('会切成 {n} 段，共 {chars} 字', '會切成 {n} 段，共 {chars} 字', 'Will split into {n} parts, {chars} characters in total', '{n} 個に分割、合計 {chars} 文字', '{n}개 구간으로 나뉘며 총 {chars}자'),
+    ('例如 eastasia', '例如 eastasia', 'e.g. eastasia', '例: eastasia', '예: eastasia'),
+    ('例如 http://127.0.0.1:7890（留空 = 直连）', '例如 http://127.0.0.1:7890（留空 = 直連）', 'e.g. http://127.0.0.1:7890 (empty = direct)', '例: http://127.0.0.1:7890（空欄 = 直接接続）', '예: http://127.0.0.1:7890 (비우면 직접 연결)'),
+    ('例如 https://api.siliconflow.cn/v1（留空 = 官方地址）', '例如 https://api.siliconflow.cn/v1（留空 = 官方位址）', 'e.g. https://api.siliconflow.cn/v1 (empty = official endpoint)', '例: https://api.siliconflow.cn/v1（空欄 = 公式アドレス）', '예: https://api.siliconflow.cn/v1 (비우면 공식 주소)'),
+    ('先把文稿贴到左边，再来合成。', '先把文稿貼到左邊，再來合成。', 'Paste your script on the left first, then synthesize.', 'まず左側に原稿を貼り付けてから合成してください。', '먼저 왼쪽에 원고를 붙여넣은 뒤 합성하세요.'),
+    ('只合成头一段，听听音色合不合适', '只合成頭一段，聽聽音色合不合適', 'Synthesize just the first part to check the voice', '最初の 1 区間だけ合成して声を確かめます', '첫 구간만 합성해 음성을 들어봅니다'),
+    ('合成完了却没拿到可用的音频', '合成完了卻沒拿到可用的音訊', 'Synthesis finished but no usable audio came back', '合成は終わりましたが、使える音声が得られませんでした', '합성은 끝났지만 쓸 수 있는 오디오가 없습니다'),
+    ('合成完顺手清一下音频（去咔哒、去噗声、剪掉多余静音）', '合成完順手清一下音訊（去咔噠、去噗聲、剪掉多餘靜音）', 'Clean up the audio after synthesis (remove clicks, plosives and extra silence)', '合成後に音声を整える（クリック音・ポップ音・余分な無音を除去）', '합성 후 오디오를 정리합니다 (딸깍 소리, 팝 노이즈, 여분의 무음 제거)'),
+    ('在这里贴文稿……', '在這裡貼文稿……', 'Paste your script here…', 'ここに原稿を貼り付け…', '여기에 원고를 붙여넣으세요…'),
+    ('已取消配音', '已取消配音', 'Voice-over cancelled', '音声合成を中止しました', '더빙을 취소했습니다'),
+    ('已合成 {done}/{total} 段', '已合成 {done}/{total} 段', '{done}/{total} parts done', '{done}/{total} 区間を合成済み', '{done}/{total}개 구간 합성됨'),
+    ('已合成 {done}/{total} 段（{cached} 段用缓存）', '已合成 {done}/{total} 段（{cached} 段用快取）', '{done}/{total} parts done ({cached} from cache)', '{done}/{total} 区間を合成済み（{cached} 区間はキャッシュ）', '{done}/{total}개 구간 합성됨 ({cached}개는 캐시)'),
+    ('已载入文稿：{name}', '已載入文稿：{name}', 'Script loaded: {name}', '原稿を読み込みました: {name}', '원고를 불러왔습니다: {name}'),
+    ('开始合成', '開始合成', 'Start synthesis', '合成を開始', '합성 시작'),
+    ('开始合成，共 {n} 段…', '開始合成，共 {n} 段…', 'Synthesizing {n} parts…', '合成中、全 {n} 区間…', '{n}개 구간 합성 중…'),
+    ('打开文稿…', '開啟文稿…', 'Open script…', '原稿を開く…', '원고 열기…'),
+    ('把文稿贴进来：一句一行、或者整段都行，会自动切段', '把文稿貼進來：一句一行、或者整段都行，會自動切段', 'Paste the script: one sentence per line or one big block both work, it splits automatically', '原稿を貼り付けてください。1 行 1 文でもまとめてでも、自動で分割します', '원고를 붙여넣으세요. 한 줄에 한 문장이든 통째로든 자동으로 나눕니다'),
+    ('换一个 UTF-8 的 .txt / .md 试试：', '換一個 UTF-8 的 .txt / .md 試試：', 'Try a UTF-8 .txt / .md instead: ', 'UTF-8 の .txt / .md を試してください: ', 'UTF-8 .txt / .md 파일로 시도해 보세요: '),
+    ('文稿 (*.txt *.md)', '文稿 (*.txt *.md)', 'Scripts (*.txt *.md)', '原稿 (*.txt *.md)', '원고 (*.txt *.md)'),
+    ('旁白好了：{dur}', '旁白好了：{dur}', 'Voice-over ready: {dur}', 'ナレーション完成: {dur}', '내레이션 완료: {dur}'),
+    ('旁白好了：{dur}，{n} 条字幕。总长已改成「跟旁白」。', '旁白好了：{dur}，{n} 條字幕。總長已改成「跟旁白」。', 'Voice-over ready: {dur}, {n} subtitles. Duration mode switched to follow the voice-over.', 'ナレーション完成: {dur}、字幕 {n} 件。長さモードをナレーションに合わせるに変更しました。', '내레이션 완료: {dur}, 자막 {n}개. 길이 모드를 내레이션 따르기로 바꿨습니다.'),
+    ('旁白：{name} · {dur} · {n} 条字幕', '旁白：{name} · {dur} · {n} 條字幕', 'Voice-over: {name} · {dur} · {n} subtitles', 'ナレーション: {name} · {dur} · 字幕 {n} 件', '내레이션: {name} · {dur} · 자막 {n}개'),
+    ('正在停…', '正在停…', 'Stopping…', '停止中…', '중지 중…'),
+    ('正在合成 %v/%m 段', '正在合成 %v/%m 段', 'Synthesizing %v/%m', '合成中 %v/%m', '합성 중 %v/%m'),
+    ('清空', '清空', 'Clear', 'クリア', '지우기'),
+    ('生成旁白', '產生旁白', 'Generate voice-over', 'ナレーション生成', '내레이션 생성'),
+    ('试听', '試聽', 'Preview voice', '試聴', '미리 듣기'),
+    ('试听中：不喜欢就换个音色', '試聽中：不喜歡就換個音色', 'Playing the sample — switch voices if you do not like it', '試聴中。合わなければ音色を変えてください', '미리 듣는 중입니다. 마음에 안 들면 음성을 바꾸세요'),
+    ('语速', '語速', 'Rate', '速度', '속도'),
+    ('读不了文稿', '讀不了文稿', 'Cannot read the script', '原稿を読めません', '원고를 읽을 수 없습니다'),
+    ('贴好文稿，选个音色，就能合成', '貼好文稿，選個音色，就能合成', 'Paste a script, pick a voice, and synthesize', '原稿を貼って音色を選べば合成できます', '원고를 붙여넣고 음성을 고르면 합성할 수 있습니다'),
+    ('还没有文稿', '還沒有文稿', 'No script yet', '原稿がまだありません', '아직 원고가 없습니다'),
+    ('还没有旁白', '還沒有旁白', 'No voice-over yet', 'ナレーションはまだありません', '아직 내레이션이 없습니다'),
+    ('这家要 key', '這家要 key', 'This provider needs a key', 'このサービスは key が必要です', '이 서비스는 key가 필요합니다'),
+    ('选文稿', '選文稿', 'Choose a script', '原稿を選択', '원고 선택'),
+    ('配音', '配音', 'Voice-over', '音声', '더빙'),
+    ('配音失败', '配音失敗', 'Voice-over failed', '音声合成に失敗', '더빙 실패'),
+    ('配音服务', '配音服務', 'Provider', 'サービス', '서비스'),
+    ('配音没成：{msg}', '配音沒成：{msg}', 'Voice-over failed: {msg}', '音声合成に失敗: {msg}', '더빙 실패: {msg}'),
+    ('音色', '音色', 'Voice', '音色', '음성'),
+    ('Edge（免费）', 'Edge（免費）', 'Edge (free)', 'Edge（無料）', 'Edge (무료)'),
+    ('Gemini', 'Gemini', 'Gemini', 'Gemini', 'Gemini'),
+    ('Azure 语音', 'Azure 語音', 'Azure Speech', 'Azure 音声', 'Azure 음성'),
+    ('OpenAI 兼容端点', 'OpenAI 相容端點', 'OpenAI-compatible endpoint', 'OpenAI 互換エンドポイント', 'OpenAI 호환 엔드포인트'),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA46:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA47 = [
+    ('Azure 区域', 'Azure 區域', 'Azure region', 'Azure リージョン', 'Azure 지역'),
+    ('OpenAI 兼容地址', 'OpenAI 相容位址', 'OpenAI-compatible base URL', 'OpenAI 互換アドレス', 'OpenAI 호환 주소'),
+    ('段间停顿', '段間停頓', 'Pause between parts', '区間の間隔', '구간 사이 쉼'),
+    ('配音代理', '配音代理', 'Voice proxy', '音声用プロキシ', '더빙 프록시'),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA47:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)

@@ -36,6 +36,7 @@ if HERE not in sys.path:
 
 import components
 import theme
+import tts_engine
 from audio_source import (AUDIO_EXTS, SourceError, fetch_audio, install_ytdlp,
                           kind_of, remove_ytdlp, ytdlp_ready, ytdlp_version)
 from i18n import (LOCALES, LOCALE_LABELS, SYSTEM, bili_message,
@@ -255,7 +256,8 @@ RATIO_VALUE = {"16:9": 16 / 9, "9:16": 9 / 16, "1:1": 1.0, "4:5": 0.8,
 SHORT_SIDE = 1080  # 选比例时按短边 1080 给出预设尺寸
 QUALITY = {"高": 18, "标准": 20, "小体积": 23}
 MODE_LABELS = {"bgm": "跟 BGM", "material": "跟素材总长",
-               "total": "自设总长", "free": "逐张秒数"}
+               "total": "自设总长", "free": "逐张秒数",
+               "voice": "跟旁白"}
 MODE_BY_LABEL = {v: k for k, v in MODE_LABELS.items()}
 # 交叉淡化能用的转场：全是 ffmpeg xfade 的内置名，不吃外部文件
 XFADE_NAMES = ("fade", "fadeblack", "wipeleft", "wiperight", "wipeup",
@@ -535,6 +537,17 @@ class Settings:
         "crop_focus": "center",   # 裁切铺满时留中心 / 偏上 / 偏下
         "subtitle_font": "Microsoft YaHei",   # 烧字幕用的字体
         "subtitle_size": 48,      # 字号（按成片像素算）
+        # 配音（文稿 -> TTS -> 旁白 + 字幕）
+        "tts_provider": "edge",   # edge / gemini / azure / openai
+        "tts_voice": "zh-CN-XiaoxiaoNeural",   # 上次用的音色
+        "tts_rate": 0,            # 语速（%，-50..100）
+        "tts_keys": {},           # 各家的 key：{"gemini": "...", "azure": "..."}
+        "tts_azure_region": "eastasia",
+        "tts_base_url": "",       # OpenAI 兼容端点（硅基流动/火山/MiniMax 等）
+        "tts_proxy": "",          # 合成时走这个代理，空 = 直连
+        "tts_gap": 0.6,           # 段与段之间的停顿（秒）
+        "tts_cleanup": True,      # 合成完顺手清一下（去咔哒、去噗声）
+        "tts_script": "",         # 上次的文稿，重开还在
         "preview_quality": "normal",   # 样片清晰度：fast/normal/sharp/full
         "preview_speed": 1.0,          # 上次用的预览倍速（0.5..2.0）
         "open_after_export": True,   # 导出完自动打开所在文件夹
@@ -696,6 +709,38 @@ class Settings:
                 d.get("subtitle_size", 48)))))
         except (TypeError, ValueError):
             d["subtitle_size"] = 48
+        # 配音：服务名必须认识，key 只收字符串，语速和停顿夹进合理范围
+        if d.get("tts_provider") not in tts_engine.TTS_PROVIDERS:
+            d["tts_provider"] = "edge"
+        if not isinstance(d.get("tts_voice"), str):
+            d["tts_voice"] = "zh-CN-XiaoxiaoNeural"
+        try:
+            d["tts_rate"] = int(min(tts_engine.TTS_MAX_RATE,
+                                    max(tts_engine.TTS_MIN_RATE,
+                                        int(d.get("tts_rate", 0)))))
+        except (TypeError, ValueError):
+            d["tts_rate"] = 0
+        keys = d.get("tts_keys")
+        clean = {}
+        if isinstance(keys, dict):
+            for k, v in keys.items():
+                if k in tts_engine.TTS_PROVIDERS and isinstance(v, str):
+                    clean[k] = v.strip()
+        d["tts_keys"] = clean
+        for key, fallback in (("tts_azure_region", "eastasia"),
+                              ("tts_base_url", ""), ("tts_proxy", ""),
+                              ("tts_script", "")):
+            v = d.get(key)
+            d[key] = v.strip() if isinstance(v, str) else fallback
+        if not d.get("tts_azure_region"):
+            d["tts_azure_region"] = "eastasia"
+        try:
+            d["tts_gap"] = float(min(5.0, max(0.0, float(
+                d.get("tts_gap", 0.6)))))
+        except (TypeError, ValueError):
+            d["tts_gap"] = 0.6
+        if not isinstance(d.get("tts_cleanup"), bool):
+            d["tts_cleanup"] = True
         if d.get("preview_quality") not in PREVIEW_QUALITY:
             d["preview_quality"] = "normal"
         try:
@@ -1618,6 +1663,8 @@ class Project:
         self.subtitles_path = ""      # 导入的字幕文件（工程里记着，方便重定位）
         self.cues: list[dict] = []    # 解析好的字幕条目，时间对齐成片总轴
         self.export_preset = "generic"   # 上次选的导出预设（跟着工程存）
+        self.narration_path = ""      # 配音旁白（跟旁白模式按它定时长）
+        self.narration_dur = 0.0
 
     # -- 背景音乐：还是挂在第一条音频上，命令行/设置都靠它 ---------------
     @property
@@ -1695,6 +1742,7 @@ class Project:
                          for o in self.overlays],
             "subtitles": {"path": self.subtitles_path,
                           "cues": [dict(c) for c in self.cues]},
+            "narration": {"path": self.narration_path, "dur": self.narration_dur},
             "export_preset": self.export_preset,
         }
 
@@ -1738,6 +1786,13 @@ class Project:
         if not isinstance(sub_path, str):
             sub_path = ""
         new_cues = _clean_cues(raw_cues)
+        raw_nar = doc.get("narration") or {}
+        if not isinstance(raw_nar, dict):
+            raw_nar = {}
+        nar_path = raw_nar.get("path") or ""
+        if not isinstance(nar_path, str):
+            nar_path = ""
+        nar_dur = max(0.0, _doc_num(raw_nar.get("dur"), 0.0))
         raw_preset = doc.get("export_preset")
         preset = raw_preset if raw_preset in EXPORT_PRESETS else "generic"
         mode = doc.get("mode")
@@ -1751,6 +1806,8 @@ class Project:
         self.fps = 60 if _doc_num(doc.get("fps"), FPS) >= 50 else 30
         self.subtitles_path = sub_path
         self.cues = new_cues
+        self.narration_path = nar_path
+        self.narration_dur = nar_dur
         self.export_preset = preset
 
     @staticmethod
@@ -1896,6 +1953,8 @@ class Project:
         n = self.image_count()
         if n == 0:
             return None
+        if self.mode == "voice" and self.narration_dur > 0:
+            return self.narration_dur + self.fixed_span()
         if self.mode == "bgm" and self.audio_dur > 0:
             return self.music_length() + self.fixed_span()
         if self.mode == "total":
@@ -2208,6 +2267,10 @@ class Project:
                 for a in self.audios:
                     if a.start >= lo - 1e-6:
                         a.start = max(0.0, a.start - dur)
+        if self.narration_path and not any(a.path == self.narration_path
+                                          for a in self.audios):
+            self.narration_path = ""
+            self.narration_dur = 0.0
 
     def move(self, index: int, delta: int):
         j = index + delta
@@ -2467,6 +2530,26 @@ def clear_subtitles(project):
     """把字幕从工程上摘掉。"""
     project.subtitles_path = ""
     project.cues = []
+
+
+def set_narration(project, path: str, dur: float, cues=None):
+    """把合成好的旁白挂到工程上：一条音频 + 折好行的字幕 + 跟旁白模式。"""
+    dur = max(0.0, _doc_num(dur, 0.0))
+    project.narration_path = str(path or "")
+    project.narration_dur = dur
+    if cues is not None:
+        project.cues = [] if not cues else tts_engine.fold_cues(cues)
+        project.subtitles_path = ""
+    found = False
+    for a in project.audios:
+        if a.path == project.narration_path:
+            a.start, a.dur, a.volume = 0.0, dur, 1.0
+            found = True
+            break
+    if not found and project.narration_path:
+        project.audios.append(AudioClip(project.narration_path, dur, 0.0, 1.0, gap=False))
+    project.mode = "voice"
+    project.normalize()
 
 
 def _ass_time(t: float) -> str:
@@ -5179,6 +5262,50 @@ def run_gui() -> int:
                 self.ok.emit(self.out, self.sig)
 
 
+    class TtsWorker(QThread):
+        """后台合成旁白：按段调 tts_engine，进度往界面回，能中途取消。"""
+
+        progress = pyqtSignal(int, int, int)     # 已完成段数, 总段数, 命中缓存段数
+        ok = pyqtSignal(dict)
+        bad = pyqtSignal(str)
+        stopped = pyqtSignal()
+
+        def __init__(self, plan, kwargs=None, parent=None):
+            super().__init__(parent)
+            self.plan = plan
+            self.kwargs = kwargs or {}
+            # tts_engine 要的是一个 Event（它只看 is_set），不是回调
+            self._stop = threading.Event()
+
+        def cancel(self):
+            self._stop.set()
+
+        def canceled(self) -> bool:
+            return self._stop.is_set()
+
+        def run(self):
+            try:
+                res = tts_engine.synth_plan(
+                    self.plan,
+                    on_progress=lambda done, total, cached: self.progress.emit(
+                        done, total, cached),
+                    cancel=self._stop, **self.kwargs)
+            except tts_engine.TtsError as e:
+                if self.canceled():
+                    self.stopped.emit()
+                else:
+                    self.bad.emit(tts_engine.tts_error_text(e))
+            except Exception as e:  # noqa: BLE001
+                if self.canceled():
+                    self.stopped.emit()
+                else:
+                    self.bad.emit("%s" % e)
+            else:
+                if self.canceled():
+                    self.stopped.emit()
+                else:
+                    self.ok.emit(res)
+
     class ImageList(QListWidget):
         """素材列表。
 
@@ -6521,6 +6648,53 @@ def run_gui() -> int:
             self.spin_sub_size.setSuffix(tr(" 像素"))
             add_row("字幕字号", self.spin_sub_size, normal=True)
 
+            add_sep("配音", normal=True)
+            keys = settings["tts_keys"] or {}
+
+            def key_row(text, name, hint):
+                ed_ = QLineEdit(str(keys.get(name, "")))
+                ed_.setEchoMode(QLineEdit.EchoMode.Password)
+                ed_.setPlaceholderText(tr(hint))
+                add_row(text, ed_, normal=True)
+                return ed_
+
+            self.lbl_tts_note = QLabel(tr(
+                "Edge 配音免费、不用 key；Gemini / Azure / OpenAI 兼容端点要填自己的 key。"
+                "key 明文存在本机设置文件里，不会上传到别处。"))
+            self.lbl_tts_note.setObjectName("hint")
+            self.lbl_tts_note.setWordWrap(True)
+            self._form().addRow(self.lbl_tts_note)
+            self._hide_fields["normal"].append(self.lbl_tts_note)
+            self.edit_key_gemini = key_row(
+                "Gemini key", "gemini", "用 Gemini 配音时填这个")
+            self.edit_key_azure = key_row(
+                "Azure key", "azure", "用 Azure 语音时填这个")
+            self.edit_key_openai = key_row(
+                "OpenAI 兼容 key", "openai", "用 OpenAI 兼容端点配音时填这个")
+            self.edit_azure_region = QLineEdit(settings["tts_azure_region"])
+            self.edit_azure_region.setPlaceholderText(tr("例如 eastasia"))
+            add_row("Azure 区域", self.edit_azure_region, normal=True)
+            self.edit_tts_base = QLineEdit(settings["tts_base_url"])
+            self.edit_tts_base.setPlaceholderText(
+                tr("例如 https://api.siliconflow.cn/v1（留空 = 官方地址）"))
+            add_row("OpenAI 兼容地址", self.edit_tts_base, normal=True)
+            self.edit_tts_proxy = QLineEdit(settings["tts_proxy"])
+            self.edit_tts_proxy.setPlaceholderText(
+                tr("例如 http://127.0.0.1:7890（留空 = 直连）"))
+            add_row("配音代理", self.edit_tts_proxy, normal=True)
+            self.spin_tts_gap = QDoubleSpinBox()
+            self.spin_tts_gap.setRange(0.0, 5.0)
+            self.spin_tts_gap.setDecimals(1)
+            self.spin_tts_gap.setSingleStep(0.1)
+            self.spin_tts_gap.setSuffix(tr(" 秒"))
+            self.spin_tts_gap.setValue(float(settings["tts_gap"]))
+            add_row("段间停顿", self.spin_tts_gap, normal=True)
+            self.chk_tts_cleanup = QCheckBox(
+                tr("合成完顺手清一下音频（去咔哒、去噗声、剪掉多余静音）"))
+            self.chk_tts_cleanup.setChecked(bool(settings["tts_cleanup"]))
+            self._form().addRow(self.chk_tts_cleanup)
+            self._hide_fields["normal"].append(self.chk_tts_cleanup)
+
             add_sep("资源包", pro=True)
             self.list_assets = QListWidget()
             self.list_assets.setMinimumHeight(96)
@@ -7024,6 +7198,16 @@ def run_gui() -> int:
                 win_fixed_h=int(self.spin_win_h.value()),
                 intro_path=self.edit_intro.text().strip(),
                 outro_path=self.edit_outro.text().strip(),
+                tts_keys={
+                    "gemini": self.edit_key_gemini.text().strip(),
+                    "azure": self.edit_key_azure.text().strip(),
+                    "openai": self.edit_key_openai.text().strip(),
+                },
+                tts_azure_region=self.edit_azure_region.text().strip() or "eastasia",
+                tts_base_url=self.edit_tts_base.text().strip(),
+                tts_proxy=self.edit_tts_proxy.text().strip(),
+                tts_gap=float(self.spin_tts_gap.value()),
+                tts_cleanup=bool(self.chk_tts_cleanup.isChecked()),
             )
             super().accept()
 
@@ -7173,6 +7357,11 @@ def run_gui() -> int:
             self._audio_seq = 0
             self._audio_pending = False
             self._play_after_mix = False
+            # 配音页：后台合成线程、试听用的第二个播放器
+            self._tts_worker = None
+            self._tts_audition = False
+            self._audition_player = None
+            self._audition_audio = None
             self._mix_timer = QTimer(self)
             self._mix_timer.setSingleShot(True)
             self._mix_timer.setInterval(250)
@@ -7745,9 +7934,12 @@ def run_gui() -> int:
                 lambda _i: self.on_mode(self.cmb_rhythm.currentData()))
             self.radio_total = QRadioButton(tr("自设总长"))
             self.radio_free = QRadioButton(tr("逐张秒数"))
+            self.radio_voice = QRadioButton(tr("跟旁白"))
+            self.radio_voice.setToolTip(
+                tr("按配音页生成的旁白长度铺满画面，画面不会比声音长"))
             bar.addWidget(self.cmb_rhythm)
             group = QButtonGroup(self)
-            for r in (self.radio_total, self.radio_free):
+            for r in (self.radio_total, self.radio_free, self.radio_voice):
                 group.addButton(r)
                 bar.addWidget(r)
             self.spin_total = QDoubleSpinBox()
@@ -7842,11 +8034,97 @@ def run_gui() -> int:
             self.btn_sub_add.clicked.connect(self.on_import_subtitle)
             self.btn_sub_del = QPushButton(tr("移除字幕"))
             self.btn_sub_del.clicked.connect(self.on_clear_subtitle)
+            self.btn_sub_save = QPushButton(tr("另存 .srt…"))
+            self.btn_sub_save.setToolTip(
+                tr("把当前字幕存成 .srt：时间轴按成片时间算，能直接贴到别处"))
+            self.btn_sub_save.clicked.connect(self.on_save_subtitle)
             sb.addWidget(self.btn_sub_add)
             sb.addWidget(self.btn_sub_del)
+            sb.addWidget(self.btn_sub_save)
             sb.addStretch(1)
             svp.addLayout(sb)
             self.left_tabs.addTab(sub_page, tr("字幕"))
+            # 配音页：文稿 -> TTS -> 旁白 + 字幕，一条龙在这个页里做完
+            voice_page = QWidget()
+            vvp = QVBoxLayout(voice_page)
+            vvp.setContentsMargins(0, 0, 0, 0)
+            vvp.setSpacing(6)
+            self.lbl_script = QLabel(tr("把文稿贴进来：一句一行、或者整段都行，会自动切段"))
+            self.lbl_script.setWordWrap(True)
+            vvp.addWidget(self.lbl_script)
+            self.edit_script = QPlainTextEdit()
+            self.edit_script.setPlaceholderText(tr("在这里贴文稿……"))
+            self.edit_script.setPlainText(str(self.settings["tts_script"] or ""))
+            self.edit_script.textChanged.connect(self.on_script_changed)
+            vvp.addWidget(self.edit_script, 1)
+            srow = QHBoxLayout()
+            self.btn_script_open = QPushButton(tr("打开文稿…"))
+            self.btn_script_open.clicked.connect(self.on_open_script)
+            self.btn_script_clear = QPushButton(tr("清空"))
+            self.btn_script_clear.clicked.connect(self.on_clear_script)
+            srow.addWidget(self.btn_script_open)
+            srow.addWidget(self.btn_script_clear)
+            srow.addStretch(1)
+            vvp.addLayout(srow)
+            self.lbl_plan = QLabel(tr("还没有文稿"))
+            self.lbl_plan.setWordWrap(True)
+            vvp.addWidget(self.lbl_plan)
+            vform = QFormLayout()
+            vform.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+            vform.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            self.cmb_tts_provider = QComboBox()
+            for _key in tts_engine.TTS_PROVIDER_ORDER:
+                self.cmb_tts_provider.addItem(
+                    tr(tts_engine.TTS_PROVIDERS[_key]["label"]), _key)
+            _idx = self.cmb_tts_provider.findData(
+                str(self.settings["tts_provider"]))
+            self.cmb_tts_provider.setCurrentIndex(max(0, _idx))
+            self.cmb_tts_provider.activated.connect(
+                lambda _i: self.on_tts_provider_changed())
+            vform.addRow(tr("配音服务"), self.cmb_tts_provider)
+            self.cmb_tts_voice = QComboBox()
+            self.cmb_tts_voice.setEditable(True)
+            self.cmb_tts_voice.setToolTip(
+                tr("下拉里是常用音色，也能直接敲服务商的音色名"))
+            self._fill_voices(str(self.settings["tts_provider"]),
+                              str(self.settings["tts_voice"]))
+            vform.addRow(tr("音色"), self.cmb_tts_voice)
+            self.spin_tts_rate = QSpinBox()
+            self.spin_tts_rate.setRange(tts_engine.TTS_MIN_RATE,
+                                        tts_engine.TTS_MAX_RATE)
+            self.spin_tts_rate.setSingleStep(5)
+            self.spin_tts_rate.setSuffix("%")
+            self.spin_tts_rate.setValue(int(self.settings["tts_rate"]))
+            self.spin_tts_rate.setToolTip(tr("0 是原速；正数更快，负数更慢"))
+            vform.addRow(tr("语速"), self.spin_tts_rate)
+            self._tts_form = vform
+            vvp.addLayout(vform)
+            self.progress_tts = QProgressBar()
+            self.progress_tts.setVisible(False)
+            self.progress_tts.setFormat(tr("正在合成 %v/%m 段"))
+            vvp.addWidget(self.progress_tts)
+            self.lbl_tts_status = QLabel(tr("贴好文稿，选个音色，就能合成"))
+            self.lbl_tts_status.setWordWrap(True)
+            vvp.addWidget(self.lbl_tts_status)
+            trow = QHBoxLayout()
+            self.btn_tts_start = QPushButton(tr("开始合成"))
+            self.btn_tts_start.clicked.connect(self.on_tts_start)
+            self.btn_tts_cancel = QPushButton(tr("取消"))
+            self.btn_tts_cancel.setEnabled(False)
+            self.btn_tts_cancel.clicked.connect(self.on_tts_cancel)
+            self.btn_tts_audition = QPushButton(tr("试听"))
+            self.btn_tts_audition.setToolTip(tr("只合成头一段，听听音色合不合适"))
+            self.btn_tts_audition.clicked.connect(self.on_tts_audition)
+            trow.addWidget(self.btn_tts_start)
+            trow.addWidget(self.btn_tts_cancel)
+            trow.addWidget(self.btn_tts_audition)
+            trow.addStretch(1)
+            vvp.addLayout(trow)
+            self.lbl_narration = QLabel(tr("还没有旁白"))
+            self.lbl_narration.setWordWrap(True)
+            vvp.addWidget(self.lbl_narration)
+            self.left_tabs.addTab(voice_page, tr("配音"))
             split.addWidget(self.left_tabs)
 
             right = QWidget()
@@ -8043,6 +8321,36 @@ def run_gui() -> int:
             self.left_tabs.setTabText(2, tr("字幕"))
             self.btn_sub_add.setText(tr("导入字幕…"))
             self.btn_sub_del.setText(tr("移除字幕"))
+            self.btn_sub_save.setText(tr("另存 .srt…"))
+            self.btn_sub_save.setToolTip(tr("把当前字幕存成 .srt：时间轴按成片时间算，能直接贴到别处"))
+            # 配音页
+            self.left_tabs.setTabText(3, tr("配音"))
+            self.lbl_script.setText(
+                tr("把文稿贴进来：一句一行、或者整段都行，会自动切段"))
+            self.edit_script.setPlaceholderText(tr("在这里贴文稿……"))
+            self.btn_script_open.setText(tr("打开文稿…"))
+            self.btn_script_clear.setText(tr("清空"))
+            self.cmb_tts_voice.setToolTip(
+                tr("下拉里是常用音色，也能直接敲服务商的音色名"))
+            self.spin_tts_rate.setToolTip(tr("0 是原速；正数更快，负数更慢"))
+            self.progress_tts.setFormat(tr("正在合成 %v/%m 段"))
+            self.btn_tts_start.setText(tr("开始合成"))
+            self.btn_tts_cancel.setText(tr("取消"))
+            self.btn_tts_audition.setText(tr("试听"))
+            self.btn_tts_audition.setToolTip(
+                tr("只合成头一段，听听音色合不合适"))
+            for _i in range(self.cmb_tts_provider.count()):
+                _k = self.cmb_tts_provider.itemData(_i)
+                if _k in tts_engine.TTS_PROVIDERS:
+                    self.cmb_tts_provider.setItemText(
+                        _i, tr(tts_engine.TTS_PROVIDERS[_k]["label"]))
+            for _fld, _txt in ((self.cmb_tts_provider, tr("配音服务")),
+                               (self.cmb_tts_voice, tr("音色")),
+                               (self.spin_tts_rate, tr("语速"))):
+                _lab = self._tts_form.labelForField(_fld)
+                if _lab is not None:
+                    _lab.setText(_txt)
+            self._refresh_voice_page()
             self.btn_settings.setText(tr("设置"))
             self.btn_settings.setToolTip(
                 tr("导出目录、画幅比例、分辨率、帧率、画质、铺底、转场、默认节奏"))
@@ -8050,6 +8358,7 @@ def run_gui() -> int:
             self.cmb_rhythm.setItemText(1, tr(MODE_LABELS["material"]))
             self.radio_total.setText(tr("自设总长"))
             self.radio_free.setText(tr("逐张秒数"))
+            self.radio_voice.setText(tr("跟旁白"))
             self.spin_total.setSuffix(tr(" 秒"))
             self.lbl_bgm.setText(tr("音乐链接"))
             self.edit_bgm.setPlaceholderText(
@@ -8082,7 +8391,7 @@ def run_gui() -> int:
                        self.btn_settings, self.btn_refresh, self.btn_export,
                        self.btn_mode, self.btn_retry, self.lbl_bgm,
                        self.btn_more, self.cmb_rhythm, self.radio_total,
-                       self.radio_free):
+                       self.radio_free, self.radio_voice):
                 w_.setMinimumWidth(w_.sizeHint().width())
             need = self.minimumSizeHint().width()
             if need > self.width():
@@ -8201,6 +8510,7 @@ def run_gui() -> int:
             total = "total" in allowed
             self.radio_total.setVisible(total)
             self.radio_free.setVisible(total)
+            self.radio_voice.setVisible(total and bool(self.project.narration_path))
             # 倍速 / 清晰度是剪辑时才需要调的
             advanced = ui_advanced(tier)
             self.cmb_speed.setVisible(advanced)
@@ -8210,6 +8520,8 @@ def run_gui() -> int:
             has_subs = bool(self.project.cues or self.project.subtitles_path)
             self.left_tabs.setTabVisible(1, advanced)
             self.left_tabs.setTabVisible(2, advanced or has_subs)
+            # 配音页只在标准以上出现（简洁模式就三步出片）
+            self.left_tabs.setTabVisible(3, advanced)
             # 简洁模式没画中画时，别空占一条「画中画」轨
             self.timeline.set_rows(
                 advanced or bool(self.project.overlays), True)
@@ -8305,11 +8617,278 @@ def run_gui() -> int:
             self._mark_stale()
             self.lbl_status.setText(tr("字幕已移除"))
 
+        def on_save_subtitle(self):
+            """把当前字幕存成 .srt：时间轴按成片时间算，方便粘到别处。"""
+            if not self.project.cues:
+                MsgBox.warn(self, tr("还没有字幕"),
+                            tr("先导入字幕，或者到「配音」页生成，再来另存。"))
+                return
+            base = (os.path.dirname(self.project.subtitles_path)
+                    or self._project_dir())
+            stem = os.path.splitext(self._project_name())[0] or "字幕"
+            path = FileDialog.get_save_file(
+                self, tr("字幕另存为…"),
+                os.path.join(base, stem + ".srt"),
+                tr("字幕 (*.srt)"), suffix="srt")
+            if not path:
+                return
+            text = tts_engine.cues_srt(self.project.cues)
+            try:
+                with open(path, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(text)
+            except OSError as e:
+                MsgBox.warn(self, tr("字幕没存下去"), str(e))
+                return
+            self.lbl_status.setText(tr("字幕已存到：{path}", path=path))
+
+        # ---------------- 配音：文稿 -> TTS -> 旁白 + 字幕
+        def _script_text(self) -> str:
+            return self.edit_script.toPlainText().strip()
+
+        def _tts_provider(self) -> str:
+            return str(self.cmb_tts_provider.currentData() or "edge")
+
+        def _tts_voice(self) -> str:
+            """选中的音色；下拉里没的（自己敲的）直接拿文本。"""
+            idx = self.cmb_tts_voice.currentIndex()
+            data = self.cmb_tts_voice.itemData(idx)
+            text = self.cmb_tts_voice.currentText().strip()
+            if data and text == self.cmb_tts_voice.itemText(idx):
+                return str(data)
+            return text
+
+        def _fill_voices(self, provider: str, wanted: str = ""):
+            """按服务商换音色下拉；wanted 是上次用的，能选回来就选回来。"""
+            voices = {
+                "edge": list(tts_engine.EDGE_ZH_VOICES),
+                "gemini": [("Kore", "Kore"), ("Puck", "Puck"),
+                           ("Aoede", "Aoede"), ("Charon", "Charon"),
+                           ("Fenrir", "Fenrir"), ("Leda", "Leda")],
+                "azure": [("zh-CN-XiaoxiaoNeural", "晓晓（女声）"),
+                          ("zh-CN-YunxiNeural", "云希（男声）"),
+                          ("zh-CN-YunyangNeural", "云扬（男声）"),
+                          ("zh-CN-XiaoyiNeural", "晓伊（女声）")],
+                "openai": [("alloy", "alloy"), ("nova", "nova"),
+                           ("shimmer", "shimmer"), ("echo", "echo"),
+                           ("onyx", "onyx"), ("fable", "fable")],
+            }.get(provider) or []
+            self.cmb_tts_voice.blockSignals(True)
+            self.cmb_tts_voice.clear()
+            for vid, name in voices:
+                self.cmb_tts_voice.addItem(name, vid)
+            self.cmb_tts_voice.blockSignals(False)
+            hit = self.cmb_tts_voice.findData(wanted)
+            if hit >= 0:
+                self.cmb_tts_voice.setCurrentIndex(hit)
+            elif wanted:
+                self.cmb_tts_voice.setEditText(wanted)
+            elif voices:
+                self.cmb_tts_voice.setCurrentIndex(0)
+
+        def _tts_running(self) -> bool:
+            return (self._tts_worker is not None
+                    and self._tts_worker.isRunning())
+
+        def _refresh_voice_page(self):
+            """把旁白现状写回配音页（文件名 + 时长 + 字幕条数）。"""
+            if not hasattr(self, "lbl_narration"):
+                return
+            p = self.project
+            if p.narration_path:
+                self.lbl_narration.setText(tr(
+                    "旁白：{name} · {dur} · {n} 条字幕",
+                    name=os.path.basename(p.narration_path),
+                    dur=human_time(p.narration_dur), n=len(p.cues)))
+            else:
+                self.lbl_narration.setText(tr("还没有旁白"))
+            busy = self._tts_running()
+            self.btn_tts_start.setEnabled(bool(self._script_text()) and not busy)
+            self.btn_tts_cancel.setEnabled(busy)
+            self.btn_tts_audition.setEnabled(bool(self._script_text()) and not busy)
+
+        def on_script_changed(self):
+            text = self._script_text()
+            if not text:
+                self.lbl_plan.setText(tr("还没有文稿"))
+            else:
+                plan = tts_engine.make_plan(text, self._tts_provider())
+                self.lbl_plan.setText(tr(
+                    "会切成 {n} 段，共 {chars} 字",
+                    n=len(plan), chars=sum(p["chars"] for p in plan)))
+            self._refresh_voice_page()
+
+        def on_open_script(self):
+            picked = FileDialog.get_open_files(
+                self, tr("选文稿"), self._project_dir(),
+                tr("文稿 (*.txt *.md)"))
+            if not picked:
+                return
+            path = picked[0]
+            text = ""
+            for enc in ("utf-8-sig", "utf-8", "gbk"):
+                try:
+                    with open(path, encoding=enc) as f:
+                        text = f.read()
+                    break
+                except (OSError, UnicodeDecodeError):
+                    continue
+            if not text.strip():
+                MsgBox.warn(self, tr("读不了文稿"),
+                            tr("换一个 UTF-8 的 .txt / .md 试试：") + path)
+                return
+            self.edit_script.setPlainText(text)
+            self.lbl_status.setText(tr("已载入文稿：{name}",
+                                       name=os.path.basename(path)))
+
+        def on_clear_script(self):
+            self.edit_script.setPlainText("")
+
+        def on_tts_provider_changed(self):
+            provider = self._tts_provider()
+            self._fill_voices(provider, str(self.cmb_tts_voice.currentText()))
+            spec = tts_engine.TTS_PROVIDERS[provider]
+            if spec.get("needs_key"):
+                self.lbl_tts_status.setText(tr(
+                    "{name} 要自己的 key：填在「设置 → 配音」里。",
+                    name=tr(spec["label"])))
+            else:
+                self.lbl_tts_status.setText(tr("贴好文稿，选个音色，就能合成"))
+            self.on_script_changed()
+
+        def _tts_kwargs(self) -> dict:
+            s = self.settings
+            provider = self._tts_provider()
+            return dict(provider=provider,
+                        root=components.data_dir(),
+                        voice=self._tts_voice(),
+                        rate=int(self.spin_tts_rate.value()),
+                        api_key=(s["tts_keys"] or {}).get(provider, ""),
+                        base_url=s["tts_base_url"],
+                        proxy=s["tts_proxy"],
+                        gap=float(s["tts_gap"]))
+
+        def on_tts_start(self):
+            if self._tts_running():
+                return
+            text = self._script_text()
+            if not text:
+                MsgBox.warn(self, tr("还没有文稿"),
+                            tr("先把文稿贴到左边，再来合成。"))
+                return
+            provider = self._tts_provider()
+            spec = tts_engine.TTS_PROVIDERS[provider]
+            if spec.get("needs_key") and not self._tts_kwargs()["api_key"]:
+                MsgBox.warn(self, tr("这家要 key"), tr(
+                    "{name} 得先在「设置 → 配音」里填自己的 key。",
+                    name=tr(spec["label"])))
+                return
+            plan = tts_engine.make_plan(text, provider)
+            self._tts_audition = False
+            self._tts_begin(plan, self._tts_kwargs())
+
+        def on_tts_audition(self):
+            if self._tts_running():
+                return
+            text = self._script_text()
+            if not text:
+                return
+            plan = tts_engine.make_plan(text, self._tts_provider())[:1]
+            self._tts_audition = True
+            self._tts_begin(plan, self._tts_kwargs())
+
+        def _tts_begin(self, plan, kwargs):
+            self.btn_tts_start.setEnabled(False)
+            self.btn_tts_audition.setEnabled(False)
+            self.btn_tts_cancel.setEnabled(True)
+            self.progress_tts.setRange(0, max(1, len(plan)))
+            self.progress_tts.setValue(0)
+            self.progress_tts.setVisible(True)
+            self.lbl_tts_status.setText(tr("开始合成，共 {n} 段…", n=len(plan)))
+            w = TtsWorker(plan, kwargs, parent=self)
+            self._tts_worker = w
+            w.progress.connect(self.on_tts_progress)
+            w.ok.connect(self.on_tts_ok)
+            w.bad.connect(self.on_tts_bad)
+            w.stopped.connect(self.on_tts_stopped)
+            w.start()
+
+        def on_tts_progress(self, done, total, cached):
+            self.progress_tts.setRange(0, max(1, total))
+            self.progress_tts.setValue(done)
+            if cached:
+                self.lbl_tts_status.setText(tr(
+                    "已合成 {done}/{total} 段（{cached} 段用缓存）",
+                    done=done, total=total, cached=cached))
+            else:
+                self.lbl_tts_status.setText(tr(
+                    "已合成 {done}/{total} 段", done=done, total=total))
+
+        def _reset_tts_busy(self):
+            self.progress_tts.setVisible(False)
+            self._refresh_voice_page()
+
+        def on_tts_ok(self, res):
+            self._reset_tts_busy()
+            if self._tts_audition:
+                self._tts_audition = False
+                self._play_audition(str(res.get("audio", "")))
+                self.lbl_tts_status.setText(tr("试听中：不喜欢就换个音色"))
+                return
+            cues = res.get("cues") or []
+            dur = float(res.get("dur") or 0.0)
+            path = str(res.get("audio") or "")
+            if not path or dur <= 0:
+                self.on_tts_bad(tr("合成完了却没拿到可用的音频"))
+                return
+            set_narration(self.project, path, dur, cues)
+            self.settings.update(
+                tts_script=self._script_text(),
+                tts_provider=self._tts_provider(),
+                tts_voice=self._tts_voice(),
+                tts_rate=int(self.spin_tts_rate.value()))
+            self.settings.save()
+            self._refresh_all()
+            self._mark_dirty()
+            self._history_push(tr("生成旁白"))
+            self.lbl_tts_status.setText(tr(
+                "旁白好了：{dur}，{n} 条字幕。总长已改成「跟旁白」。",
+                dur=human_time(dur), n=len(self.project.cues)))
+            self.lbl_status.setText(tr("旁白好了：{dur}", dur=human_time(dur)))
+
+        def _play_audition(self, path):
+            if not path or not os.path.exists(path):
+                return
+            if self._audition_player is None:
+                self._audition_player = QMediaPlayer(self)
+                self._audition_audio = QAudioOutput(self)
+                self._audition_player.setAudioOutput(self._audition_audio)
+            self._audition_player.stop()
+            self._audition_player.setSource(QUrl.fromLocalFile(path))
+            self._audition_player.play()
+
+        def on_tts_bad(self, msg):
+            self._tts_audition = False
+            self._reset_tts_busy()
+            self.lbl_tts_status.setText(tr("配音没成：{msg}", msg=msg))
+            if not os.environ.get("PIC2VIDEO_SHOT"):
+                MsgBox.warn(self, tr("配音失败"), msg)
+
+        def on_tts_stopped(self):
+            self._tts_audition = False
+            self._reset_tts_busy()
+            self.lbl_tts_status.setText(tr("已取消配音"))
+
+        def on_tts_cancel(self):
+            if self._tts_worker is not None:
+                self._tts_worker.cancel()
+            self.lbl_tts_status.setText(tr("正在停…"))
+
         def _refresh_all(self):
             # 档位与「用到了才出现」的轨/页：工程内容一变就跟着重算
             self._apply_ui_mode()
             self._refresh_list()
             self._refresh_subtitles()
+            self._refresh_voice_page()
             self.timeline.update()
             self._sync_tl_scroll()
             self._mark_stale()
@@ -8319,13 +8898,20 @@ def run_gui() -> int:
             self.cmb_rhythm.blockSignals(False)
             self.radio_total.setChecked(m == "total")
             self.radio_free.setChecked(m == "free")
+            self.radio_voice.setChecked(m == "voice")
             self.spin_total.setEnabled(self.project.mode == "total")
             if self.project.mode == "total":
                 self.spin_total.blockSignals(True)
                 self.spin_total.setValue(self.project.total_setting)
                 self.spin_total.blockSignals(False)
             n = self.project.image_count()
-            src = "BGM" if self.project.audio_path else tr("无音乐")
+            if self.project.narration_path:
+                src = tr("旁白 {name}", name=os.path.basename(
+                    self.project.narration_path))
+            elif self.project.audio_path:
+                src = "BGM"
+            else:
+                src = tr("无音乐")
             extra = ""
             if self.project.intro() or self.project.outro():
                 extra = tr("（含片头片尾）")
@@ -9979,7 +10565,12 @@ def run_gui() -> int:
             self._mix_timer.stop()
             if self.worker is not None and self.worker.isRunning():
                 self.worker.cancel()
-            for w in (self.worker, self.fetch_worker, self._audio_worker):
+            if self._tts_worker is not None and self._tts_worker.isRunning():
+                self._tts_worker.cancel()
+            if self._audition_player is not None:
+                self._audition_player.stop()
+            for w in (self.worker, self.fetch_worker, self._audio_worker,
+                      self._tts_worker):
                 if w is not None and w.isRunning():
                     w.wait(3000)
             shutil.rmtree(self.tmpdir, ignore_errors=True)
@@ -10070,6 +10661,8 @@ def run_gui() -> int:
         lambda on: on and w.on_mode("total"))
     w.radio_free.toggled.connect(
         lambda on: on and w.on_mode("free"))
+    w.radio_voice.toggled.connect(
+        lambda on: on and w.on_mode("voice"))
     w.spin_total.valueChanged.connect(w.on_total_changed)
     w.show()
 
