@@ -2857,3 +2857,22 @@ _TR_EXTRA42 = {
 for _k, _trs in _TR_EXTRA42.items():
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA43 = {
+    "标准": ("標準", "Standard", "標準", "표준"),
+    "更多：工程与设置": (
+        "更多：工程與設定", "More: project and settings",
+        "その他：プロジェクトと設定", "더 보기: 프로젝트와 설정"),
+    "界面模式：简洁只做三件事，标准日常剪辑，专业全部参数": (
+        "介面模式：簡潔只做三件事，標準日常剪輯，專業全部參數",
+        "UI mode: Simple is just three steps, Standard is everyday editing, "
+        "Pro shows every knob",
+        "UIモード：シンプルは三つの手順だけ、標準は日常的な編集、"
+        "プロはすべての設定",
+        "UI 모드: 간단은 세 단계만, 표준은 일상 편집, 전문은 모든 설정"),
+    "{name}模式": (
+        "{name}模式", "{name} mode", "{name}モード", "{name} 모드"),
+}
+for _k, _trs in _TR_EXTRA43.items():
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
+        TR[_lang].setdefault(_k, _v)

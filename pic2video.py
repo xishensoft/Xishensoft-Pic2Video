@@ -463,6 +463,39 @@ PREVIEW_QUALITY_LABELS = {"fast": "流畅", "normal": "标准",
 # 预览倍速：只改变播放速度，成片永远按原速导出。
 PREVIEW_SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
 
+# 界面三档：简洁 = 只做出片（加图 / 配乐 / 导出），标准 = 日常剪辑，
+# 专业 = 全部参数。可见性在这里定死，窗口只照着名单执行。
+UI_TIERS = ("simple", "normal", "pro")
+UI_TIER_LABELS = {"simple": "简洁", "normal": "标准", "pro": "专业"}
+UI_TOOLBAR = {
+    # 简洁：工具条上只有三件事，工程菜单收进「⋯」
+    "simple": ("add", "export", "mode", "more"),
+    "normal": ("project", "add", "overlay", "snap", "razor", "undo",
+               "redo", "settings", "export", "mode"),
+    "pro": ("project", "add", "overlay", "up", "down", "remove", "snap",
+            "razor", "undo", "redo", "settings", "rhythm", "total",
+            "refresh", "export", "mode"),
+}
+
+
+def ui_tier(value) -> str:
+    """把设置里的界面档位洗干净：认不出的值当简洁。"""
+    return value if value in UI_TIERS else "simple"
+
+
+def ui_toolbar(tier) -> tuple:
+    """这一档的工具条上留哪些控件（名字见 UI_TOOLBAR）。"""
+    return UI_TOOLBAR[ui_tier(tier)]
+
+
+def ui_has(tier, name: str) -> bool:
+    return name in ui_toolbar(tier)
+
+
+def ui_advanced(tier) -> bool:
+    """倍速、预览清晰度、时间线缩放条这些「工具味」控件：标准以上才给。"""
+    return ui_tier(tier) != "simple"
+
 
 class Settings:
     """持久设置：存在脚本旁边的 settings.json，坏文件就退回默认值。
@@ -492,7 +525,7 @@ class Settings:
         "last_export_dir": "",
         "recent_projects": [],    # 最近打开的工程（最多 8 条，新的在前）
         "lang": SYSTEM,           # 界面语言：auto 跟随系统 / zh-CN / zh-TW / en / ja / ko
-        "ui": "simple",           # 界面模式：simple 简洁（默认）/ pro 专业
+        "ui": "simple",           # 界面档位：simple 简洁 / normal 标准 / pro 专业
         "theme": "auto",          # 外观：auto 跟随系统 / light / dark
         "accent": theme.DEFAULT_ACCENT,   # 主色（对撞色由它自动算）
         "motion": "none",         # 画面动效：none / in / out / inout
@@ -630,8 +663,7 @@ class Settings:
                 d[key] = self.DEFAULTS[key]
         if d.get("lang") not in (SYSTEM,) + LOCALES:
             d["lang"] = SYSTEM
-        if d.get("ui") not in ("simple", "pro"):
-            d["ui"] = "simple"
+        d["ui"] = ui_tier(d.get("ui"))
         if d.get("theme") not in theme.THEMES:
             d["theme"] = "auto"
         if not is_hex_color(d.get("accent", "")):
@@ -4178,7 +4210,7 @@ def run_gui() -> int:
     from PyQt6.QtCore import (QEvent, QEventLoop, QItemSelectionModel,
                               QLibraryInfo, QPoint, QPointF, QRect, QSize, Qt,
                               QThread, QTimer, QTranslator, QUrl, pyqtSignal)
-    from PyQt6.QtGui import (QBrush, QColor, QConicalGradient, QFont,
+    from PyQt6.QtGui import (QActionGroup, QBrush, QColor, QConicalGradient, QFont,
                             QFontDatabase, QIcon,
                             QImageReader, QKeySequence, QLinearGradient,
                             QPainter, QPainterPath, QPalette, QPen, QPixmap,
@@ -5296,6 +5328,8 @@ def run_gui() -> int:
             self._press = 0.0
             self.zoom = 1.0          # 1.0 = 整条片子铺满，越大看得越细
             self.view_start = 0.0    # 可见窗口从第几秒开始
+            self.show_overlay = True # 简洁模式下没画中画就不占这一条
+            self.show_audio = True   # 没有音频同理（配乐是核心，默认给）
             self.c = dict(self.DEFAULT_COLORS)
             self.setMinimumHeight(150)
             self.setMouseTracking(True)
@@ -5308,13 +5342,33 @@ def run_gui() -> int:
             return 4, max(30, int(h * 0.46))
 
         def _overlay_rect(self):
-            """画中画轨：夹在画面块和音频块中间。"""
+            """画中画轨：夹在画面块和音频块中间；不需要时高度为零。"""
+            if not self.show_overlay:
+                edge = self._video_rect()[1]
+                return edge, edge
             top = self._video_rect()[1] + 12
             return top, top + max(14, int(self.height() * 0.14))
 
         def _audio_rect(self):
-            top = self._overlay_rect()[1] + 14
+            top = self._overlay_rect()[1] + (14 if self.show_overlay else 8)
+            if not self.show_audio:
+                return top, top
             return top, max(top + 16, self.height() - 4)
+
+        def set_rows(self, show_overlay: bool = True,
+                     show_audio: bool = True):
+            """按界面档位/内容决定画中画轨和音频轨要不要出现。"""
+            show_overlay = bool(show_overlay)
+            show_audio = bool(show_audio)
+            if (show_overlay, show_audio) == (self.show_overlay,
+                                              self.show_audio):
+                return
+            self.show_overlay, self.show_audio = show_overlay, show_audio
+            if not show_overlay:
+                self.sel_overlay = []
+            if not show_audio:
+                self.sel_audio = []
+            self.update()
 
         def _total(self) -> float:
             return sum(c.span for c in self.project.clips) or 1.0
@@ -5580,11 +5634,13 @@ def run_gui() -> int:
                                   Qt.PenStyle.DotLine))
                     p.drawLine(int(x1), top, int(x1), top + vh - top)
 
-            # 画中画轨
+            # 画中画轨（这一档/这段没有画中画就不出现）
             otop, obottom = self._overlay_rect()
-            p.setPen(QColor(self.c["empty"]))
-            p.drawText(4, otop - 4, tr("画中画"))
-            for k, (x0, x1, ov) in enumerate(self._overlay_spans()):
+            if self.show_overlay:
+                p.setPen(QColor(self.c["empty"]))
+                p.drawText(4, otop - 4, tr("画中画"))
+            for k, (x0, x1, ov) in enumerate(
+                    self._overlay_spans() if self.show_overlay else []):
                 col = QColor(self.c["overlay_sel"] if k in self.sel_overlay
                              else self.c["overlay"])
                 p.fillRect(int(x0), otop, max(2, int(x1 - x0)),
@@ -5607,9 +5663,11 @@ def run_gui() -> int:
             aspans = self._audio_spans()
             rows = self._audio_rows(len(aspans))
             atrack_top, atrack_bottom = self._audio_rect()
-            p.setPen(QColor(self.c["empty"]))
-            p.drawText(4, atrack_top - 4, tr("音频"))
-            for k, (x0, x1, a) in enumerate(aspans):
+            if self.show_audio:
+                p.setPen(QColor(self.c["empty"]))
+                p.drawText(4, atrack_top - 4, tr("音频"))
+            for k, (x0, x1, a) in enumerate(
+                    aspans if self.show_audio else []):
                 ry0, ry1 = rows[k]
                 col = QColor(self.c["audio_sel"] if k in self.sel_audio
                              else self.c["audio"])
@@ -5680,6 +5738,8 @@ def run_gui() -> int:
             return -1, 0.0
 
         def _hit_overlay(self, x, y):
+            if not self.show_overlay:
+                return -1
             top, bottom = self._overlay_rect()
             if y < top - 3 or y > bottom + 3:
                 return -1
@@ -5689,6 +5749,8 @@ def run_gui() -> int:
             return -1
 
         def _hit_audio(self, x, y):
+            if not self.show_audio:
+                return -1
             top, bottom = self._audio_rect()
             if y < top - 3 or y > bottom + 3:
                 return -1
@@ -5728,7 +5790,7 @@ def run_gui() -> int:
                                    ev.globalPosition().toPoint())
                     return
                 _otop, _obottom = self._overlay_rect()
-                if _otop - 3 <= y <= _obottom + 3:
+                if self.show_overlay and _otop - 3 <= y <= _obottom + 3:
                     self.menu.emit("overlay_empty", -1,
                                    ev.globalPosition().toPoint())
                     return
@@ -6191,32 +6253,37 @@ def run_gui() -> int:
             self.s = settings
             self.project = project
             self.setMinimumWidth(620)
-            self.pro = settings["ui"] != "simple"
-            self._pro_fields = []   # 简洁模式要藏起来的（标签和控件一起藏）
+            self.tier = ui_tier(settings["ui"])
+            self.pro = self.tier == "pro"
+            self.daily = self.tier != "simple"   # 标准 / 专业：日常剪辑项都露出来
+            # 要按档位藏的控件：pro 只给专业，normal 标准以上才给（标签和控件一起藏）
+            self._hide_fields = {"normal": [], "pro": []}
             self._groups = {}       # 组名 -> QFormLayout
             self._order = []
             self._group = ""
-            self._group_pro = {}
+            self._group_tier = {}
 
-            def add_row(text, field, pro=False):
+            def add_row(text, field, pro=False, normal=False):
                 form = self._form()
                 form.addRow(tr(text), field)
-                if pro:
+                gate = "pro" if pro else ("normal" if normal else "")
+                if gate:
                     lab = form.labelForField(field)
                     if lab is not None:
-                        self._pro_fields.append(lab)
-                    self._pro_fields.append(field)
+                        self._hide_fields[gate].append(lab)
+                    self._hide_fields[gate].append(field)
                 return field
 
-            def add_sep(text, pro=False):
-                """开始新的一组：专业模式下每组自成一页（Tab），简洁模式下用细线连成一列。"""
+            def add_sep(text, pro=False, normal=False):
+                """开始新的一组：专业模式一组一页，其余档位用细线连成一列。"""
                 form = QFormLayout()
                 form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
                 form.setFieldGrowthPolicy(
                     QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
                 form.setContentsMargins(2, 10, 2, 4)
                 self._order.append(text)
-                self._group_pro[text] = pro
+                self._group_tier[text] = "pro" if pro else (
+                    "normal" if normal else "")
                 self._groups[text] = form
                 self._group = text
                 if not self.pro and len(self._order) > 1:
@@ -6299,7 +6366,7 @@ def run_gui() -> int:
             self.cmb_win.setCurrentIndex(
                 max(0, list(WIN_MODES).index(settings["win_mode"])))
             self.cmb_win.activated.connect(self._sync_win_mode)
-            add_row("启动时窗口", self.cmb_win)
+            add_row("启动时窗口", self.cmb_win, normal=True)
             self.spin_win_w = QSpinBox()
             self.spin_win_w.setRange(800, 8000)
             self.spin_win_w.setSingleStep(20)
@@ -6315,7 +6382,7 @@ def run_gui() -> int:
             row_win.addWidget(self.spin_win_h, 1)
             wrap_win = QWidget()
             wrap_win.setLayout(row_win)
-            add_row("固定大小", wrap_win)
+            add_row("固定大小", wrap_win, normal=True)
             self._sync_win_mode()
 
             add_sep("画面")
@@ -6342,12 +6409,12 @@ def run_gui() -> int:
             row_size.addWidget(QLabel("×"))
             row_size.addWidget(self.spin_h)
             hint = QLabel(tr("（选比例会自动填，也可手改）"))
-            self._pro_fields.append(hint)
+            self._hide_fields["normal"].append(hint)
             row_size.addWidget(hint)
             row_size.addStretch(1)
             wrap_size = QWidget()
             wrap_size.setLayout(row_size)
-            add_row("分辨率（宽×高）", wrap_size, pro=True)
+            add_row("分辨率（宽×高）", wrap_size, normal=True)
 
             self.lbl_size = QLabel()
             add_row("成片尺寸", self.lbl_size)
@@ -6356,7 +6423,7 @@ def run_gui() -> int:
             self.cmb_fps = QComboBox()
             self.cmb_fps.addItems(["30", "60"])
             self.cmb_fps.setCurrentText(str(settings["fps"]))
-            add_row("帧率", self.cmb_fps, pro=True)
+            add_row("帧率", self.cmb_fps, normal=True)
 
             self.cmb_quality = QComboBox()
             for k in QUALITY:
@@ -6382,7 +6449,7 @@ def run_gui() -> int:
             row_intro.addWidget(self.edit_intro, 1)
             row_intro.addWidget(btn_intro)
             wrap_intro.setLayout(row_intro)
-            add_row("默认片头视频", wrap_intro)
+            add_row("默认片头视频", wrap_intro, normal=True)
 
             self.edit_outro = QLineEdit(settings["outro_path"])
             self.edit_outro.setPlaceholderText(
@@ -6395,13 +6462,13 @@ def run_gui() -> int:
             row_outro.addWidget(self.edit_outro, 1)
             row_outro.addWidget(btn_outro)
             wrap_outro.setLayout(row_outro)
-            add_row("默认片尾视频", wrap_outro)
+            add_row("默认片尾视频", wrap_outro, normal=True)
 
             self._color = settings["pad_color"]
             self.btn_color = QPushButton(self._color)
             self.btn_color.setToolTip(tr("纯色留白用的底色"))
             self.btn_color.clicked.connect(self._pick_color)
-            add_row("留白颜色", self.btn_color, pro=True)
+            add_row("留白颜色", self.btn_color, normal=True)
             self._sync_color_btn()
 
             self.edit_bg = QLineEdit(settings["bg_path"])
@@ -6415,19 +6482,19 @@ def run_gui() -> int:
             row_bg.addWidget(btn_bg)
             wrap_bg = QWidget()
             wrap_bg.setLayout(row_bg)
-            add_row("背景文件", wrap_bg, pro=True)
+            add_row("背景文件", wrap_bg, normal=True)
 
             self.chk_bg_blur = QCheckBox(
                 tr("背景模糊（原图铺底与自定义背景都适用）"))
             self.chk_bg_blur.setChecked(bool(settings["bg_blur"]))
-            add_row("背景处理", self.chk_bg_blur, pro=True)
+            add_row("背景处理", self.chk_bg_blur, normal=True)
 
             self.cmb_crop = QComboBox()
             for key in CROP_FOCUS:
                 self.cmb_crop.addItem(tr(CROP_LABELS[key]), key)
             self.cmb_crop.setCurrentIndex(
                 max(0, list(CROP_FOCUS).index(settings["crop_focus"])))
-            add_row("裁切位置", self.cmb_crop, pro=True)
+            add_row("裁切位置", self.cmb_crop, normal=True)
 
             self.edit_lut = QLineEdit(settings["lut_dir"])
             self.edit_lut.setPlaceholderText(
@@ -6440,19 +6507,19 @@ def run_gui() -> int:
             row_lut.addWidget(btn_lut)
             wrap_lut = QWidget()
             wrap_lut.setLayout(row_lut)
-            add_row("LUT 目录", wrap_lut, pro=True)
+            add_row("LUT 目录", wrap_lut, normal=True)
 
             self.cmb_sub_font = QFontComboBox()
             self.cmb_sub_font.setCurrentFont(QFont(str(settings["subtitle_font"])))
             self.cmb_sub_font.setToolTip(
                 tr("烧进成片的字幕用这个字体；缺字体就换成别的"))
-            add_row("字幕字体", self.cmb_sub_font, pro=True)
+            add_row("字幕字体", self.cmb_sub_font, normal=True)
 
             self.spin_sub_size = QSpinBox()
             self.spin_sub_size.setRange(16, 120)
             self.spin_sub_size.setValue(int(settings["subtitle_size"]))
             self.spin_sub_size.setSuffix(tr(" 像素"))
-            add_row("字幕字号", self.spin_sub_size, pro=True)
+            add_row("字幕字号", self.spin_sub_size, normal=True)
 
             add_sep("资源包", pro=True)
             self.list_assets = QListWidget()
@@ -6478,17 +6545,17 @@ def run_gui() -> int:
             wrap_asset.setLayout(row_asset)
             add_row("导入 / 删除", wrap_asset, pro=True)
             self._form().addRow(self.lbl_assets)
-            self._pro_fields.append(self.lbl_assets)
+            self._hide_fields["pro"].append(self.lbl_assets)
             self._refresh_assets()
 
-            add_sep("音乐", pro=True)
+            add_sep("音乐", normal=True)
             self.spin_mstart = QDoubleSpinBox()
             self.spin_mstart.setRange(0.0, 36000.0)
             self.spin_mstart.setDecimals(1)
             self.spin_mstart.setSingleStep(1.0)
             self.spin_mstart.setSuffix(tr(" 秒"))
             self.spin_mstart.setValue(float(settings["music_start"]))
-            add_row("音乐起点", self.spin_mstart, pro=True)
+            add_row("音乐起点", self.spin_mstart, normal=True)
 
             self.spin_mlen = QDoubleSpinBox()
             self.spin_mlen.setRange(0.0, 36000.0)
@@ -6497,7 +6564,7 @@ def run_gui() -> int:
             self.spin_mlen.setSuffix(tr(" 秒"))
             self.spin_mlen.setSpecialValueText(tr("整首"))
             self.spin_mlen.setValue(float(settings["music_len"]))
-            add_row("音乐长度", self.spin_mlen, pro=True)
+            add_row("音乐长度", self.spin_mlen, normal=True)
 
             self.spin_fin = QDoubleSpinBox()
             self.spin_fin.setRange(0.0, 10.0)
@@ -6505,7 +6572,7 @@ def run_gui() -> int:
             self.spin_fin.setSingleStep(0.1)
             self.spin_fin.setSuffix(tr(" 秒"))
             self.spin_fin.setValue(float(settings["fade_in"]))
-            add_row("音乐淡入", self.spin_fin, pro=True)
+            add_row("音乐淡入", self.spin_fin, normal=True)
 
             self.spin_fout = QDoubleSpinBox()
             self.spin_fout.setRange(0.0, 30.0)
@@ -6513,21 +6580,21 @@ def run_gui() -> int:
             self.spin_fout.setSingleStep(0.1)
             self.spin_fout.setSuffix(tr(" 秒"))
             self.spin_fout.setValue(float(settings["fade_out"]))
-            add_row("音乐淡出", self.spin_fout, pro=True)
+            add_row("音乐淡出", self.spin_fout, normal=True)
 
             self.spin_vol = QSpinBox()
             self.spin_vol.setRange(0, 200)
             self.spin_vol.setSingleStep(5)
             self.spin_vol.setSuffix("%")
             self.spin_vol.setValue(int(round(float(settings["music_volume"]) * 100)))
-            add_row("音乐音量", self.spin_vol, pro=True)
+            add_row("音乐音量", self.spin_vol, normal=True)
 
-            add_sep("节奏与动效", pro=True)
+            add_sep("节奏与动效", normal=True)
             self.cmb_mode = QComboBox()
             for k in ("bgm", "total", "free"):
                 self.cmb_mode.addItem(mode_label(k), k)
             self.cmb_mode.setCurrentIndex(("bgm", "total", "free").index(settings["mode"]))
-            add_row("默认节奏", self.cmb_mode, pro=True)
+            add_row("默认节奏", self.cmb_mode, normal=True)
 
             self.spin_per_image = QDoubleSpinBox()
             self.spin_per_image.setRange(MIN_DUR, 3600.0)
@@ -6535,21 +6602,21 @@ def run_gui() -> int:
             self.spin_per_image.setSingleStep(0.5)
             self.spin_per_image.setSuffix(tr(" 秒"))
             self.spin_per_image.setValue(float(settings["per_image"]))
-            add_row("逐张模式默认", self.spin_per_image, pro=True)
+            add_row("逐张模式默认", self.spin_per_image, normal=True)
 
             self.cmb_motion = QComboBox()
             for key in MOTIONS:
                 self.cmb_motion.addItem(tr(MOTION_LABELS[key]), key)
             self.cmb_motion.setCurrentIndex(
                 max(0, MOTIONS.index(settings["motion"])))
-            add_row("画面动效", self.cmb_motion, pro=True)
+            add_row("画面动效", self.cmb_motion, normal=True)
 
             self.cmb_trans = QComboBox()
             self.cmb_trans.addItem(tr("硬切"), "none")
             self.cmb_trans.addItem(tr("淡入淡出（每张首尾淡黑）"), "fade")
             self.cmb_trans.setCurrentIndex(1 if settings["transition"] == "fade" else 0)
             self.cmb_trans.currentIndexChanged.connect(self._sync_trans)
-            add_row("图片转场", self.cmb_trans, pro=True)
+            add_row("图片转场", self.cmb_trans, normal=True)
 
             self.spin_trans = QDoubleSpinBox()
             self.spin_trans.setRange(0.0, 2.0)
@@ -6557,7 +6624,7 @@ def run_gui() -> int:
             self.spin_trans.setSingleStep(0.1)
             self.spin_trans.setSuffix(tr(" 秒"))
             self.spin_trans.setValue(float(settings["transition_sec"]))
-            add_row("转场时长", self.spin_trans, pro=True)
+            add_row("转场时长", self.spin_trans, normal=True)
 
             add_sep("其它", pro=True)
             # 组件：出片引擎 ffmpeg、音源 yt-dlp —— 按需下载、按需删除
@@ -6637,15 +6704,18 @@ def run_gui() -> int:
             buttons.rejected.connect(self.reject)
 
             outer = self.body
-            if self.pro:                      # 专业模式：一组一页，省得竖着太长
+            if self.pro:                      # 专业：一组一页，省得竖着太长
                 tabs = QTabWidget()
                 for name in self._order:
                     page = QWidget()
                     page.setLayout(self._groups[name])
                     tabs.addTab(page, tr(name))
                 outer.addWidget(tabs, 1)
-            else:                             # 简洁模式：一列，只留必要项
-                for w_ in self._pro_fields:
+            else:                             # 简洁 / 标准：一列，按档位藏
+                hide = set(self._hide_fields["pro"])
+                if not self.daily:
+                    hide.update(self._hide_fields["normal"])
+                for w_ in hide:
                     w_.setVisible(False)
                 holder = QWidget()
                 v = QVBoxLayout(holder)
@@ -6653,7 +6723,8 @@ def run_gui() -> int:
                 v.setSpacing(4)
                 for name in self._order:
                     form = self._groups[name]
-                    if self._group_pro.get(name):
+                    g = self._group_tier.get(name) or ""
+                    if g == "pro" or (g == "normal" and not self.daily):
                         page = QWidget(self)   # 专业组的控件得有父，挂到隐藏页上
                         page.setLayout(form)
                         page.hide()
@@ -7073,6 +7144,7 @@ def run_gui() -> int:
             apply_qt_translator(current_locale())
             self.preview_name = ""
             self.project = Project(fps=int(self.settings["fps"]))
+            self._recent_menus = []
             self.project.mode = self.settings["mode"]
             self.tmpdir = tempfile.mkdtemp(prefix="pic2video_")
             self._scrubbing = False        # 正在拖进度条：别让播放位置抢它
@@ -7198,36 +7270,65 @@ def run_gui() -> int:
             if self._dirty and self.autosaver.tick(self.project):
                 log("autosave -> %s" % self.autosaver.path)
 
-        def _build_project_menu(self) -> QMenu:
-            menu = QMenu(self)
+        def _fill_project_actions(self, menu: QMenu):
+            """工程那几项：工程按钮和简洁模式的「⋯」共用一套。"""
             act = menu.addAction(tr("新建工程"))
             act.triggered.connect(self.on_new_project)
             act = menu.addAction(tr("打开工程…"))
             act.triggered.connect(self.on_open_project)
-            self.menu_recent = menu.addMenu(tr("最近打开"))
-            self.menu_recent.aboutToShow.connect(self._refresh_recent_menu)
+            recent = menu.addMenu(tr("最近打开"))
+            recent.aboutToShow.connect(self._refresh_recent_menu)
+            self.menu_recent = recent
+            self._recent_menus.append(recent)
             menu.addSeparator()
             act = menu.addAction(tr("保存工程"))
             act.triggered.connect(self.on_save_project)
             act = menu.addAction(tr("另存为…"))
             act.triggered.connect(self.on_save_project_as)
+
+        def _build_project_menu(self) -> QMenu:
+            menu = QMenu(self)
+            self._fill_project_actions(menu)
+            return menu
+
+        def _build_more_menu(self) -> QMenu:
+            """简洁模式的「⋯」：工程 + 设置，别让用户找不到工程文件。"""
+            menu = QMenu(self)
+            self._fill_project_actions(menu)
+            menu.addSeparator()
+            act = menu.addAction(tr("设置"))
+            act.triggered.connect(self.on_settings)
+            return menu
+
+        def _build_ui_menu(self) -> QMenu:
+            """三档模式：简洁 / 标准 / 专业，勾当前那档。"""
+            menu = QMenu(self)
+            group = QActionGroup(menu)
+            group.setExclusive(True)
+            self._ui_actions = {}
+            for tier in UI_TIERS:
+                act = menu.addAction(tr(UI_TIER_LABELS[tier]))
+                act.setCheckable(True)
+                act.setActionGroup(group)
+                act.triggered.connect(
+                    lambda _checked=False, t=tier: self.on_set_ui(t))
+                self._ui_actions[tier] = act
             return menu
 
         def _refresh_recent_menu(self):
-            menu = getattr(self, "menu_recent", None)
-            if menu is None:
-                return
-            menu.clear()
             recent = self.settings.recent()
-            if not recent:
-                act = menu.addAction(tr("（还没有）"))
-                act.setEnabled(False)
-                return
-            for path in recent:
-                act = menu.addAction(os.path.basename(path))
-                act.setToolTip(path)
-                act.triggered.connect(
-                    lambda _checked=False, _p=path: self.on_open_recent(_p))
+            for menu in getattr(self, "_recent_menus", []):
+                menu.clear()
+                if not recent:
+                    act = menu.addAction(tr("（还没有）"))
+                    act.setEnabled(False)
+                    continue
+                for path in recent:
+                    act = menu.addAction(os.path.basename(path))
+                    act.setToolTip(path)
+                    act.triggered.connect(
+                        lambda _checked=False, _p=path:
+                        self.on_open_recent(_p))
 
         def _confirm_discard(self) -> bool:
             """有没存的改动先问一句。返回 False = 用户取消，整个动作别继续。"""
@@ -7668,15 +7769,21 @@ def run_gui() -> int:
             self.btn_export.clicked.connect(self.on_export)
             bar.addWidget(self.btn_export)
             bar.addSpacing(6)
-            self.btn_mode = QPushButton()      # 简洁 / 专业 开关
-            self.btn_mode.setStyleSheet("QPushButton{padding:3px 10px}")
-            self.btn_mode.clicked.connect(self.on_toggle_mode)
+            # 三档：简洁 / 标准 / 专业。点开是菜单，选哪档当场切
+            self.btn_mode = QToolButton()
+            self.btn_mode.setPopupMode(
+                QToolButton.ToolButtonPopupMode.InstantPopup)
+            self.btn_mode.setMenu(self._build_ui_menu())
+            self.btn_mode.setStyleSheet("QToolButton{padding:3px 10px}")
             bar.addWidget(self.btn_mode)
-            # 简洁模式的设置入口：窗口右上角一个小「⋯」（专业模式用「设置」按钮）
-            self.btn_more = QPushButton("⋯")
+            # 简洁模式的入口：右上角「⋯」里放工程与设置
+            self.btn_more = QToolButton()
+            self.btn_more.setText("⋯")
             self.btn_more.setFixedWidth(34)
-            self.btn_more.setToolTip(tr("设置"))
-            self.btn_more.clicked.connect(self.on_settings)
+            self.btn_more.setPopupMode(
+                QToolButton.ToolButtonPopupMode.InstantPopup)
+            self.btn_more.setMenu(self._build_more_menu())
+            self.btn_more.setToolTip(tr("更多：工程与设置"))
             bar.addWidget(self.btn_more)
             v.addLayout(bar)
 
@@ -7949,11 +8056,14 @@ def run_gui() -> int:
                 tr("B 站 / 抖音 / YouTube / 快手等链接，或把本地音视频拖进来，自动取整条音轨"))
             self.btn_retry.setText(tr("重试"))
             self.btn_export.setText(tr("导出视频"))
-            simple = self.settings["ui"] == "simple"
-            self.btn_mode.setText(tr("简洁模式") if simple else tr("专业模式"))
+            tier = ui_tier(self.settings["ui"])
+            self.btn_mode.setText(tr(UI_TIER_LABELS[tier]))
             self.btn_mode.setToolTip(
-                tr("点一下切换：简洁模式只留必要设置，专业模式显示全部选项"))
-            self.btn_more.setToolTip(tr("设置"))
+                tr("界面模式：简洁只做三件事，标准日常剪辑，专业全部参数"))
+            for t, act in getattr(self, "_ui_actions", {}).items():
+                act.setText(tr(UI_TIER_LABELS[t]))
+                act.setChecked(t == tier)
+            self.btn_more.setToolTip(tr("更多：工程与设置"))
             if self.preview_name:
                 self.lbl_preview.setText(
                     tr("预览：{name}", name=self.preview_name))
@@ -8049,28 +8159,67 @@ def run_gui() -> int:
             if self.settings["theme"] == "auto":
                 self.apply_theme()
 
-        def on_toggle_mode(self):
-            """简洁 / 专业 开关：立即生效，并记住上次的选择。"""
-            simple = self.settings["ui"] != "simple"
-            self.settings.update(ui="simple" if simple else "pro")
+        def on_set_ui(self, tier: str):
+            """切界面档位：立即生效，并记住上次的选择。"""
+            tier = ui_tier(tier)
+            self.settings.update(ui=tier)
             self.settings.save()
             self.retranslate()
             self.lbl_status.setText(
-                tr("简洁模式") if simple else tr("专业模式"))
+                tr("{name}模式", name=tr(UI_TIER_LABELS[tier])))
 
         def _apply_ui_mode(self):
-            """简洁模式只留「加图片 / B站链接 / 导出视频」，
-            排序删除改秒数走列表右键菜单，设置走右上角「⋯」。"""
-            simple = self.settings["ui"] == "simple"
-            for w_ in (self.btn_up, self.btn_down, self.btn_remove,
-                       self.btn_settings, self.cmb_rhythm, self.radio_total,
-                       self.radio_free, self.spin_total, self.btn_refresh):
-                w_.setVisible(not simple)
-            # 磁吸 / 切割 / 撤回 / 还原是剪辑时一直在点的，两个模式都留着
-            for w_ in (self.btn_snap, self.btn_razor,
-                       self.btn_undo_bar, self.btn_redo_bar):
-                w_.setVisible(True)
-            self.btn_more.setVisible(simple)
+            """三档可见性：简洁只做三步出片，标准日常剪辑，专业全给。
+
+            顺手做「用到了才出现」：简洁模式下有画中画才占一条画中画轨，
+            有字幕才出现「字幕」页，时间线缩放条只在标准以上露出来。
+            """
+            tier = ui_tier(self.settings["ui"])
+            allowed = set(ui_toolbar(tier))
+            widgets = {
+                "project": self.btn_project,
+                "add": self.btn_add,
+                "overlay": self.btn_overlay,
+                "up": self.btn_up,
+                "down": self.btn_down,
+                "remove": self.btn_remove,
+                "snap": self.btn_snap,
+                "razor": self.btn_razor,
+                "undo": self.btn_undo_bar,
+                "redo": self.btn_redo_bar,
+                "settings": self.btn_settings,
+                "rhythm": self.cmb_rhythm,
+                "total": self.spin_total,
+                "refresh": self.btn_refresh,
+                "export": self.btn_export,
+                "mode": self.btn_mode,
+                "more": self.btn_more,
+            }
+            for name, w_ in widgets.items():
+                w_.setVisible(name in allowed)
+            # 时长三选一是「自设总长 + 逐张秒数 + 总长输入」一组
+            total = "total" in allowed
+            self.radio_total.setVisible(total)
+            self.radio_free.setVisible(total)
+            # 倍速 / 清晰度是剪辑时才需要调的
+            advanced = ui_advanced(tier)
+            self.cmb_speed.setVisible(advanced)
+            self.cmb_quality.setVisible(advanced)
+            self._sync_tl_bar()
+            # 左栏：历史只在标准以上；字幕在标准以上，简洁模式里有字幕才露
+            has_subs = bool(self.project.cues or self.project.subtitles_path)
+            self.left_tabs.setTabVisible(1, advanced)
+            self.left_tabs.setTabVisible(2, advanced or has_subs)
+            # 简洁模式没画中画时，别空占一条「画中画」轨
+            self.timeline.set_rows(
+                advanced or bool(self.project.overlays), True)
+
+        def _sync_tl_bar(self):
+            """时间线底下的缩放条：标准以上常驻，简洁模式放大过才露。"""
+            show = (ui_advanced(self.settings["ui"])
+                    or self.timeline.zoom > 1.001)
+            for w_ in (self.tl_scroll, self.lbl_zoom, self.btn_fit):
+                w_.setVisible(show)
 
         def _menu_labels(self):
             """右键菜单会出现的四项（冒烟测试用来核对文案）。"""
@@ -8157,6 +8306,8 @@ def run_gui() -> int:
             self.lbl_status.setText(tr("字幕已移除"))
 
         def _refresh_all(self):
+            # 档位与「用到了才出现」的轨/页：工程内容一变就跟着重算
+            self._apply_ui_mode()
             self._refresh_list()
             self._refresh_subtitles()
             self.timeline.update()
@@ -9351,6 +9502,7 @@ def run_gui() -> int:
         # ---------------- 时间线缩放 / 横向滚动
         def _on_tl_view(self, start, span):
             """时间线自己缩放/滚动了：把下面的滚动条和倍数标签对齐。"""
+            self._sync_tl_bar()
             self._sync_tl_scroll()
 
         def _sync_tl_scroll(self):
@@ -10451,7 +10603,7 @@ def run_gui() -> int:
                 set_locale("ja")
                 apply_qt_translator(current_locale())
                 w.retranslate()
-                w.btn_mode.click()          # 真按一次模式开关（含写 settings.json）
+                w.on_set_ui("simple")       # 真切一次模式（含写 settings.json）
                 QTimer.singleShot(600, shot_ja)
 
             def shot_ja():

@@ -497,7 +497,7 @@ _seps = [s for s in ("外观", "导出", "画面", "音乐", "节奏与动效", 
          if f'add_sep("{s}"' in _src]
 check("设置分六组", len(_seps) == 6, _seps)
 check("分隔线控件", 'setObjectName("sep")' in _src)
-check("简洁模式隐藏空组", 'add_sep("音乐", pro=True)' in _src
+check("简洁模式隐藏进阶组", 'add_sep("音乐", normal=True)' in _src
       and 'add_sep("其它", pro=True)' in _src)
 check("专业模式分页显示", "QTabWidget" in _src and "tabs.addTab" in _src)
 check("简洁模式不分页", "if self.pro:" in _src)
@@ -3700,6 +3700,93 @@ check("缩放/滚动词条四语齐全",
           for lang in ("zh-TW", "en", "ja", "ko")),
       [k for k in _zoom_keys if any(k not in _i18n.get(l, {})
                                     for l in ("zh-TW", "en", "ja", "ko"))])
+
+# ---------------- 75 界面三档：简洁 / 标准 / 专业
+check("三档就这三个", p.UI_TIERS == ("simple", "normal", "pro"), p.UI_TIERS)
+check("三档有中文名",
+      p.UI_TIER_LABELS == {"simple": "简洁", "normal": "标准",
+                           "pro": "专业"}, p.UI_TIER_LABELS)
+check("认不出的档位按简洁办",
+      [p.ui_tier(x) for x in (None, "", "Simple", "x", 3)]
+      == ["simple"] * 5, [p.ui_tier(x) for x in (None, "", "x")])
+check("三档各自保留",
+      [p.ui_tier(x) for x in ("simple", "normal", "pro")]
+      == ["simple", "normal", "pro"])
+_simple = set(p.ui_toolbar("simple"))
+check("简洁模式只剩四件事",
+      _simple == {"add", "export", "mode", "more"}, _simple)
+check("简洁模式没有剪辑工具",
+      not (_simple & {"snap", "razor", "overlay", "settings", "project",
+                      "undo", "redo", "up", "down", "remove"}), _simple)
+_normal = set(p.ui_toolbar("normal"))
+check("标准模式有日常剪辑那几件",
+      {"project", "add", "overlay", "snap", "razor", "undo", "redo",
+       "settings", "export", "mode"} <= _normal, _normal)
+check("标准模式不露排序/节奏/刷新",
+      not (_normal & {"up", "down", "remove", "rhythm", "total",
+                      "refresh", "more"}), _normal)
+_pro = set(p.ui_toolbar("pro"))
+check("专业模式全给",
+      {"up", "down", "remove", "rhythm", "total", "refresh"} <= _pro
+      and len(_pro) == 16, sorted(_pro))
+check("不认识的档位按简洁办",
+      p.ui_toolbar("wat") == p.ui_toolbar("simple"))
+check("标准以上才算进阶",
+      [p.ui_advanced(x) for x in ("simple", "normal", "pro", "wat")]
+      == [False, True, True, False])
+_s75 = p.Settings(os.path.join(tmp, "s75.json"))
+check("默认界面是简洁", _s75["ui"] == "simple", _s75["ui"])
+_s75.update(ui="normal")
+check("标准档能存住", _s75["ui"] == "normal", _s75["ui"])
+_s75.update(ui="wat")
+check("坏值回落简洁", _s75["ui"] == "simple", _s75["ui"])
+check("设置对话框认三档",
+      'self.tier = ui_tier(settings["ui"])' in _src
+      and 'self.daily = self.tier != "simple"' in _src)
+check("藏字段分两堆", '_hide_fields = {"normal": [], "pro": []}' in _src)
+check("标准项都挂了 normal=True", _src.count("normal=True") >= 20,
+      _src.count("normal=True"))
+check("整组也能分档",
+      'add_sep("音乐", normal=True)' in _src
+      and 'add_sep("节奏与动效", normal=True)' in _src)
+check("简洁档不显示专业组",
+      'if g == "pro" or (g == "normal" and not self.daily):' in _src)
+check("模式按钮变成菜单",
+      "self.btn_mode.setPopupMode(" in _src
+      and "self.btn_mode.setMenu(self._build_ui_menu())" in _src)
+check("⋯ 里有工程和设置",
+      "self.btn_more.setMenu(self._build_more_menu())" in _src
+      and "def _build_more_menu" in _src)
+check("可见性照名单执行",
+      "allowed = set(ui_toolbar(tier))" in _src
+      and "for name, w_ in widgets.items():" in _src)
+check("简洁档折掉画中画轨", "advanced or bool(self.project.overlays)" in _src)
+check("左栏按档位露页",
+      "self.left_tabs.setTabVisible(1, advanced)" in _src
+      and "self.left_tabs.setTabVisible(2, advanced or has_subs)" in _src)
+check("倍速/清晰度是进阶项",
+      "self.cmb_speed.setVisible(advanced)" in _src
+      and "self.cmb_quality.setVisible(advanced)" in _src)
+check("时间线缩放条按档位",
+      "def _sync_tl_bar" in _src
+      and 'ui_advanced(self.settings["ui"])' in _src)
+check("切档立即生效并记住",
+      "def on_set_ui" in _src and "self.settings.save()" in _src
+      and "def on_toggle_mode" not in _src)
+check("时间线能按需折叠轨",
+      "def set_rows" in _src and "if not self.show_overlay:" in _src
+      and "if not self.show_audio:" in _src)
+check("没显示时命中测试不接",
+      "if not self.show_overlay:" in _src
+      and "_hit_overlay" in _src and "_hit_audio" in _src)
+_tier_keys = ["标准", "更多：工程与设置",
+              "界面模式：简洁只做三件事，标准日常剪辑，专业全部参数",
+              "{name}模式"]
+check("三档词条四语齐全",
+      all(k in _i18n.get(lang, {}) for k in _tier_keys
+          for lang in ("zh-TW", "en", "ja", "ko")),
+      [k for k in _tier_keys
+       if any(k not in _i18n.get(l) for l in ("zh-TW", "en", "ja", "ko"))])
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
