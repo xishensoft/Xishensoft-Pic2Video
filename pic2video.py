@@ -2519,6 +2519,54 @@ def snap_candidates(project, playhead: float = 0.0, extra=()) -> list:
     return sorted({round(v, 3) for v in out if v >= 0.0})
 
 
+TIMELINE_ZOOM_MIN = 1.0    # 1.0 = 整条片子铺满时间线
+TIMELINE_ZOOM_MAX = 64.0
+
+
+def timeline_span(total: float, zoom: float) -> float:
+    """当前看得见多长一段：整片时长除以缩放倍数（最小到一帧）。"""
+    total = max(0.0, _doc_num(total, 0.0))
+    z = _doc_num(zoom, 1.0)
+    z = max(TIMELINE_ZOOM_MIN, min(TIMELINE_ZOOM_MAX, z))
+    if total <= 0.0:
+        return 0.0
+    return max(1.0 / 60.0, total / z)
+
+
+def timeline_clamp_start(start: float, total: float, span: float) -> float:
+    """把可见窗口的起点夹在 [0, 总长-窗口长] 里；窗口比片子长就从头看。"""
+    total = max(0.0, _doc_num(total, 0.0))
+    span = max(0.0, _doc_num(span, 0.0))
+    if span >= total:
+        return 0.0
+    return max(0.0, min(_doc_num(start, 0.0), total - span))
+
+
+def timeline_x(t: float, start: float, span: float, width: float) -> float:
+    """时间 → 像素。窗口外会算出负数或超出宽度，画的时候由 Qt 裁掉。"""
+    w = max(1.0, float(width))
+    sp = span if span > 0.0 else 1.0
+    return (float(t) - float(start)) * w / sp
+
+
+def timeline_time(x: float, start: float, span: float, width: float,
+                  total: float) -> float:
+    """像素 → 时间，夹在片子范围内（点窗口外的空白不会跑到片外）。"""
+    w = max(1.0, float(width))
+    sp = span if span > 0.0 else 1.0
+    total = max(0.0, _doc_num(total, 0.0))
+    return max(0.0, min(total, float(start) + float(x) * sp / w))
+
+
+def timeline_zoom_start(start: float, span: float, anchor: float,
+                        new_span: float, total: float) -> float:
+    """缩放时让 anchor 这一刻待在原来的横向位置（鼠标下的点不跑）。"""
+    sp = span if span > 0.0 else 1.0
+    frac = (float(anchor) - float(start)) / sp
+    return timeline_clamp_start(float(anchor) - frac * float(new_span),
+                                total, float(new_span))
+
+
 def _write_ass(cues, w: int, h: int, font: str, size: int) -> str:
     """把字幕写成临时 .ass，返回路径（用完由调用方删）。"""
     text = format_ass(cues, font=font, size=size, w=w, h=h)
@@ -4144,7 +4192,8 @@ def run_gui() -> int:
         QFormLayout, QFrame, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit,
         QListWidget,
         QListWidgetItem, QMainWindow, QMenu, QProgressBar,
-        QPlainTextEdit, QPushButton, QRadioButton, QSizePolicy, QSlider,
+        QPlainTextEdit, QPushButton, QRadioButton, QScrollBar, QSizePolicy,
+        QSlider,
         QSpinBox, QStyle, QStyleOptionSlider,
         QTextEdit,
         QSplitter, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget)
@@ -5222,6 +5271,7 @@ def run_gui() -> int:
         audioTrimmed = pyqtSignal(int, str, float)  # 拖音频左右边：裁头/裁尾
         audioTrimDone = pyqtSignal(int)             # 裁完松手（这时才记一步历史）
         menu = pyqtSignal(str, int, object)
+        viewChanged = pyqtSignal(float, float)       # 缩放/滚动变了（起点, 窗口长）
 
         DEFAULT_COLORS = {"bg": "#1f2329", "empty": "#9ca3af",
                           "piece_a": "#b86b6b", "piece_b": "#b8a05f",
@@ -5244,6 +5294,8 @@ def run_gui() -> int:
             self.snap_guide = None
             self._drag = None
             self._press = 0.0
+            self.zoom = 1.0          # 1.0 = 整条片子铺满，越大看得越细
+            self.view_start = 0.0    # 可见窗口从第几秒开始
             self.c = dict(self.DEFAULT_COLORS)
             self.setMinimumHeight(150)
             self.setMouseTracking(True)
@@ -5267,36 +5319,99 @@ def run_gui() -> int:
         def _total(self) -> float:
             return sum(c.span for c in self.project.clips) or 1.0
 
+        # -- 缩放 / 横向滚动 ------------------------------------------
+        def _view_span(self) -> float:
+            """当前看得见的一段有多长（秒）。"""
+            return timeline_span(self._total(), self.zoom)
+
+        def clamp_view(self):
+            """段数/总长变了以后，把窗口拉回片子范围内。"""
+            self.zoom = max(TIMELINE_ZOOM_MIN,
+                            min(TIMELINE_ZOOM_MAX, float(self.zoom or 1.0)))
+            self.view_start = timeline_clamp_start(
+                self.view_start, self._total(), self._view_span())
+
+        def reset_view(self):
+            self.zoom = 1.0
+            self.view_start = 0.0
+            self.update()
+            self.viewChanged.emit(self.view_start, self._view_span())
+
+        def set_zoom(self, zoom: float, anchor: float | None = None):
+            """缩放；anchor（默认播放头）在屏幕上的位置尽量不动。"""
+            anchor_t = self.play_pos if anchor is None else float(anchor)
+            old_span = self._view_span()
+            self.zoom = max(TIMELINE_ZOOM_MIN,
+                            min(TIMELINE_ZOOM_MAX, float(zoom or 1.0)))
+            new_span = self._view_span()
+            self.view_start = timeline_zoom_start(
+                self.view_start, old_span, anchor_t, new_span, self._total())
+            self.update()
+            self.viewChanged.emit(self.view_start, new_span)
+
+        def set_view_start(self, start: float):
+            self.view_start = timeline_clamp_start(
+                start, self._total(), self._view_span())
+            self.update()
+            self.viewChanged.emit(self.view_start, self._view_span())
+
+        def scroll_by(self, seconds: float):
+            self.set_view_start(self.view_start + float(seconds))
+
+        def zoom_at(self, x: float, up: bool = True):
+            """Ctrl+滚轮：以鼠标那一刻为中心放大/缩小。"""
+            factor = 1.25 if up else 1.0 / 1.25
+            self.set_zoom(self.zoom * factor, self._time_at(x))
+
+        def ensure_visible(self, t: float):
+            """播放头走出窗口就把窗口跟着挪（只在播放时叫）。"""
+            total = self._total()
+            span = self._view_span()
+            t = max(0.0, min(total, float(t)))
+            if t < self.view_start:
+                self.set_view_start(t)
+            elif t > self.view_start + span:
+                # 留 15% 的余量，别让播放头顶在右边缘
+                self.set_view_start(t - span * 0.85)
+
         def _spans(self):
             total = self._total()
+            span = self._view_span()
+            start = self.view_start
             x, spans = 0.0, []
             for d in (c.span for c in self.project.clips):
-                w = self.width() * d / total
-                spans.append((x, x + w, d))
-                x += w
+                x0 = timeline_x(x, start, span, self.width())
+                x1 = timeline_x(x + d, start, span, self.width())
+                spans.append((x0, x1, d))
+                x += d
             return spans, total
 
         def _audio_spans(self):
             total = self._total()
+            span = self._view_span()
+            start = self.view_start
             out = []
             for a in self.project.audios:
-                x0 = self.width() * max(0.0, a.start) / total
-                x1 = self.width() * min(total, a.start + a.dur) / total
+                x0 = timeline_x(max(0.0, a.start), start, span, self.width())
+                x1 = timeline_x(min(total, a.start + a.dur), start, span,
+                                self.width())
                 out.append((x0, max(x0 + 3, x1), a))
             return out
 
         def _overlay_spans(self):
             total = self._total()
+            span = self._view_span()
+            start = self.view_start
             out = []
             for o in self.project.overlays:
-                x0 = self.width() * max(0.0, o.start) / total
-                x1 = self.width() * min(total, o.end) / total
+                x0 = timeline_x(max(0.0, o.start), start, span, self.width())
+                x1 = timeline_x(min(total, o.end), start, span, self.width())
                 out.append((x0, max(x0 + 3, x1), o))
             return out
 
         def _x_at(self, t: float) -> float:
-            total = self._total()
-            return self.width() * max(0.0, min(total, t)) / total
+            return timeline_x(t, self.view_start, self._view_span(),
+                              self.width())
 
         def _wave(self, path: str):
             """波形峰值：内存里按「路径+指纹」缓一份，画的时候只查表。"""
@@ -5360,7 +5475,7 @@ def run_gui() -> int:
             self.update()
 
         def _snap_tol(self) -> float:
-            return SNAP_PX * self._total() / max(1, self.width())
+            return SNAP_PX * self._view_span() / max(1, self.width())
 
         def _snap_time(self, t: float, alt: bool = False):
             """把时刻吸到附近的边；按住 Alt 当场不吸，guide 记下贴到了哪。"""
@@ -5408,6 +5523,7 @@ def run_gui() -> int:
 
         # -- 画 --------------------------------------------------------
         def paintEvent(self, ev):
+            self.clamp_view()
             p = QPainter(self)
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
             p.fillRect(self.rect(), QColor(self.c["bg"]))
@@ -5437,7 +5553,7 @@ def run_gui() -> int:
                     p.setPen(QPen(QColor(self.c["selected_edge"]), 2))
                     p.drawRect(int(x0) + 1, top, max(1, int(x1 - x0) - 2),
                                vh - top - 3)
-                if x1 - x0 > 26:
+                if x1 - x0 > 26 and x1 > 0 and x0 < self.width():
                     p.setPen(QColor(theme.contrast_text(col.name())))
                     name = {"intro": tr("片头"), "outro": tr("片尾")}.get(
                         clip.kind, f"{i + 1}")
@@ -5451,10 +5567,13 @@ def run_gui() -> int:
                     if base and x1 - x0 > 80:
                         # 块够宽就把文件名也写上，几张相似的图才分得清
                         text = f"{name} · {base} · {d:.1f}s {marks}"
+                    # 放大后块的左端可能跑到窗口外，文字贴到可见区左边
+                    tx = max(int(x0) + 6, 6)
+                    avail = int(min(x1, self.width() - 4)) - tx
+                    if avail > 24:
                         text = p.fontMetrics().elidedText(
-                            text, Qt.TextElideMode.ElideRight,
-                            int(x1 - x0) - 12)
-                    p.drawText(int(x0) + 6, top + 15, text)
+                            text, Qt.TextElideMode.ElideRight, avail)
+                        p.drawText(tx, top + 15, text)
                 if clip.xfade and i < len(spans) - 1:
                     crosses += 1
                     p.setPen(QPen(QColor(self.c["playhead"]), 1,
@@ -5474,11 +5593,15 @@ def run_gui() -> int:
                     p.setPen(QPen(QColor(self.c["selected_edge"]), 2))
                     p.drawRect(int(x0), otop, max(2, int(x1 - x0)),
                                max(4, obottom - otop - 1))
-                if x1 - x0 > 34:
+                if x1 - x0 > 34 and x1 > 0 and x0 < self.width():
                     p.setPen(QColor(theme.contrast_text(col.name())))
-                    p.drawText(int(x0) + 5, otop + 12,
-                               f"{os.path.basename(ov.path)[:16]}  "
-                               f"{int(round(ov.scale))}%")
+                    tx = max(int(x0) + 5, 5)
+                    avail = int(min(x1, self.width() - 4)) - tx
+                    if avail > 24:
+                        p.drawText(tx, otop + 12, p.fontMetrics().elidedText(
+                            f"{os.path.basename(ov.path)[:16]}  "
+                            f"{int(round(ov.scale))}%",
+                            Qt.TextElideMode.ElideRight, avail))
 
             # 音频轨
             aspans = self._audio_spans()
@@ -5503,18 +5626,23 @@ def run_gui() -> int:
                     half = max(2.0, (ry1 - ry0) / 2.0 - 3)
                     p.setPen(QPen(QColor(255, 255, 255, 120), 1))
                     for xi in range(int(x0), int(x1)):
-                        t = total * xi / max(1, self.width()) - a.start
+                        t = self._time_at(xi) - a.start
                         idx = int(t * WAVE_RATE)
                         if 0 <= idx < len(peaks):
                             v = peaks[idx] / wmax * half
                             p.drawLine(xi, int(mid - v), xi, int(mid + v))
-                if x1 - x0 > 34:
+                if x1 - x0 > 34 and x1 > 0 and x0 < self.width():
                     p.setPen(QColor(theme.contrast_text(col.name())))
                     gain = (f"  {a.gain_db:+.1f} dB"
                             if abs(a.gain_db) > 0.04 else "")
-                    p.drawText(int(x0) + 5, int(ry0) + 12,
-                               f"{os.path.basename(a.path)[:18]}  "
-                               f"{int(round(a.volume * 100))}%{gain}")
+                    tx = max(int(x0) + 5, 5)
+                    avail = int(min(x1, self.width() - 4)) - tx
+                    if avail > 24:
+                        p.drawText(tx, int(ry0) + 12,
+                                   p.fontMetrics().elidedText(
+                                       f"{os.path.basename(a.path)[:18]}  "
+                                       f"{int(round(a.volume * 100))}%{gain}",
+                                       Qt.TextElideMode.ElideRight, avail))
                 if a.points:
                     p.setPen(QPen(QColor(self.c["playhead"]), 1.5))
                     poly = [QPointF(self._env_xy(k, j)[0],
@@ -5528,15 +5656,17 @@ def run_gui() -> int:
                         p.drawEllipse(QPointF(ex, ey), rad, rad)
                     p.setBrush(Qt.BrushStyle.NoBrush)
 
-            px = int(self.width() * min(1.0, self.play_pos / total))
-            p.setPen(QPen(QColor(self.c["playhead"]), 2))
-            p.drawLine(px, 0, px, self.height())
+            px = int(self._x_at(self.play_pos))
+            if 0 <= px <= self.width():
+                p.setPen(QPen(QColor(self.c["playhead"]), 2))
+                p.drawLine(px, 0, px, self.height())
 
             if self.snap_guide is not None:
-                gx = int(self.width() * min(1.0, self.snap_guide / total))
-                p.setPen(QPen(QColor(self.c["selected_edge"]), 1,
-                              Qt.PenStyle.DashLine))
-                p.drawLine(gx, 0, gx, self.height())
+                gx = int(self._x_at(self.snap_guide))
+                if 0 <= gx <= self.width():
+                    p.setPen(QPen(QColor(self.c["selected_edge"]), 1,
+                                  Qt.PenStyle.DashLine))
+                    p.drawLine(gx, 0, gx, self.height())
 
         # -- 命中 ------------------------------------------------------
         def _hit_video(self, x, y):
@@ -5718,8 +5848,7 @@ def run_gui() -> int:
 
             # 空白处：拖播放头
             self._drag = ("scrub", -1, x, 0.0)
-            _spans, total = self._spans()
-            self.play_pos = total * x / max(1, self.width())
+            self.play_pos = self._time_at(x)
             self.seeked.emit(self.play_pos)
             self.update()
 
@@ -5742,19 +5871,17 @@ def run_gui() -> int:
                 return
             kind = self._drag[0]
             if kind == "scrub":
-                _spans, total = self._spans()
-                self.play_pos = total * x / max(1, self.width())
+                self.play_pos = self._time_at(x)
                 self.seeked.emit(self.play_pos)
                 self.update()
                 return
             if kind in ("trimL", "trimR"):
                 _k, i, x0, _span0 = self._drag
-                _spans, total = self._spans()
-                delta = (x - x0) * total / max(1, self.width())
+                _spans, _total = self._spans()
+                delta = (x - x0) * self._view_span() / max(1, self.width())
                 alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
                 xs0, xs1, _d = _spans[i]
-                edge = total * (xs0 if kind == "trimL" else xs1) / max(
-                    1, self.width())
+                edge = self._raw_time(xs0 if kind == "trimL" else xs1)
                 snapped = self._snap_time(edge + delta, alt)
                 self.trimmed.emit(i, "left" if kind == "trimL" else "right",
                                   snapped - edge)
@@ -5763,9 +5890,9 @@ def run_gui() -> int:
                 return
             if kind == "resize":
                 _k, i, x0, d0 = self._drag
-                _spans, total = self._spans()
+                _spans, _total = self._spans()
                 start_t = sum(c.span for c in self.project.clips[:i])
-                d = d0 + (x - x0) * total / max(1, self.width())
+                d = d0 + (x - x0) * self._view_span() / max(1, self.width())
                 alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
                 end_t = self._snap_time(start_t + d, alt)
                 self.resized.emit(i, max(0.05, end_t - start_t))
@@ -5773,9 +5900,9 @@ def run_gui() -> int:
                 return
             if kind in ("atrimL", "atrimR"):
                 _k, idx, x0, _v = self._drag
-                _spans, total = self._spans()
+                _spans, _total = self._spans()
                 a = self.project.audios[idx]
-                delta = (x - x0) * total / max(1, self.width())
+                delta = (x - x0) * self._view_span() / max(1, self.width())
                 alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
                 edge = a.start if kind == "atrimL" else a.start + a.dur
                 snapped = self._snap_time(edge + delta, alt)
@@ -5804,17 +5931,21 @@ def run_gui() -> int:
                 return
             if kind == "audio":
                 _k, idx, x0, start0 = self._drag
-                _spans, total = self._spans()
-                self.play_pos = total * x / max(1, self.width())
+                self.play_pos = self._time_at(x)
                 self.update()
                 return
             if kind == "clip":
                 self.play_pos = self._time_at(x)
                 self.update()
 
+        def _raw_time(self, x: float) -> float:
+            """像素 → 时间，不夹范围（窗口外也能算出准确的时刻）。"""
+            return self.view_start + float(x) * self._view_span() / max(
+                1.0, float(self.width()))
+
         def _time_at(self, x: float) -> float:
-            total = self._total()
-            return max(0.0, min(total, total * x / max(1, self.width())))
+            return timeline_time(x, self.view_start, self._view_span(),
+                                 self.width(), self._total())
 
         def mouseReleaseEvent(self, ev):
             drag, self._drag = self._drag, None
@@ -5841,16 +5972,14 @@ def run_gui() -> int:
                 _k, idx, x0, start0 = drag
                 if abs(x - x0) <= 6:
                     return
-                total = self._total()
-                delta = (x - x0) * total / max(1, self.width())
+                delta = (x - x0) * self._view_span() / max(1, self.width())
                 self.overlayMoved.emit(idx, max(0.0, start0 + delta))
                 return
             if kind == "audio":
                 _k, idx, x0, start0 = drag
                 if abs(x - x0) <= 6:
                     return
-                total = self._total()
-                delta = (x - x0) * total / max(1, self.width())
+                delta = (x - x0) * self._view_span() / max(1, self.width())
                 a = self.project.audios[idx]
                 start_t = max(0.0, start0 + delta)
                 alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
@@ -5871,12 +6000,24 @@ def run_gui() -> int:
                 return
 
         def wheelEvent(self, ev):
-            k = self._hit_audio(ev.position().x(), ev.position().y())
-            if k < 0:
-                ev.ignore()
+            x = ev.position().x()
+            dy = ev.angleDelta().y()
+            mods = ev.modifiers()
+            if mods & Qt.KeyboardModifier.ControlModifier:
+                # Ctrl+滚轮：以鼠标位置为中心缩放
+                if dy:
+                    self.zoom_at(x, dy > 0)
+                ev.accept()
                 return
-            step = 0.05 if ev.angleDelta().y() > 0 else -0.05
-            self.audioVolume.emit(k, step)
+            k = self._hit_audio(x, ev.position().y())
+            if k >= 0 and not (mods & Qt.KeyboardModifier.ShiftModifier):
+                step = 0.05 if dy > 0 else -0.05
+                self.audioVolume.emit(k, step)
+                ev.accept()
+                return
+            # 空白处或 Shift+滚轮：左右滚时间线
+            if dy:
+                self.scroll_by(-dy / 120.0 * self._view_span() * 0.12)
             ev.accept()
 
 
@@ -7711,7 +7852,27 @@ def run_gui() -> int:
             self.timeline.cut.connect(self.on_cut)
             self.timeline.menu.connect(self.on_timeline_menu)
             self.timeline.set_snap(bool(self.settings["snap_on"]))
+            self.timeline.viewChanged.connect(self._on_tl_view)
             v.addWidget(self.timeline)
+
+            tlbar = QHBoxLayout()
+            tlbar.setContentsMargins(0, 0, 0, 0)
+            tlbar.setSpacing(6)
+            self.tl_scroll = QScrollBar(Qt.Orientation.Horizontal)
+            self.tl_scroll.setToolTip(
+                tr("时间线横向滚动：拖这里看后半段；Ctrl+滚轮缩放"))
+            self.tl_scroll.valueChanged.connect(self.on_tl_scroll)
+            tlbar.addWidget(self.tl_scroll, 1)
+            self.lbl_zoom = QLabel(tr("全片"))
+            self.lbl_zoom.setMinimumWidth(48)
+            self.lbl_zoom.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.lbl_zoom.setToolTip(tr("时间线缩放：Ctrl+滚轮，Ctrl+0 回到全片"))
+            tlbar.addWidget(self.lbl_zoom)
+            self.btn_fit = QPushButton(tr("适应窗口"))
+            self.btn_fit.setToolTip(tr("时间线缩回全片（Ctrl+0）"))
+            self.btn_fit.clicked.connect(self.on_tl_fit)
+            tlbar.addWidget(self.btn_fit)
+            v.addLayout(tlbar)
 
             foot = QHBoxLayout()
             self.lbl_status = QLabel(tr("拖图片进来开始"))
@@ -7763,6 +7924,11 @@ def run_gui() -> int:
             self.btn_undo_bar.setToolTip(tr("撤销上一步（Ctrl+Z）"))
             self.btn_redo_bar.setText(tr("还原"))
             self.btn_redo_bar.setToolTip(tr("重做（Ctrl+Shift+Z）"))
+            self.btn_fit.setText(tr("适应窗口"))
+            self.btn_fit.setToolTip(tr("时间线缩回全片（Ctrl+0）"))
+            self.tl_scroll.setToolTip(
+                tr("时间线横向滚动：拖这里看后半段；Ctrl+滚轮缩放"))
+            self.lbl_zoom.setToolTip(tr("时间线缩放：Ctrl+滚轮，Ctrl+0 回到全片"))
             self.btn_undo.setText(tr("撤回"))
             self.btn_redo.setText(tr("还原"))
             self.left_tabs.setTabText(0, tr("素材"))
@@ -7994,6 +8160,7 @@ def run_gui() -> int:
             self._refresh_list()
             self._refresh_subtitles()
             self.timeline.update()
+            self._sync_tl_scroll()
             self._mark_stale()
             m = self.project.mode
             self.cmb_rhythm.blockSignals(True)
@@ -8470,6 +8637,8 @@ def run_gui() -> int:
 
         def on_toggle_snap(self, on):
             on = bool(on)
+            if not hasattr(self, "timeline"):
+                return          # 建界面的早期 setChecked 也会发 toggled
             self.timeline.set_snap(on)
             self.settings.update(snap_on=on)
             self.settings.save()
@@ -8477,6 +8646,8 @@ def run_gui() -> int:
 
         def on_toggle_razor(self, on):
             on = bool(on)
+            if not hasattr(self, "timeline"):
+                return
             self.timeline.set_razor(on)
             self.lbl_status.setText(
                 tr("切割模式已开：点哪块切哪块，Esc 退出") if on
@@ -8949,6 +9120,10 @@ def run_gui() -> int:
         def _draw_frame(self, t: float):
             self._render_at(t)
             self.timeline.play_pos = max(0.0, float(t))
+            if (self.player.playbackState()
+                    == QMediaPlayer.PlaybackState.PlayingState):
+                # 播放头走出可见窗口就把窗口跟上（缩放过才需要）
+                self.timeline.ensure_visible(self.timeline.play_pos)
             self.timeline.update()
             self._sync_player(max(0.0, float(t)))
 
@@ -9134,6 +9309,15 @@ def run_gui() -> int:
                                   QAbstractItemView, QSlider)):
                 return super().eventFilter(obj, ev)
             key = ev.key()
+            ctrl = bool(ev.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            if ctrl and key in (Qt.Key.Key_0, Qt.Key.Key_Equal,
+                                Qt.Key.Key_Plus, Qt.Key.Key_Minus):
+                # Ctrl+0 回到全片，Ctrl+= / Ctrl+- 以时间线中间为准缩放
+                if key == Qt.Key.Key_0:
+                    self.timeline.reset_view()
+                else:
+                    self.on_tl_zoom(key not in (Qt.Key.Key_Minus,))
+                return True
             if key == Qt.Key.Key_Escape and self.timeline.razor:
                 self.btn_razor.setChecked(False)   # 走 toggled → on_toggle_razor
                 return True
@@ -9163,6 +9347,39 @@ def run_gui() -> int:
         def on_scrub_end(self):
             self._scrubbing = False
             self.seek(self.slider_pos.value() / 1000.0)
+
+        # ---------------- 时间线缩放 / 横向滚动
+        def _on_tl_view(self, start, span):
+            """时间线自己缩放/滚动了：把下面的滚动条和倍数标签对齐。"""
+            self._sync_tl_scroll()
+
+        def _sync_tl_scroll(self):
+            if not hasattr(self, "tl_scroll"):
+                return
+            tl = self.timeline
+            total = tl._total()
+            span = tl._view_span()
+            tot_ms = max(0, int(round(total * 1000)))
+            span_ms = max(1, int(round(span * 1000)))
+            self.tl_scroll.blockSignals(True)
+            self.tl_scroll.setRange(0, max(0, tot_ms - span_ms))
+            self.tl_scroll.setPageStep(span_ms)
+            self.tl_scroll.setSingleStep(max(1, int(round(span_ms / 20.0))))
+            self.tl_scroll.setValue(int(round(tl.view_start * 1000)))
+            self.tl_scroll.setEnabled(tl.zoom > 1.001 and tot_ms > span_ms)
+            self.tl_scroll.blockSignals(False)
+            self.lbl_zoom.setText("%.1f×" % tl.zoom if tl.zoom > 1.001
+                                  else tr("全片"))
+            self.btn_fit.setEnabled(tl.zoom > 1.001)
+
+        def on_tl_scroll(self, value):
+            self.timeline.set_view_start(value / 1000.0)
+
+        def on_tl_fit(self):
+            self.timeline.reset_view()
+
+        def on_tl_zoom(self, up: bool):
+            self.timeline.zoom_at(self.timeline.width() / 2.0, up)
 
         def on_speed_changed(self, idx):
             try:

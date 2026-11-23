@@ -3587,6 +3587,120 @@ check("磁吸/切割按钮走 toggled，程序里改选中也能生效",
       'def btn(text, slot, tip="", signal="clicked")' in _src
       and '"toggled"' in _src)
 
+# ---------------- 74 时间线缩放 / 横向滚动
+check("1 倍时窗口就是整片", abs(p.timeline_span(8.0, 1.0) - 8.0) < 1e-9)
+check("放大 2 倍只看一半", abs(p.timeline_span(8.0, 2.0) - 4.0) < 1e-9)
+check("放大 4 倍只看四分之一", abs(p.timeline_span(8.0, 4.0) - 2.0) < 1e-9)
+check("缩放倍数夹在 1..64 之间",
+      abs(p.timeline_span(8.0, 0.2) - 8.0) < 1e-9
+      and abs(p.timeline_span(8.0, 1000.0)
+              - 8.0 / p.TIMELINE_ZOOM_MAX) < 1e-9)
+check("空片子不给负窗口", p.timeline_span(0.0, 4.0) == 0.0)
+check("窗口起点夹在片子里",
+      abs(p.timeline_clamp_start(3.0, 8.0, 4.0) - 3.0) < 1e-9
+      and abs(p.timeline_clamp_start(6.0, 8.0, 4.0) - 4.0) < 1e-9
+      and p.timeline_clamp_start(-2.0, 8.0, 4.0) == 0.0)
+check("窗口比片子长就从头看", p.timeline_clamp_start(3.0, 8.0, 8.0) == 0.0)
+check("时间换算成像素",
+      abs(p.timeline_x(4.0, 2.0, 4.0, 400) - 200.0) < 1e-9
+      and abs(p.timeline_x(2.0, 2.0, 4.0, 400)) < 1e-9
+      and abs(p.timeline_x(1.0, 2.0, 4.0, 400) + 100.0) < 1e-9)
+check("像素换算回时间并夹在片内",
+      abs(p.timeline_time(200, 2.0, 4.0, 400, 8.0) - 4.0) < 1e-9
+      and p.timeline_time(-400, 2.0, 4.0, 400, 8.0) == 0.0
+      and abs(p.timeline_time(1000, 2.0, 4.0, 400, 8.0) - 8.0) < 1e-9)
+check("缩放时锚点不动",
+      abs(p.timeline_zoom_start(2.0, 4.0, 4.0, 2.0, 8.0) - 3.0) < 1e-9)
+_ns74 = p.timeline_zoom_start(2.0, 4.0, 4.0, 2.0, 8.0)
+check("放大后鼠标下的时刻还在原来的像素",
+      abs(p.timeline_x(4.0, _ns74, 2.0, 400) - 200.0) < 1e-9)
+check("缩回整片时从头看",
+      p.timeline_zoom_start(2.0, 4.0, 4.0, 8.0, 8.0) == 0.0)
+check("缩小时起点不会超出右端",
+      abs(p.timeline_zoom_start(4.0, 4.0, 8.0, 6.0, 8.0) - 2.0) < 1e-9)
+
+_tl_src = _src[_src.index("class Timeline(QWidget):"):]
+_tl_src = _tl_src[:_tl_src.index("class ColorWheel(QWidget):")]
+check("时间线有缩放状态与窗口起点",
+      "self.zoom = 1.0" in _tl_src and "self.view_start = 0.0" in _tl_src)
+check("时间线把缩放/滚动变化发出来",
+      "viewChanged = pyqtSignal(float, float)" in _tl_src
+      and "self.viewChanged.emit(self.view_start" in _tl_src)
+_zoom_body = _tl_src[_tl_src.index("def _view_span(self) -> float:"):
+                     _tl_src.index("def _wave(self, path: str):")]
+check("缩放/滚动都走纯函数算窗口",
+      "timeline_span(self._total(), self.zoom)" in _zoom_body
+      and "timeline_clamp_start(" in _zoom_body
+      and "timeline_zoom_start(" in _zoom_body)
+check("缩放有上下限、锚点默认播放头",
+      "TIMELINE_ZOOM_MIN" in _zoom_body and "TIMELINE_ZOOM_MAX" in _zoom_body
+      and "anchor_t = self.play_pos" in _zoom_body)
+check("播放头走出窗口时窗口跟上",
+      "def ensure_visible" in _zoom_body and "self.set_view_start(t" in _zoom_body)
+_zw_body = _src[_src.index("def wheelEvent"):
+                _src.index("class ColorWheel(QWidget):")]
+check("Ctrl+滚轮缩放、以鼠标位置为中心",
+      "Qt.KeyboardModifier.ControlModifier" in _zw_body
+      and "self.zoom_at(x, dy > 0)" in _zw_body)
+check("Shift+滚轮/空白处横向滚动",
+      "self.scroll_by(-dy / 120.0" in _zw_body
+      and "Qt.KeyboardModifier.ShiftModifier" in _zw_body)
+check("音频块上普通滚轮仍是调音量",
+      "self.audioVolume.emit(k, step)" in _zw_body)
+check("各段像素位置按可见窗口算",
+      "timeline_x(x, start, span, self.width())" in _tl_src
+      and "timeline_x(max(0.0, a.start), start, span," in _tl_src
+      and "timeline_x(max(0.0, o.start), start, span," in _tl_src)
+check("拖动改长度的增量按可见窗口换算",
+      "(x - x0) * self._view_span() / max(1, self.width())" in _tl_src)
+check("窗口外的边也能算准（不夹范围）",
+      "def _raw_time" in _tl_src and "self._raw_time(xs0 if kind" in _tl_src)
+check("播放头/吸附线只画在窗口里",
+      "if 0 <= px <= self.width():" in _tl_src
+      and "if 0 <= gx <= self.width():" in _tl_src)
+check("画之前先把窗口拉回片子范围",
+      "self.clamp_view()" in _tl_src)
+
+_sync_body = _func_body("_sync_tl_scroll", "on_tl_scroll")
+check("下面有横向滚动条，范围按缩放算",
+      "self.tl_scroll.setRange(0, max(0, tot_ms - span_ms))" in _sync_body
+      and "self.tl_scroll.setPageStep(span_ms)" in _sync_body)
+check("滚动条拖动就挪窗口",
+      "self.timeline.set_view_start(value / 1000.0)" in _src)
+check("时间线自己缩放时滚动条跟着对齐",
+      "self.timeline.viewChanged.connect(self._on_tl_view)" in _src
+      and "def _on_tl_view(self, start, span):" in _src)
+check("刷新后重新算滚动条范围", "self._sync_tl_scroll()" in _src[
+      _src.index("def _refresh_all(self):"):_src.index("def _refresh_all(self):") + 1200])
+check("清晰度/缩放变化不影响成片",
+      "self.btn_fit.clicked.connect(self.on_tl_fit)" in _src
+      and "def on_tl_fit(self):" in _src
+      and "self.timeline.reset_view()" in _src)
+_ev74 = _func_body("eventFilter", "on_scrub_start")
+check("Ctrl+0 回到全片、Ctrl+= / Ctrl+- 缩放",
+      "Qt.Key.Key_0" in _ev74 and "self.timeline.reset_view()" in _ev74
+      and "self.on_tl_zoom(" in _ev74)
+check("播放时播放头走出窗口自动跟", "self.timeline.ensure_visible(" in _src)
+check("滚动条/缩放按钮都在界面上",
+      "self.tl_scroll = QScrollBar(Qt.Orientation.Horizontal)" in _src
+      and "self.lbl_zoom = QLabel(tr(\"全片\"))" in _src
+      and "self.btn_fit = QPushButton(tr(\"适应窗口\"))" in _src)
+
+check("放大后块上的文字贴到可见区左边、按可见宽度截断",
+      "tx = max(int(x0) + 6, 6)" in _tl_src
+      and "tx = max(int(x0) + 5, 5)" in _tl_src
+      and "if x1 - x0 > 26 and x1 > 0 and x0 < self.width():" in _tl_src)
+
+_zoom_keys = ["全片", "适应窗口",
+              "时间线横向滚动：拖这里看后半段；Ctrl+滚轮缩放",
+              "时间线缩放：Ctrl+滚轮，Ctrl+0 回到全片",
+              "时间线缩回全片（Ctrl+0）"]
+check("缩放/滚动词条四语齐全",
+      all(k in _i18n.get(lang, {}) for k in _zoom_keys
+          for lang in ("zh-TW", "en", "ja", "ko")),
+      [k for k in _zoom_keys if any(k not in _i18n.get(l, {})
+                                    for l in ("zh-TW", "en", "ja", "ko"))])
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

@@ -2833,3 +2833,27 @@ _TR_EXTRA41 = {
 for _k, _trs in _TR_EXTRA41.items():
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
         TR[_lang].setdefault(_k, _v)
+
+
+_TR_EXTRA42 = {
+    "全片": ("全片", "Full", "全体", "전체"),
+    "适应窗口": ("適應視窗", "Fit to window", "ウィンドウに合わせる", "창에 맞추기"),
+    "时间线横向滚动：拖这里看后半段；Ctrl+滚轮缩放": (
+        "時間線橫向捲動：拖這裡看後半段；Ctrl+滾輪縮放",
+        "Timeline scroll: drag to see the rest; Ctrl+wheel to zoom",
+        "タイムラインの横スクロール：ドラッグで後半へ、Ctrl+ホイールで拡大",
+        "타임라인 가로 스크롤: 끌어서 뒤쪽 보기, Ctrl+휠로 확대"),
+    "时间线缩放：Ctrl+滚轮，Ctrl+0 回到全片": (
+        "時間線縮放：Ctrl+滾輪，Ctrl+0 回到全片",
+        "Timeline zoom: Ctrl+wheel, Ctrl+0 to fit all",
+        "タイムラインの拡大：Ctrl+ホイール、Ctrl+0 で全体表示",
+        "타임라인 확대: Ctrl+휠, Ctrl+0으로 전체 보기"),
+    "时间线缩回全片（Ctrl+0）": (
+        "時間線縮回全片（Ctrl+0）",
+        "Zoom timeline back to the whole film (Ctrl+0)",
+        "タイムラインを全体表示に戻す（Ctrl+0）",
+        "타임라인을 전체로 되돌리기 (Ctrl+0)"),
+}
+for _k, _trs in _TR_EXTRA42.items():
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
+        TR[_lang].setdefault(_k, _v)
