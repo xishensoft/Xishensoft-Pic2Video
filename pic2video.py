@@ -509,6 +509,7 @@ class Settings:
         "export_preset": "generic",  # 上次用的平台预设（导出框默认选它）
         "cover_export": False,       # 导出时顺便截一张封面
         "cover_at": -1.0,            # 封面时间点；-1 = 第一张图片段正中间
+        "snap_on": True,             # 时间线磁吸（贴住附近的边）
         "win_w": 0,               # 窗口大小/位置，0 = 用默认
         "win_h": 0,
         "win_x": -1,
@@ -649,6 +650,8 @@ class Settings:
             d["cover_at"] = -1.0
         if d["cover_at"] < -1.0:
             d["cover_at"] = -1.0
+        if not isinstance(d.get("snap_on"), bool):
+            d["snap_on"] = True
         if d.get("motion") not in MOTIONS:
             d["motion"] = "none"
         if d.get("crop_focus") not in CROP_FOCUS:
@@ -1295,11 +1298,11 @@ class AudioClip:
     """
 
     __slots__ = ("path", "dur", "start", "volume", "gap",
-                 "gain_db", "points")
+                 "gain_db", "points", "src_in")
 
     def __init__(self, path: str, dur: float, start: float = 0.0,
                  volume: float = 1.0, gap: bool = False,
-                 gain_db: float = 0.0, points=None):
+                 gain_db: float = 0.0, points=None, src_in: float = 0.0):
         self.path = path
         self.dur = float(dur)
         self.start = max(0.0, float(start))
@@ -1307,6 +1310,7 @@ class AudioClip:
         self.gap = bool(gap)
         self.gain_db = clamp_gain_db(gain_db)
         self.points = clean_env_points(points)
+        self.src_in = max(0.0, float(src_in))   # 从源的第几秒开始用（裁头）
 
     @property
     def name(self) -> str:
@@ -1650,7 +1654,7 @@ class Project:
                       for c in self.clips],
             "audios": [{"path": a.path, "dur": a.dur, "start": a.start,
                         "volume": a.volume, "gap": bool(a.gap),
-                        "gain_db": a.gain_db,
+                        "gain_db": a.gain_db, "src_in": a.src_in,
                         "points": [[t, g] for t, g in a.points]}
                        for a in self.audios],
             "overlays": [{"path": o.path, "start": o.start, "end": o.end,
@@ -1782,7 +1786,8 @@ class Project:
                          _doc_num(raw.get("start"), 0.0),
                          _doc_num(raw.get("volume"), 1.0),
                          bool(raw.get("gap", False)),
-                         raw.get("gain_db"), raw_points)
+                         raw.get("gain_db"), raw_points,
+                         src_in=max(0.0, _doc_num(raw.get("src_in"), 0.0)))
 
     # 撤销栈沿用的老名字，底下就是工程格式，别再长两套
     def to_state(self) -> dict:
@@ -2136,6 +2141,42 @@ class Project:
             acc += span
         return False
 
+    def split_audio(self, k: int, t: float) -> bool:
+        """在时间线 t 秒处把第 k 条音频切成两条（裁过头尾剩下的部分照切）。"""
+        if not (0 <= k < len(self.audios)):
+            return False
+        a = self.audios[k]
+        if a.gap:
+            return False
+        off = t - a.start
+        if off <= 0.05 or off >= a.dur - 0.05:
+            return False
+        right = AudioClip(a.path, a.dur - off, a.start + off, a.volume,
+                          a.gap, a.gain_db,
+                          [[round(p - off, 3), g] for p, g in a.points
+                           if p >= off],
+                          a.src_in + off)
+        a.dur = off
+        a.points = clean_env_points([[p, g] for p, g in a.points
+                                     if p <= off])
+        self.audios.insert(k + 1, right)
+        return True
+
+    def remove_audio(self, indexes, ripple: bool = False):
+        """删掉几条音频；ripple 时后面的音频整体前移，补上空出来的时间。"""
+        rows = [k for k in sorted(set(indexes), reverse=True)
+                if 0 <= k < len(self.audios)]
+        if not rows:
+            return
+        gone = [(self.audios[k].start, self.audios[k].dur) for k in rows]
+        for k in rows:
+            del self.audios[k]
+        if ripple:
+            for lo, dur in gone:
+                for a in self.audios:
+                    if a.start >= lo - 1e-6:
+                        a.start = max(0.0, a.start - dur)
+
     def move(self, index: int, delta: int):
         j = index + delta
         if 0 <= index < len(self.clips) and 0 <= j < len(self.clips):
@@ -2448,6 +2489,34 @@ def format_ass(cues: list, font: str = "Microsoft YaHei", size: int = 48,
 def subtitle_px(size: int, height: int) -> int:
     """字号按 1080p 定，实际按画面高度等比缩放（小窗预览才不会字撑满屏）。"""
     return max(8, int(round(float(size) * float(height) / 1080.0)))
+
+
+SNAP_PX = 8        # 磁吸容差：离得这么近（像素）就贴上去
+
+
+def snap_value(value: float, targets, tolerance: float):
+    """把 value 吸到最近的 target；返回 (吸后的值, 吸到的目标或 None)。"""
+    best, best_d = None, max(0.0, float(tolerance))
+    for t in targets:
+        d = abs(float(t) - value)
+        if d <= best_d:
+            best, best_d = float(t), d
+    return (best if best is not None else value), best
+
+
+def snap_candidates(project, playhead: float = 0.0, extra=()) -> list:
+    """时间线上值得贴的点：首尾、播放头、每个边界、音频与画中画的首尾。"""
+    out = [0.0, project.total(), max(0.0, float(playhead))]
+    acc = 0.0
+    for c in project.clips:
+        acc += c.span
+        out.append(acc)
+    for a in project.audios:
+        out.extend([a.start, a.start + a.dur])
+    for o in project.overlays:
+        out.extend([o.start, o.end])
+    out.extend(float(v) for v in extra)
+    return sorted({round(v, 3) for v in out if v >= 0.0})
 
 
 def _write_ass(cues, w: int, h: int, font: str, size: int) -> str:
@@ -3491,8 +3560,9 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
         parts.append(audio + main_label)
         mix = [main_label]
         for k, ex in enumerate(extras):
-            ch = (f"[{ex['index']}:a]atrim=start=0:end={ex['dur']:.3f},"
-                  f"asetpts=N/SR/TB")
+            si = max(0.0, float(ex.get("src_in", 0.0)))
+            ch = (f"[{ex['index']}:a]atrim=start={si:.3f}:"
+                  f"end={si + ex['dur']:.3f},asetpts=N/SR/TB")
             vol = float(ex.get("volume", 1.0))
             if abs(vol - 1.0) > 0.005:
                 ch += f",volume={max(0.0, vol):.3f}"
@@ -3576,8 +3646,9 @@ def build_audio_graph(total: float, *, timeline=None, audio_index: int = 0,
         parts.append(audio + main_label)
         mix = [main_label]
         for k, ex in enumerate(extras):
-            ch = (f"[{ex['index']}:a]atrim=start=0:end={ex['dur']:.3f},"
-                  f"asetpts=N/SR/TB")
+            si = max(0.0, float(ex.get("src_in", 0.0)))
+            ch = (f"[{ex['index']}:a]atrim=start={si:.3f}:"
+                  f"end={si + ex['dur']:.3f},asetpts=N/SR/TB")
             vol = float(ex.get("volume", 1.0))
             if abs(vol - 1.0) > 0.005:
                 ch += f",volume={max(0.0, vol):.3f}"
@@ -3645,6 +3716,7 @@ def render_audio_mix(clips, counts, audio, out_path, *, fps: int = FPS,
         dur = ex.get("dur") or probe_duration(ex["path"])
         extra_specs.append({"index": 1 + k, "start": ex.get("start", 0.0),
                             "dur": max(0.05, dur),
+                            "src_in": max(0.0, float(ex.get("src_in") or 0.0)),
                             "volume": ex.get("volume", 1.0),
                             "gain_db": ex.get("gain_db", 0.0),
                             "points": ex.get("points")})
@@ -3678,8 +3750,9 @@ def _audio_items(audio) -> list[dict]:
             items.append(a)
         elif isinstance(a, AudioClip):
             items.append({"path": a.path, "start": a.start, "dur": a.dur,
-                          "volume": a.volume, "gap": a.gap,
-                          "gain_db": a.gain_db, "points": list(a.points)})
+                          "src_in": a.src_in, "volume": a.volume,
+                          "gap": a.gap, "gain_db": a.gain_db,
+                          "points": list(a.points)})
         else:  # 路径字符串
             items.append({"path": a, "start": 0.0,
                           "dur": probe_duration(a), "volume": 1.0, "gap": True})
@@ -3812,6 +3885,7 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
         dur = ex.get("dur") or probe_duration(ex["path"])
         extra_specs.append({"index": idx, "start": ex.get("start", 0.0),
                             "dur": max(0.05, dur),
+                            "src_in": max(0.0, float(ex.get("src_in") or 0.0)),
                             "volume": ex.get("volume", 1.0),
                             "gain_db": ex.get("gain_db", 0.0),
                             "points": ex.get("points")})
@@ -5144,6 +5218,9 @@ def run_gui() -> int:
         audioVolume = pyqtSignal(int, float)
         envelopeChanged = pyqtSignal(int)
         overlayMoved = pyqtSignal(int, float)
+        cut = pyqtSignal(str, int, float)          # 刀片：("video"/"audio", 序号, 时刻)
+        audioTrimmed = pyqtSignal(int, str, float)  # 拖音频左右边：裁头/裁尾
+        audioTrimDone = pyqtSignal(int)             # 裁完松手（这时才记一步历史）
         menu = pyqtSignal(str, int, object)
 
         DEFAULT_COLORS = {"bg": "#1f2329", "empty": "#9ca3af",
@@ -5162,6 +5239,9 @@ def run_gui() -> int:
             self.sel_env = (-1, -1)
             self._waves = {}
             self.play_pos = 0.0
+            self.snap_on = True
+            self.razor = False
+            self.snap_guide = None
             self._drag = None
             self._press = 0.0
             self.c = dict(self.DEFAULT_COLORS)
@@ -5265,6 +5345,52 @@ def run_gui() -> int:
             n = max(1, count)
             row = max(10.0, (bottom - top) / n)
             return [(top + i * row, top + (i + 1) * row - 2) for i in range(n)]
+
+        # -- 磁吸 / 刀片 ----------------------------------------------
+        def set_snap(self, on: bool):
+            self.snap_on = bool(on)
+            self.snap_guide = None
+            self.update()
+
+        def set_razor(self, on: bool):
+            self.razor = bool(on)
+            self.snap_guide = None
+            self.setCursor(Qt.CursorShape.CrossCursor if self.razor
+                           else Qt.CursorShape.PointingHandCursor)
+            self.update()
+
+        def _snap_tol(self) -> float:
+            return SNAP_PX * self._total() / max(1, self.width())
+
+        def _snap_time(self, t: float, alt: bool = False):
+            """把时刻吸到附近的边；按住 Alt 当场不吸，guide 记下贴到了哪。"""
+            if not self.snap_on or alt:
+                self.snap_guide = None
+                return t
+            value, hit = snap_value(t, snap_candidates(self.project,
+                                                       self.play_pos),
+                                    self._snap_tol())
+            self.snap_guide = hit
+            return value
+
+        def _hit_audio_edge(self, x, y):
+            """音频块的左右边：拖它就是裁头 / 裁尾。"""
+            top, bottom = self._audio_rect()
+            if y < top - 3 or y > bottom + 3:
+                return -1, ""
+            spans = self._audio_spans()
+            rows = self._audio_rows(len(spans))
+            for k, (x0, x1, a) in enumerate(spans):
+                if a.gap:
+                    continue
+                ry0, ry1 = rows[k]
+                if y < ry0 - 2 or y > ry1 + 2:
+                    continue
+                if abs(x - x0) <= 5:
+                    return k, "left"
+                if abs(x - x1) <= 5:
+                    return k, "right"
+            return -1, ""
 
         def set_colors(self, colors):
             """主题换了就换色带配色（时间线自己画，不吃 QSS）。"""
@@ -5406,6 +5532,12 @@ def run_gui() -> int:
             p.setPen(QPen(QColor(self.c["playhead"]), 2))
             p.drawLine(px, 0, px, self.height())
 
+            if self.snap_guide is not None:
+                gx = int(self.width() * min(1.0, self.snap_guide / total))
+                p.setPen(QPen(QColor(self.c["selected_edge"]), 1,
+                              Qt.PenStyle.DashLine))
+                p.drawLine(gx, 0, gx, self.height())
+
         # -- 命中 ------------------------------------------------------
         def _hit_video(self, x, y):
             _t, vh = self._video_rect()
@@ -5482,6 +5614,17 @@ def run_gui() -> int:
             if ev.button() != Qt.MouseButton.LeftButton:
                 return
 
+            if self.razor:
+                # 刀片模式：点哪块切哪块，不进入拖动
+                i, _edge = self._hit_video(x, y)
+                if i >= 0:
+                    self.cut.emit("video", i, self._time_at(x))
+                    return
+                k = self._hit_audio(x, y)
+                if k >= 0 and not self.project.audios[k].gap:
+                    self.cut.emit("audio", k, self._time_at(x))
+                return
+
             # Alt + 点音频块：在这一刻加一个包络点
             if ev.modifiers() & Qt.KeyboardModifier.AltModifier:
                 k = self._hit_audio(x, y)
@@ -5547,6 +5690,15 @@ def run_gui() -> int:
                 self.update()
                 return
 
+            ek, eedge = self._hit_audio_edge(x, y)
+            if ek >= 0:
+                self.sel_audio = [ek]
+                self._drag = ("atrimL" if eedge == "left" else "atrimR",
+                              ek, x, 0.0)
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
+                self.update()
+                return
+
             k = self._hit_audio(x, y)
             if k >= 0:
                 a = self.project.audios[k]
@@ -5574,12 +5726,17 @@ def run_gui() -> int:
         def mouseMoveEvent(self, ev):
             x, y = ev.position().x(), ev.position().y()
             if not self._drag:
+                if self.razor:
+                    self.setCursor(Qt.CursorShape.CrossCursor)
+                    return
                 i, _edge_x = self._hit_video(x, y)
                 near = False
                 if i >= 0:
                     spans, _t = self._spans()
                     x0, x1, _d = spans[i]
                     near = min(abs(x - x0), abs(x - x1)) <= 5
+                if not near:
+                    near = self._hit_audio_edge(x, y)[0] >= 0
                 self.setCursor(Qt.CursorShape.SizeHorCursor if near
                                else Qt.CursorShape.PointingHandCursor)
                 return
@@ -5594,14 +5751,39 @@ def run_gui() -> int:
                 _k, i, x0, _span0 = self._drag
                 _spans, total = self._spans()
                 delta = (x - x0) * total / max(1, self.width())
+                alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
+                xs0, xs1, _d = _spans[i]
+                edge = total * (xs0 if kind == "trimL" else xs1) / max(
+                    1, self.width())
+                snapped = self._snap_time(edge + delta, alt)
                 self.trimmed.emit(i, "left" if kind == "trimL" else "right",
-                                  delta)
+                                  snapped - edge)
+                self._drag = (kind, i, x, _span0)   # 增量式：基准跟着鼠标走
+                self.update()
                 return
             if kind == "resize":
                 _k, i, x0, d0 = self._drag
                 _spans, total = self._spans()
-                self.resized.emit(
-                    i, d0 + (x - x0) * total / max(1, self.width()))
+                start_t = sum(c.span for c in self.project.clips[:i])
+                d = d0 + (x - x0) * total / max(1, self.width())
+                alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
+                end_t = self._snap_time(start_t + d, alt)
+                self.resized.emit(i, max(0.05, end_t - start_t))
+                self.update()
+                return
+            if kind in ("atrimL", "atrimR"):
+                _k, idx, x0, _v = self._drag
+                _spans, total = self._spans()
+                a = self.project.audios[idx]
+                delta = (x - x0) * total / max(1, self.width())
+                alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
+                edge = a.start if kind == "atrimL" else a.start + a.dur
+                snapped = self._snap_time(edge + delta, alt)
+                self.audioTrimmed.emit(idx,
+                                       "left" if kind == "atrimL" else "right",
+                                       snapped - edge)
+                self._drag = (kind, idx, x, 0.0)
+                self.update()
                 return
             if kind == "overlay":
                 self.play_pos = self._time_at(x)
@@ -5636,7 +5818,10 @@ def run_gui() -> int:
 
         def mouseReleaseEvent(self, ev):
             drag, self._drag = self._drag, None
-            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.snap_guide = None
+            self.update()
+            self.setCursor(Qt.CursorShape.CrossCursor if self.razor
+                           else Qt.CursorShape.PointingHandCursor)
             if not drag:
                 return
             kind = drag[0]
@@ -5648,6 +5833,9 @@ def run_gui() -> int:
                 return
             if kind == "env":
                 self.envelopeChanged.emit(drag[1])
+                return
+            if kind in ("atrimL", "atrimR"):
+                self.audioTrimDone.emit(drag[1])
                 return
             if kind == "overlay":
                 _k, idx, x0, start0 = drag
@@ -5664,7 +5852,22 @@ def run_gui() -> int:
                 total = self._total()
                 delta = (x - x0) * total / max(1, self.width())
                 a = self.project.audios[idx]
-                self.audioMoved.emit(idx, max(0.0, start0 + delta))
+                start_t = max(0.0, start0 + delta)
+                alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
+                if self.snap_on and not alt:
+                    # 头尾哪边离边更近就吸哪边
+                    cand = snap_candidates(self.project, self.play_pos)
+                    tol = self._snap_tol()
+                    head, head_hit = snap_value(start_t, cand, tol)
+                    tail, tail_hit = snap_value(start_t + a.dur, cand, tol)
+                    if head_hit is not None and (
+                            tail_hit is None
+                            or abs(head_hit - start_t) <= abs(
+                                tail_hit - (start_t + a.dur))):
+                        start_t = max(0.0, head)
+                    elif tail_hit is not None:
+                        start_t = max(0.0, tail - a.dur)
+                self.audioMoved.emit(idx, start_t)
                 return
 
         def wheelEvent(self, ev):
@@ -7263,9 +7466,9 @@ def run_gui() -> int:
                 QToolButton.ToolButtonPopupMode.InstantPopup)
             self.btn_project.setMenu(self._build_project_menu())
             bar.addWidget(self.btn_project)
-            def btn(text, slot, tip=""):
+            def btn(text, slot, tip="", signal="clicked"):
                 b = QPushButton(text)
-                b.clicked.connect(slot)
+                getattr(b, signal).connect(slot)
                 if tip:
                     b.setToolTip(tip)
                 bar.addWidget(b)
@@ -7278,6 +7481,15 @@ def run_gui() -> int:
             self.btn_up = btn(tr("上移"), lambda: self.on_move(-1))
             self.btn_down = btn(tr("下移"), lambda: self.on_move(1))
             self.btn_remove = btn(tr("删除"), self.on_remove)
+            self.btn_snap = btn(tr("磁吸"), self.on_toggle_snap,
+                                tr("吸附：拖动时贴住附近的边（Alt 临时关）"),
+                                "toggled")
+            self.btn_snap.setCheckable(True)
+            self.btn_snap.setChecked(bool(self.settings["snap_on"]))
+            self.btn_razor = btn(tr("切割"), self.on_toggle_razor,
+                                 tr("切割模式：点哪块切哪块（Esc 退出）"),
+                                 "toggled")
+            self.btn_razor.setCheckable(True)
             self.btn_undo_bar = btn(tr("撤回"), self.on_undo, tr("撤销上一步（Ctrl+Z）"))
             self.btn_redo_bar = btn(tr("还原"), self.on_redo, tr("重做（Ctrl+Shift+Z）"))
             self.btn_settings = btn(
@@ -7494,7 +7706,11 @@ def run_gui() -> int:
             self.timeline.audioVolume.connect(self.on_audio_volume)
             self.timeline.envelopeChanged.connect(self.on_envelope_changed)
             self.timeline.overlayMoved.connect(self.on_overlay_moved)
+            self.timeline.audioTrimmed.connect(self.on_audio_trim)
+            self.timeline.audioTrimDone.connect(self.on_audio_trim_done)
+            self.timeline.cut.connect(self.on_cut)
             self.timeline.menu.connect(self.on_timeline_menu)
+            self.timeline.set_snap(bool(self.settings["snap_on"]))
             v.addWidget(self.timeline)
 
             foot = QHBoxLayout()
@@ -7539,6 +7755,10 @@ def run_gui() -> int:
             self.btn_up.setText(tr("上移"))
             self.btn_down.setText(tr("下移"))
             self.btn_remove.setText(tr("删除"))
+            self.btn_snap.setText(tr("磁吸"))
+            self.btn_snap.setToolTip(tr("吸附：拖动时贴住附近的边（Alt 临时关）"))
+            self.btn_razor.setText(tr("切割"))
+            self.btn_razor.setToolTip(tr("切割模式：点哪块切哪块（Esc 退出）"))
             self.btn_undo_bar.setText(tr("撤回"))
             self.btn_undo_bar.setToolTip(tr("撤销上一步（Ctrl+Z）"))
             self.btn_redo_bar.setText(tr("还原"))
@@ -7581,6 +7801,7 @@ def run_gui() -> int:
             # 英文/日文文案更长：先让按钮/标签不许缩到文字以下，再按需把窗口拉宽
             self.ensurePolished()
             for w_ in (self.btn_add, self.btn_up, self.btn_down, self.btn_remove,
+                       self.btn_snap, self.btn_razor,
                        self.btn_undo_bar, self.btn_redo_bar,
                        self.btn_settings, self.btn_refresh, self.btn_export,
                        self.btn_mode, self.btn_retry, self.lbl_bgm,
@@ -7676,10 +7897,13 @@ def run_gui() -> int:
             排序删除改秒数走列表右键菜单，设置走右上角「⋯」。"""
             simple = self.settings["ui"] == "simple"
             for w_ in (self.btn_up, self.btn_down, self.btn_remove,
-                       self.btn_undo_bar, self.btn_redo_bar,
                        self.btn_settings, self.cmb_rhythm, self.radio_total,
                        self.radio_free, self.spin_total, self.btn_refresh):
                 w_.setVisible(not simple)
+            # 磁吸 / 切割 / 撤回 / 还原是剪辑时一直在点的，两个模式都留着
+            for w_ in (self.btn_snap, self.btn_razor,
+                       self.btn_undo_bar, self.btn_redo_bar):
+                w_.setVisible(True)
             self.btn_more.setVisible(simple)
 
         def _menu_labels(self):
@@ -8244,6 +8468,66 @@ def run_gui() -> int:
             for p in picked:
                 self.add_audio_extra(p)
 
+        def on_toggle_snap(self, on):
+            on = bool(on)
+            self.timeline.set_snap(on)
+            self.settings.update(snap_on=on)
+            self.settings.save()
+            self.lbl_status.setText(tr("磁吸已开") if on else tr("磁吸已关"))
+
+        def on_toggle_razor(self, on):
+            on = bool(on)
+            self.timeline.set_razor(on)
+            self.lbl_status.setText(
+                tr("切割模式已开：点哪块切哪块，Esc 退出") if on
+                else tr("切割模式已关"))
+
+        def on_cut(self, kind, index, t):
+            """刀片：在点击处切开画面段或音频段。"""
+            if kind == "audio":
+                ok = self.project.split_audio(index, t)
+            else:
+                ok = self.project.split_at(t)
+            if not ok:
+                self.lbl_status.setText(tr("这儿切不了：离段首或段尾太近"))
+                return
+            self._refresh_all()
+            self._mark_stale()
+            self._history_push(tr("切开"))
+            self.lbl_status.setText(tr("已切开"))
+
+        def on_audio_trim(self, k, edge, delta):
+            """拖音频左右边：左边裁头（起点与源入点一起走），右边裁尾。"""
+            if not (0 <= k < len(self.project.audios)):
+                return
+            a = self.project.audios[k]
+            if a.gap:
+                return
+            step = float(delta)
+            if edge == "left":
+                step = max(-a.start, min(max(0.0, a.dur - 0.1), step))
+                if abs(step) < 1e-6:
+                    return
+                a.start = max(0.0, a.start + step)
+                a.src_in = max(0.0, a.src_in + step)
+                a.dur = max(0.1, a.dur - step)
+                a.points = clean_env_points([[max(0.0, p - step), g]
+                                             for p, g in a.points])
+            else:
+                src_len = probe_duration(a.path) or (a.src_in + a.dur)
+                room = max(0.1, src_len - a.src_in)
+                a.dur = min(room, max(0.1, a.dur + step))
+            self.timeline.update()
+            self._mark_stale()
+            self.lbl_status.setText(
+                tr("这条音频 {a} → {b} 秒", a=human_time(a.start),
+                   b=human_time(a.start + a.dur)))
+
+        def on_audio_trim_done(self, k):
+            self._history_push(tr("裁音频"))
+            self._mark_dirty()
+            self._refresh_scene()
+
         def on_remove_audio(self, k):
             if 0 <= k < len(self.project.audios):
                 log("remove audio k=%d" % k)
@@ -8252,6 +8536,16 @@ def run_gui() -> int:
                 self._refresh_all()
                 self._mark_stale()
                 self._history_push(tr("删音频"))
+
+        def on_remove_audio_ripple(self, rows):
+            """涟漪删除：删掉这几条，后面的音频往前补上空出来的时间。"""
+            if not rows:
+                return
+            self.project.remove_audio(rows, ripple=True)
+            self.timeline.sel_audio = []
+            self._refresh_all()
+            self._mark_stale()
+            self._history_push(tr("删音频并前移"))
 
         def on_audio_move(self, k, start):
             if not (0 <= k < len(self.project.audios)):
@@ -8483,6 +8777,11 @@ def run_gui() -> int:
                     rm = m.addAction(tr("删除这条音频"))
                     rm.triggered.connect(
                         lambda _c=False, k=extra[0]: self.on_remove_audio(k))
+                    rm2 = m.addAction(tr("删除并前移"))
+                    rm2.setToolTip(tr("删掉这条音频，后面的音频整体往前挪"))
+                    rm2.triggered.connect(
+                        lambda _c=False, t=extra:
+                        self.on_remove_audio_ripple(t))
             return m
 
         def on_toggle_fade(self, rows):
@@ -8835,6 +9134,9 @@ def run_gui() -> int:
                                   QAbstractItemView, QSlider)):
                 return super().eventFilter(obj, ev)
             key = ev.key()
+            if key == Qt.Key.Key_Escape and self.timeline.razor:
+                self.btn_razor.setChecked(False)   # 走 toggled → on_toggle_razor
+                return True
             if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
                 step = 1.0
                 if not (ev.modifiers() & Qt.KeyboardModifier.ShiftModifier):

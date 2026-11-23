@@ -3448,6 +3448,145 @@ check("认不出下标时才退回重建",
 check("重排后把选中还原回新位置",
       "iids.index(k)" in _moved_body)
 
+# ---------------- 73 时间线磁吸 / 音频裁头尾 / 刀片切开 / 涟漪删除
+_v, _h = p.snap_value(3.0, [1.0, 3.0, 5.0], 0.2)
+check("磁吸：正好落在边上", _v == 3.0 and _h == 3.0)
+_v, _h = p.snap_value(3.1, [1.0, 3.0], 0.2)
+check("磁吸：容差内吸过去", abs(_v - 3.0) < 1e-9 and _h == 3.0)
+_v, _h = p.snap_value(3.4, [1.0, 3.0], 0.2)
+check("磁吸：容差外不动", abs(_v - 3.4) < 1e-9 and _h is None)
+_v, _h = p.snap_value(1.0, [], 0.2)
+check("磁吸：没有目标就原样返回", _v == 1.0 and _h is None)
+_v, _h = p.snap_value(2.0, [1.0, 2.5], 0.0)
+check("磁吸：容差 0 只吸正好的", _h is None)
+_v, _h = p.snap_value(2.4, [2.0, 2.6], 0.5)
+check("磁吸：挑最近的那个", _h == 2.6)
+
+_pj = p.Project()
+_pj.clips.append(p.Clip(IMG[0], 3.0))
+_pj.clips.append(p.Clip(IMG[1], 3.0))
+_pj.audios.append(p.AudioClip(TONE, 2.0, 1.0))
+_pj.overlays.append(p.Overlay(IMG[2], 0.5, 1.5))
+_cand = p.snap_candidates(_pj, 2.0)
+check("吸附点含首尾", 0.0 in _cand and 3.0 in _cand and 6.0 in _cand, _cand)
+check("吸附点含播放头", 2.0 in _cand)
+check("吸附点含音频首尾", 1.0 in _cand and 3.0 in _cand)
+check("吸附点含画中画首尾", 0.5 in _cand and 1.5 in _cand)
+check("吸附点有序且不重复", _cand == sorted(set(_cand)))
+check("吸附点能再补几个", 4.5 in p.snap_candidates(_pj, 2.0, extra=(4.5,)))
+
+_a = p.AudioClip(TONE, 4.0, 1.0, 1.0, False, 0.0,
+                 [[0.0, 1.0], [1.0, 0.6], [3.0, 0.2]], 0.5)
+check("音频默认从源的第 0 秒开始", p.AudioClip(TONE, 2.0).src_in == 0.0)
+check("音频记得裁头位置", abs(_a.src_in - 0.5) < 1e-9)
+_pj2 = p.Project()
+_pj2.clips.append(p.Clip(IMG[0], 2.0))
+_pj2.audios.append(_a)
+_doc = _pj2.to_doc()
+check("工程文件里写着裁头位置",
+      abs(_doc["audios"][0]["src_in"] - 0.5) < 1e-9)
+_back = p.Project.from_doc(json.loads(json.dumps(_doc)))
+check("读回来裁头位置还在", abs(_back.audios[0].src_in - 0.5) < 1e-9)
+_olddoc = _pj2.to_doc()
+del _olddoc["audios"][0]["src_in"]
+check("老工程没这个字段就当 0",
+      p.Project.from_doc(_olddoc).audios[0].src_in == 0.0)
+_g = p.build_audio_graph(
+    6.0, timeline=[(True, 6.0)],
+    extras=[{"index": 1, "start": 0.5, "dur": 2.0, "src_in": 2.0,
+             "volume": 1.0, "gain_db": 0.0, "points": None}])
+check("裁头之后从源的 2 秒开始取", "atrim=start=2.000:end=4.000" in _g)
+
+_split = p.Project()
+_split.clips.append(p.Clip(IMG[0], 6.0))
+_split.audios.append(p.AudioClip(TONE, 4.0, 1.0, 1.0, False, 0.0,
+                                 [[0.0, 1.0], [1.0, 0.6], [3.0, 0.2]], 0.5))
+check("音频能在 2 秒处切开", _split.split_audio(0, 2.0) is True)
+check("切开后变成两条", len(_split.audios) == 2)
+_left, _right = _split.audios
+check("左条到切开点为止",
+      abs(_left.dur - 1.0) < 1e-9 and abs(_left.start - 1.0) < 1e-9)
+check("右条接着往后",
+      abs(_right.start - 2.0) < 1e-9 and abs(_right.dur - 3.0) < 1e-9)
+check("右条从源的更后面开始", abs(_right.src_in - 1.5) < 1e-9)
+check("包络点按切开点分开",
+      [round(x[0], 3) for x in _left.points] == [0.0, 1.0]
+      and [round(x[0], 3) for x in _right.points] == [0.0, 2.0],
+      [_left.points, _right.points])
+_bad = p.Project()
+_bad.clips.append(p.Clip(IMG[0], 6.0))
+_bad.audios.append(p.AudioClip(TONE, 4.0, 1.0))
+check("太靠开头切不了", _bad.split_audio(0, 1.02) is False)
+check("太靠结尾切不了", _bad.split_audio(0, 4.98) is False)
+check("越界切不了", _bad.split_audio(9, 3.0) is False)
+_gap = p.Project()
+_gap.clips.append(p.Clip(IMG[0], 6.0))
+_gap.audios.append(p.AudioClip(TONE, 2.0, 0.0, 1.0, True))
+check("空白占位不能切", _gap.split_audio(0, 1.0) is False)
+_rm = p.Project()
+_rm.clips.append(p.Clip(IMG[0], 10.0))
+_rm.audios.append(p.AudioClip(TONE, 2.0, 0.0))
+_rm.audios.append(p.AudioClip(TONE, 1.0, 5.0))
+_rm.audios.append(p.AudioClip(TONE, 1.0, 8.0))
+_rm.remove_audio([0], ripple=True)
+check("涟漪删除把后面的音频往前挪",
+      [round(a.start, 3) for a in _rm.audios] == [3.0, 6.0],
+      [a.start for a in _rm.audios])
+_rm2 = p.Project()
+_rm2.clips.append(p.Clip(IMG[0], 10.0))
+_rm2.audios.append(p.AudioClip(TONE, 2.0, 0.0))
+_rm2.audios.append(p.AudioClip(TONE, 1.0, 5.0))
+_rm2.remove_audio([0])
+check("不平移时后面的音频不动",
+      [round(a.start, 3) for a in _rm2.audios] == [5.0])
+
+for _pat, _name in [
+        ("cut = pyqtSignal(str, int, float)", "时间线有切开信号"),
+        ("audioTrimmed = pyqtSignal(int, str, float)", "时间线有裁音频信号"),
+        ("audioTrimDone = pyqtSignal(int)", "松手才记历史"),
+        ("def set_snap", "时间线有磁吸开关"),
+        ("def set_razor", "时间线有切割模式"),
+        ("def _snap_time", "时间线会算吸附"),
+        ("def _hit_audio_edge", "音频块左右边能命中"),
+        ("if self.snap_guide is not None:", "吸附时画参考线"),
+        ("Qt.PenStyle.DashLine", "参考线是虚线"),
+        ("atrimL", "音频左边能拖"),
+        ("atrimR", "音频右边能拖"),
+        ("if self.razor:", "切割模式先看自己在不在"),
+        ("self.btn_snap = btn(tr(\"磁吸\")", "工具条有磁吸按钮"),
+        ("self.btn_razor = btn(tr(\"切割\")", "工具条有切割按钮"),
+        ("def on_toggle_snap", "磁吸按钮有处理函数"),
+        ("def on_toggle_razor", "切割按钮有处理函数"),
+        ("def on_cut", "切开有处理函数"),
+        ("def on_audio_trim", "裁音频有处理函数"),
+        ("def on_audio_trim_done", "裁完记历史"),
+        ("def on_remove_audio_ripple", "音频能涟漪删除"),
+        ("self.project.remove_audio(rows, ripple=True)", "涟漪删除调对了接口"),
+        ("audioTrimmed.connect(self.on_audio_trim)", "裁音频接上了"),
+        ("audioTrimDone.connect(self.on_audio_trim_done)", "裁完接上了"),
+        ("self.timeline.cut.connect(self.on_cut)", "切开接上了"),
+        ("self.timeline.set_snap(bool(self.settings[\"snap_on\"]))", "启动时恢复磁吸开关"),
+        ("if key == Qt.Key.Key_Escape and self.timeline.razor:", "Esc 退出切割模式"),
+]:
+    check(_name, _pat in _src)
+
+_snap_keys = ["磁吸", "吸附：拖动时贴住附近的边（Alt 临时关）", "切割",
+              "切割模式：点哪块切哪块（Esc 退出）", "磁吸已开", "磁吸已关",
+              "切割模式已开：点哪块切哪块，Esc 退出", "切割模式已关",
+              "这儿切不了：离段首或段尾太近", "已切开", "切开", "裁音频",
+              "这条音频 {a} → {b} 秒", "删除并前移",
+              "删掉这条音频，后面的音频整体往前挪", "删音频并前移"]
+check("磁吸/切割的词条四语齐全",
+      all(k in _i18n.get(lang, {}) for k in _snap_keys
+          for lang in ("zh-TW", "en", "ja", "ko")),
+      [k for k in _snap_keys if any(k not in _i18n.get(l, {})
+                                    for l in ("zh-TW", "en", "ja", "ko"))])
+
+
+check("磁吸/切割按钮走 toggled，程序里改选中也能生效",
+      'def btn(text, slot, tip="", signal="clicked")' in _src
+      and '"toggled"' in _src)
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

@@ -2783,3 +2783,53 @@ _TR_EXTRA40 = {
 for _k, _trs in _TR_EXTRA40.items():
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
         TR[_lang].setdefault(_k, _v)
+
+# 磁吸 / 刀片 / 音频裁头尾
+_TR_EXTRA41 = {
+    "磁吸": ("磁吸", "Snap", "スナップ", "자석"),
+    "吸附：拖动时贴住附近的边（Alt 临时关）": (
+        "吸附：拖動時貼住附近的邊（Alt 臨時關）",
+        "Snap: drags stick to nearby edges (hold Alt to bypass)",
+        "スナップ：ドラッグ時に近くの端に吸着します（Alt で一時解除）",
+        "자석: 드래그할 때 가까운 가장자리에 붙습니다(Alt로 임시 해제)"),
+    "切割": ("切割", "Cut", "カット", "자르기"),
+    "切割模式：点哪块切哪块（Esc 退出）": (
+        "切割模式：點哪塊切哪塊（Esc 退出）",
+        "Cut mode: click a clip to split it there (Esc to exit)",
+        "カットモード：クリップをクリックした位置で分割（Esc で終了）",
+        "자르기 모드: 클립을 클릭한 곳에서 나눕니다(Esc로 종료)"),
+    "磁吸已开": ("磁吸已開", "Snap on", "スナップオン", "자석 켜짐"),
+    "磁吸已关": ("磁吸已關", "Snap off", "スナップオフ", "자석 꺼짐"),
+    "切割模式已开：点哪块切哪块，Esc 退出": (
+        "切割模式已開：點哪塊切哪塊，Esc 退出",
+        "Cut mode on: click a clip to split it, Esc to exit",
+        "カットモード開始：クリップをクリックで分割、Esc で終了",
+        "자르기 모드 켜짐: 클립을 클릭해 나누고, Esc로 종료"),
+    "切割模式已关": ("切割模式已關", "Cut mode off",
+               "カットモード終了", "자르기 모드 꺼짐"),
+    "这儿切不了：离段首或段尾太近": (
+        "這裡切不了：離段首或段尾太近",
+        "Can't cut here: too close to the start or end",
+        "ここでは切れません：先頭か末尾に近すぎます",
+        "여기서는 자를 수 없습니다: 시작이나 끝에 너무 가깝습니다"),
+    "已切开": ("已切開", "Split", "分割しました", "나눴습니다"),
+    "切开": ("切開", "Split", "分割", "나누기"),
+    "裁音频": ("裁音訊", "Trim audio", "音声をトリム", "오디오 자르기"),
+    "这条音频 {a} → {b} 秒": (
+        "這條音訊 {a} → {b} 秒",
+        "This audio: {a} → {b} s",
+        "この音声：{a} → {b} 秒",
+        "이 오디오: {a} → {b}초"),
+    "删除并前移": ("刪除並前移", "Delete and close gap",
+              "削除して詰める", "삭제하고 앞으로 당기기"),
+    "删掉这条音频，后面的音频整体往前挪": (
+        "刪掉這條音訊，後面的音訊整體往前挪",
+        "Delete this audio and pull the following ones earlier",
+        "この音声を削除し、後ろの音声をまとめて前に詰めます",
+        "이 오디오를 삭제하고 뒤의 오디오를 앞으로 당깁니다"),
+    "删音频并前移": ("刪音訊並前移", "Delete audio and close gap",
+               "音声を削除して詰める", "오디오 삭제 후 당기기"),
+}
+for _k, _trs in _TR_EXTRA41.items():
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
+        TR[_lang].setdefault(_k, _v)
