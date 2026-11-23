@@ -4338,8 +4338,20 @@ check("切档拉宽会被屏幕宽度封顶",
 check("最大化时切档不拉宽", "if not self.is_maxed() and target > self.width():" in _src)
 check("不再无条件按最小宽度拉窗口",
       "self.resize(need, self.height())" not in _src)
-
-
+check("非最大化窗口会被收回屏幕",
+      "def _fit_window_to_screen(self):" in _src
+      and "window_rect_on_screen(\n                self.width(), self.height()," in _src)
+check("切档后收一次、下一轮再收一次",
+      "self._fit_window_to_screen()\n            # 布局的最终最小宽度" in _src
+      and "QTimer.singleShot(0, self._fit_window_to_screen)" in _src)
+check("窗口显示后再收一次",
+      "QTimer.singleShot(120, self._fit_window_to_screen)" in _src)
+check("1700x900 的窗口被收回屏幕可用区",
+      p.window_rect_on_screen(1700, 900, (0, 0, 1536, 864), 0, 0)
+      == (0, 0, 1536, 864))
+check("被挤到屏幕外的窗口位置也会拉回来",
+      p.window_rect_on_screen(1200, 800, (0, 0, 1536, 864), 900, 300)
+      == (336, 64, 1200, 800))
 
 
 print()

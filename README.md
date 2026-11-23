@@ -369,7 +369,7 @@ theme.py         主题、主色/对撞色、QSS
 i18n.py          五种语言的词条
 tts_engine.py    配音：分段、Edge 合成、句级时间戳、缓存与拼接
 启动.bat          双击开窗口
-tests/           单元检查（1395 条）
+tests/           单元检查（1400 条）
 docs/            研究笔记、设计记录（wayfinder 票）与原始探针脚本
 screenshots/     README 里的截图
 ```

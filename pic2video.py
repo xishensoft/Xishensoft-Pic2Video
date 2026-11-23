@@ -8406,6 +8406,21 @@ def run_gui() -> int:
                 rect = window_rect_on_screen(w, h, area, x, y)
             self.setGeometry(*rect)
 
+        def _fit_window_to_screen(self):
+            """把非最大化窗口收回屏幕可用区：切档、换语言后都可能被撑宽。"""
+            if self.is_maxed():
+                return
+            scr = self.screen() or QApplication.primaryScreen()
+            if scr is None:
+                return
+            a = scr.availableGeometry()
+            rect = window_rect_on_screen(
+                self.width(), self.height(),
+                (a.x(), a.y(), a.width(), a.height()),
+                self.x(), self.y())
+            if rect != (self.x(), self.y(), self.width(), self.height()):
+                self.setGeometry(*rect)
+
         def is_maxed(self):
             """自绘窗口的「最大化」：Qt 的 isMaximized() 对无边框窗口不可靠。"""
             return self._maxed
@@ -9001,21 +9016,39 @@ def run_gui() -> int:
             self._refresh_history()
             # 英文/日文文案更长：先让按钮/标签不许缩到文字以下，再按需把窗口拉宽
             self.ensurePolished()
-            for w_ in (self.btn_add, self.btn_up, self.btn_down, self.btn_remove,
-                       self.btn_snap, self.btn_razor,
-                       self.btn_undo_bar, self.btn_redo_bar,
-                       self.btn_settings, self.btn_refresh, self.btn_export,
-                       self.btn_mode, self.btn_retry, self.lbl_bgm,
-                       self.btn_more, self.cmb_rhythm, self.radio_total,
-                       self.radio_free, self.radio_voice):
+            toolbar_widgets = (
+                self.btn_add, self.btn_up, self.btn_down, self.btn_remove,
+                self.btn_snap, self.btn_razor,
+                self.btn_undo_bar, self.btn_redo_bar,
+                self.btn_settings, self.btn_refresh, self.btn_export,
+                self.btn_mode, self.btn_retry, self.lbl_bgm,
+                self.btn_more, self.cmb_rhythm, self.radio_total,
+                self.radio_free, self.radio_voice)
+            for w_ in toolbar_widgets:
+                w_.setMinimumWidth(0)
+            for w_ in toolbar_widgets:
                 w_.setMinimumWidth(w_.sizeHint().width())
-            # 英文/日文按钮更宽：按需拉宽，但不能拉出屏幕；最大化的窗口不拉
-            need = self.minimumSizeHint().width()
             scr = self.screen() or QApplication.primaryScreen()
-            limit = scr.availableGeometry().width() if scr is not None else need
+            limit = (scr.availableGeometry().width()
+                     if scr is not None else self.minimumSizeHint().width())
+            # 英文/日文按钮更宽：按需拉宽，但不能拉出屏幕；最大化的窗口不拉。
+            # 注意：切档位时窗口可能本来就比屏幕宽（旧的记住尺寸、或上一次
+            # 布局把窗口撑大了），所以这里既管「拉宽到够用」，也管「缩回屏幕里」。
+            self.centralWidget().layout().activate()
+            need = self.minimumSizeHint().width()
+            if need > limit:
+                # 多语言的长按钮最小宽度加起来超屏时，宁可让文字挤一点，
+                # 也不能把窗口撑到屏幕外面去。
+                for w_ in toolbar_widgets:
+                    w_.setMinimumWidth(0)
+                self.centralWidget().layout().activate()
+                need = self.minimumSizeHint().width()
             target = min(need, limit)
             if not self.is_maxed() and target > self.width():
                 self.resize(target, self.height())
+            self._fit_window_to_screen()
+            # 布局的最终最小宽度要等这一轮布局算完才定；下一轮再收一次
+            QTimer.singleShot(0, self._fit_window_to_screen)
 
         def _player_retranslate(self):
             """控制条的文案：按钮提示、两档下拉的条目名。"""
@@ -11329,6 +11362,9 @@ def run_gui() -> int:
         def showEvent(self, ev):
             super().showEvent(ev)
             log("window show %dx%d" % (self.width(), self.height()))
+            # 布局真正激活后窗口可能又被最小宽度撑大；稍等一拍再收回来
+            QTimer.singleShot(0, self._fit_window_to_screen)
+            QTimer.singleShot(120, self._fit_window_to_screen)
             bar = getattr(self, "titlebar", None)
             if bar is not None:
                 try:
