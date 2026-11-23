@@ -3315,6 +3315,20 @@ check("log/print 的 %s 个数与实参一致", not _fmt_bad, _fmt_bad)
 check("设置保存的日志行有 6 个占位符",
       _src.count('log("settings saved lang=%s ui=%s theme=%s ratio=%s size=%sx%s"') == 1)
 
+# ---------------- 70 撤回要把设置引起的界面状态也拉回来
+def _func_body(name, nxt):
+    a = _src.index("def %s(" % name)
+    b = _src.index("def %s(" % nxt, a)
+    return _src[a:b]
+
+_undo_body = _func_body("_history_apply", "on_undo")
+check("撤回后会重新绑快捷键（否则设置改回去但键还旧的）",
+      "self._bind_shortcuts()" in _undo_body)
+check("撤回后换语言/主题仍然生效", "self.apply_theme()" in _undo_body
+      and "self.retranslate()" in _undo_body)
+check("撤回后素材列表跟着刷新（走 retranslate 里的 _refresh_all）",
+      "self._refresh_all()" in _func_body("retranslate", "_player_retranslate"))
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

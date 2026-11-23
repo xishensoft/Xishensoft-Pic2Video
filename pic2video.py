@@ -7101,6 +7101,7 @@ def run_gui() -> int:
                 apply_qt_translator(current_locale())
                 self.apply_theme()
                 self.retranslate()
+                self._bind_shortcuts()   # 撤回可能把快捷键改回去了
                 self._refresh_history()
             finally:
                 self._hist_lock = False
