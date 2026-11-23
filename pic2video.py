@@ -6917,7 +6917,7 @@ def run_gui() -> int:
                 return field
 
             def add_sep(text, pro=False, normal=False):
-                """开始新的一组：专业模式一组一页，其余档位用细线连成一列。"""
+                """开始新的一组：标准 / 专业一组一页，简洁模式用细线连成一列。"""
                 form = QFormLayout()
                 form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
                 form.setFieldGrowthPolicy(
@@ -6928,7 +6928,7 @@ def run_gui() -> int:
                     "normal" if normal else "")
                 self._groups[text] = form
                 self._group = text
-                if not self.pro and len(self._order) > 1:
+                if not self.daily and len(self._order) > 1:
                     line = QFrame()
                     line.setObjectName("sep")
                     line.setFrameShape(QFrame.Shape.HLine)
@@ -7403,17 +7403,26 @@ def run_gui() -> int:
             buttons.rejected.connect(self.reject)
 
             outer = self.body
-            if self.pro:                      # 专业：一组一页，省得竖着太长
+            if self.daily:                    # 标准 / 专业：一组一页，省得竖着太长
+                hide = set() if self.pro else set(self._hide_fields["pro"])
+                for w_ in hide:
+                    w_.setVisible(False)
                 tabs = QTabWidget()
                 for name in self._order:
+                    form = self._groups[name]
+                    g = self._group_tier.get(name) or ""
+                    if g == "pro" and not self.pro:
+                        page = QWidget(self)   # 专业组的控件得有父，挂到隐藏页上
+                        page.setLayout(form)
+                        page.hide()
+                        continue
                     page = QWidget()
-                    page.setLayout(self._groups[name])
+                    page.setLayout(form)
                     tabs.addTab(page, tr(name))
                 outer.addWidget(tabs, 1)
-            else:                             # 简洁 / 标准：一列，按档位藏
+            else:                             # 简洁：一列，按档位藏
                 hide = set(self._hide_fields["pro"])
-                if not self.daily:
-                    hide.update(self._hide_fields["normal"])
+                hide.update(self._hide_fields["normal"])
                 for w_ in hide:
                     w_.setVisible(False)
                 holder = QWidget()
@@ -7423,8 +7432,8 @@ def run_gui() -> int:
                 for name in self._order:
                     form = self._groups[name]
                     g = self._group_tier.get(name) or ""
-                    if g == "pro" or (g == "normal" and not self.daily):
-                        page = QWidget(self)   # 专业组的控件得有父，挂到隐藏页上
+                    if g in ("pro", "normal"):
+                        page = QWidget(self)   # 隐藏组的控件得有父
                         page.setLayout(form)
                         page.hide()
                         continue
@@ -9000,9 +9009,13 @@ def run_gui() -> int:
                        self.btn_more, self.cmb_rhythm, self.radio_total,
                        self.radio_free, self.radio_voice):
                 w_.setMinimumWidth(w_.sizeHint().width())
+            # 英文/日文按钮更宽：按需拉宽，但不能拉出屏幕；最大化的窗口不拉
             need = self.minimumSizeHint().width()
-            if need > self.width():
-                self.resize(need, self.height())
+            scr = self.screen() or QApplication.primaryScreen()
+            limit = scr.availableGeometry().width() if scr is not None else need
+            target = min(need, limit)
+            if not self.is_maxed() and target > self.width():
+                self.resize(target, self.height())
 
         def _player_retranslate(self):
             """控制条的文案：按钮提示、两档下拉的条目名。"""

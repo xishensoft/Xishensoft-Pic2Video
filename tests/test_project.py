@@ -500,7 +500,7 @@ check("分隔线控件", 'setObjectName("sep")' in _src)
 check("简洁模式隐藏进阶组", 'add_sep("音乐", normal=True)' in _src
       and 'add_sep("其它", pro=True)' in _src)
 check("专业模式分页显示", "QTabWidget" in _src and "tabs.addTab" in _src)
-check("简洁模式不分页", "if self.pro:" in _src)
+check("简洁模式不分页", "简洁：一列" in _src)
 check("每组一个表单", "self._groups[text] = form" in _src)
 
 # 26 预设配色（各视频站品牌色）
@@ -3752,7 +3752,7 @@ check("整组也能分档",
       'add_sep("音乐", normal=True)' in _src
       and 'add_sep("节奏与动效", normal=True)' in _src)
 check("简洁档不显示专业组",
-      'if g == "pro" or (g == "normal" and not self.daily):' in _src)
+      'if g in ("pro", "normal"):' in _src)
 check("模式按钮变成菜单",
       "self.btn_mode.setPopupMode(" in _src
       and "self.btn_mode.setMenu(self._build_ui_menu())" in _src)
@@ -4316,6 +4316,28 @@ check("固定大小也会夹进屏幕",
 _row_win = _i18n["en"].get("第一次启动默认最大化；之后按这里选的来")
 check("启动窗口提示四语齐",
       bool(_row_win) and "maximized" in _row_win.lower(), _row_win)
+
+
+
+
+# ---------------- 87 标准模式设置分页 / 切档不越屏
+check("标准模式也一组一页", "if self.daily:" in _src
+      and "tabs.addTab(page, tr(name))" in _src)
+check("简洁模式仍是一列",
+      "else:                             # 简洁：一列，按档位藏" in _src
+      and "hide.update(self._hide_fields[\"normal\"])" in _src)
+check("标准模式不显示专业组",
+      'if g == "pro" and not self.pro:' in _src)
+check("标准模式收起专业字段",
+      'hide = set() if self.pro else set(self._hide_fields["pro"])' in _src)
+check("只有简洁模式画组标题",
+      "if not self.daily and len(self._order) > 1:" in _src)
+check("切档拉宽会被屏幕宽度封顶",
+      "target = min(need, limit)" in _src
+      and "if not self.is_maxed() and target > self.width():" in _src)
+check("最大化时切档不拉宽", "if not self.is_maxed() and target > self.width():" in _src)
+check("不再无条件按最小宽度拉窗口",
+      "self.resize(need, self.height())" not in _src)
 
 
 
