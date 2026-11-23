@@ -3516,3 +3516,14 @@ _TR_EXTRA62 = (
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA62:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA63 = (
+    ("第一次启动默认最大化；之后按这里选的来",
+     "第一次啟動預設最大化；之後照這裡選的來",
+     "Maximized on first launch by default; afterwards this setting applies",
+     "初回起動は既定で最大化。以後はこの設定に従います",
+     "처음 실행 시 기본으로 최대화되며, 이후에는 이 설정을 따릅니다"),
+)
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA63:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)

@@ -351,6 +351,22 @@ def is_hex_color(value: str) -> bool:
             and all(c in "0123456789abcdefABCDEF" for c in value[1:]))
 
 
+def window_rect_on_screen(width, height, area, x=None, y=None):
+    """把窗口尺寸夹进屏幕可用区，并保证位置落在屏内。
+
+    area 是 (x, y, w, h)；x/y 给 None 就居中。返回 (x, y, w, h)。
+    """
+    ax, ay, aw, ah = [int(v) for v in area]
+    w = max(320, min(int(width), max(320, aw)))
+    h = max(240, min(int(height), max(240, ah)))
+    if x is None or y is None:
+        return (ax + max(0, (aw - w) // 2),
+                ay + max(0, (ah - h) // 2), w, h)
+    nx = max(ax, min(int(x), ax + max(0, aw - w)))
+    ny = max(ay, min(int(y), ay + max(0, ah - h)))
+    return (nx, ny, w, h)
+
+
 # ---------------------------------------------------------------- 导出预设
 # 平台规格表：宽高、帧率、CRF、音频码率、文件名后缀。
 # 值是 None 的项表示「沿用设置里的当前值」——「通用」那一项全是 None。
@@ -574,7 +590,7 @@ class Settings:
         "win_h": 0,
         "win_x": -1,
         "win_y": -1,
-        "win_mode": "remember",   # remember 记住上次 / max 启动最大化 / fixed 固定大小
+        "win_mode": "max",        # max 第一次启动就最大化 / remember 记住上次 / fixed 固定大小
         "win_fixed_w": 1475,
         "win_fixed_h": 1000,
         "intro_path": "",        # 默认片头视频（加第一张图时自动放到最前）
@@ -681,7 +697,7 @@ class Settings:
                                  if isinstance(p, str) and p][:self.RECENT_MAX]
                                 if isinstance(rec, list) else [])
         if d.get("win_mode") not in WIN_MODES:
-            d["win_mode"] = "remember"
+            d["win_mode"] = "max"
         for key, lo, hi in (("win_fixed_w", 800, 8000),
                             ("win_fixed_h", 560, 8000)):
             try:
@@ -6992,7 +7008,8 @@ def run_gui() -> int:
             self.cmb_win.setCurrentIndex(
                 max(0, list(WIN_MODES).index(settings["win_mode"])))
             self.cmb_win.activated.connect(self._sync_win_mode)
-            add_row("启动时窗口", self.cmb_win, normal=True)
+            self.cmb_win.setToolTip(tr("第一次启动默认最大化；之后按这里选的来"))
+            add_row("启动时窗口", self.cmb_win)
             self.spin_win_w = QSpinBox()
             self.spin_win_w.setRange(800, 8000)
             self.spin_win_w.setSingleStep(20)
@@ -8352,34 +8369,33 @@ def run_gui() -> int:
 
         # ---------------- 窗口大小 / 位置
         def _restore_geometry(self):
-            """启动窗口：按设置记住上次 / 直接最大化 / 固定宽高。"""
+            """启动窗口：默认最大化；也可以记住上次或固定宽高。
+
+            不论哪种模式，尺寸和位置都会被夹进当前屏幕的可用区，
+            换到更小的屏幕也不会再超出屏幕。
+            """
             s = self.settings
             mode = s["win_mode"]
             if mode == "max":
                 self.maximize_to_screen()
                 return
+            scr = self.screen() or QApplication.primaryScreen()
+            a = scr.availableGeometry() if scr is not None else None
+            area = (a.x(), a.y(), a.width(), a.height()) if a is not None else (
+                0, 0, 1280, 800)
             if mode == "fixed":
-                w = max(800, int(s["win_fixed_w"]))
-                h = max(560, int(s["win_fixed_h"]))
-                self.resize(w, h)
-                scr = QApplication.primaryScreen()
-                if scr is not None:
-                    a = scr.availableGeometry()
-                    self.move(a.x() + max(0, (a.width() - w) // 2),
-                              a.y() + max(0, (a.height() - h) // 2))
-                return
-            w, h = int(s["win_w"]), int(s["win_h"])
-            x, y = int(s["win_x"]), int(s["win_y"])
-            if w >= 800 and h >= 560:
-                self.resize(w, h)
-            if x < 0 or y < 0:
-                return
-            for scr in QApplication.screens():
-                a = scr.availableGeometry()
-                if (a.x() - 200 < x < a.x() + a.width() - 120
-                        and a.y() - 100 < y < a.y() + a.height() - 80):
-                    self.move(x, y)
-                    return
+                rect = window_rect_on_screen(
+                    max(800, int(s["win_fixed_w"])),
+                    max(560, int(s["win_fixed_h"])), area)
+            else:
+                w, h = int(s["win_w"]), int(s["win_h"])
+                if w < 800 or h < 560:
+                    w, h = self.width(), self.height()
+                x, y = int(s["win_x"]), int(s["win_y"])
+                if x < 0 or y < 0:
+                    x = y = None
+                rect = window_rect_on_screen(w, h, area, x, y)
+            self.setGeometry(*rect)
 
         def is_maxed(self):
             """自绘窗口的「最大化」：Qt 的 isMaximized() 对无边框窗口不可靠。"""

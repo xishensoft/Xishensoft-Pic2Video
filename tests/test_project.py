@@ -595,7 +595,7 @@ check("窗口模式三档", p.WIN_MODES == ("remember", "max", "fixed"), p.WIN_M
 _sc = p.Settings()
 _sc.data["win_mode"] = "weird"
 _sc._sanitize()
-check("窗口模式非法回落记住上次", _sc["win_mode"] == "remember", _sc["win_mode"])
+check("窗口模式非法回落最大化", _sc["win_mode"] == "max", _sc["win_mode"])
 _sc.data["win_fixed_w"] = 10
 _sc.data["win_fixed_h"] = 99999
 _sc._sanitize()
@@ -4281,6 +4281,44 @@ check("英文里不再说 images only", _i18n["en"].get("加素材") == "Add med
 check("英文导出摘要用 fps / Mbps 而不是中文单位",
       "fps" in _i18n["en"]["实际参数：{w}×{h} · {fps} 帧/秒 · 画质 {crf} · 音频 {ab} · 视频码率约 {mbps} 兆比特/秒"]
       and "Mbps" in _i18n["en"]["实际参数：{w}×{h} · {fps} 帧/秒 · 画质 {crf} · 音频 {ab} · 视频码率约 {mbps} 兆比特/秒"])
+
+# ---------------- 86 启动窗口：默认最大化 + 夹进屏幕
+_ws = p.Settings(os.path.join(tmp, "settings_win.json"))
+check("第一次启动默认最大化", _ws["win_mode"] == "max", _ws["win_mode"])
+_ws.update(win_mode="nope")
+_ws.save()
+_ws = p.Settings(os.path.join(tmp, "settings_win.json"))
+check("坏窗口模式回落最大化", _ws["win_mode"] == "max", _ws["win_mode"])
+check("最大化选项有中文名", p.WIN_LABELS["max"] == "启动时最大化", p.WIN_LABELS)
+check("窗口尺寸会夹进屏幕",
+      p.window_rect_on_screen(1920, 1080, (0, 0, 1366, 768)) == (0, 0, 1366, 768))
+check("窗口尺寸不超宽",
+      p.window_rect_on_screen(3000, 700, (100, 50, 1600, 900)) == (100, 150, 1600, 700),
+      p.window_rect_on_screen(3000, 700, (100, 50, 1600, 900)))
+check("正常尺寸和位置原样保留",
+      p.window_rect_on_screen(1200, 700, (100, 50, 1600, 900), 300, 120) == (300, 120, 1200, 700))
+check("跑到屏幕外的位置拉回来",
+      p.window_rect_on_screen(1000, 600, (100, 50, 1600, 900), 9000, 9000) == (700, 350, 1000, 600),
+      p.window_rect_on_screen(1000, 600, (100, 50, 1600, 900), 9000, 9000))
+check("负位置拉回左上",
+      p.window_rect_on_screen(1000, 600, (100, 50, 1600, 900), -500, -500) == (100, 50, 1000, 600))
+check("没给位置就居中",
+      p.window_rect_on_screen(1000, 600, (100, 50, 1600, 900)) == (400, 200, 1000, 600))
+check("屏幕比最小尺寸还小时不越界",
+      p.window_rect_on_screen(1200, 900, (0, 0, 1000, 600)) == (0, 0, 1000, 600))
+check("启动时窗口选项在所有档位都露出来",
+      'add_row("启动时窗口", self.cmb_win)' in _src
+      and 'add_row("启动时窗口", self.cmb_win, normal=True)' not in _src)
+check("最大化模式真的最大化", 'if mode == "max":' in _src and "self.maximize_to_screen()" in _src)
+check("记住上次也会夹进屏幕", "rect = window_rect_on_screen(w, h, area, x, y)" in _src)
+check("固定大小也会夹进屏幕",
+      "rect = window_rect_on_screen(" in _src and 'max(560, int(s["win_fixed_h"])), area)' in _src)
+_row_win = _i18n["en"].get("第一次启动默认最大化；之后按这里选的来")
+check("启动窗口提示四语齐",
+      bool(_row_win) and "maximized" in _row_win.lower(), _row_win)
+
+
+
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
