@@ -308,6 +308,24 @@ def even(v: float) -> int:
     return max(2, int(round(float(v) / 2.0)) * 2)
 
 
+def slider_value_from_x(x: float, groove_x: float, groove_w: float,
+                        handle_w: float, minimum: int, maximum: int,
+                        upside_down: bool = False) -> int:
+    """鼠标在滑轨上的 x 坐标 → 滑块该取的数值。
+
+    进度条要支持「点哪儿跳哪儿」：Qt 的 QSlider 默认只会按 pageStep 翻页，
+    pageStep 设成 0 就干脆不动，所以自己按滑轨几何算。
+    """
+    span = groove_w - handle_w
+    if span <= 0 or maximum <= minimum:
+        return maximum if maximum > minimum else minimum
+    rel = (float(x) - groove_x - handle_w / 2.0) / span
+    rel = min(1.0, max(0.0, rel))
+    if upside_down:
+        rel = 1.0 - rel
+    return int(round(minimum + (maximum - minimum) * rel))
+
+
 def preset_size(ratio: str) -> tuple[int, int] | None:
     """比例 → 短边 1080 的成片尺寸；「自定义」返回 None。"""
     r = RATIO_VALUE.get(ratio)
@@ -4040,7 +4058,7 @@ def run_gui() -> int:
         QListWidget,
         QListWidgetItem, QMainWindow, QMenu, QProgressBar,
         QPlainTextEdit, QPushButton, QRadioButton, QSizePolicy, QSlider,
-        QSpinBox,
+        QSpinBox, QStyle, QStyleOptionSlider,
         QTextEdit,
         QSplitter, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget)
     from bili_audio import BiliError, bili_audio
@@ -6596,6 +6614,51 @@ def run_gui() -> int:
         p.setColor(role.Light, QColor(pal["hover"]))
         return p
 
+    class SeekSlider(QSlider):
+        """预览进度条：点滑轨任意位置滑块就过去，拖滑块照旧。
+
+        Qt 的 QSlider 点槽只翻一页（pageStep），pageStep=0 时完全没有反应，
+        所以按下/拖动/松开都自己按滑轨几何算数值。
+        """
+
+        def _value_at(self, x: float) -> int:
+            opt = QStyleOptionSlider()
+            self.initStyleOption(opt)
+            groove = self.style().subControlRect(
+                QStyle.ComplexControl.CC_Slider, opt,
+                QStyle.SubControl.SC_SliderGroove, self)
+            handle = self.style().subControlRect(
+                QStyle.ComplexControl.CC_Slider, opt,
+                QStyle.SubControl.SC_SliderHandle, self)
+            return slider_value_from_x(
+                x, groove.x(), groove.width(), handle.width(),
+                self.minimum(), self.maximum(), opt.upsideDown)
+
+        def mousePressEvent(self, ev):
+            if ev.button() != Qt.MouseButton.LeftButton:
+                return super().mousePressEvent(ev)
+            # setSliderDown 自己会发 sliderPressed，别重复发
+            self.setValue(self._value_at(ev.position().x()))
+            self.setSliderDown(True)
+            self.sliderMoved.emit(self.value())
+            ev.accept()
+
+        def mouseMoveEvent(self, ev):
+            if self.isSliderDown():
+                self.setValue(self._value_at(ev.position().x()))
+                self.sliderMoved.emit(self.value())
+                ev.accept()
+            else:
+                super().mouseMoveEvent(ev)
+
+        def mouseReleaseEvent(self, ev):
+            if not self.isSliderDown():
+                return super().mouseReleaseEvent(ev)
+            self.setValue(self._value_at(ev.position().x()))
+            self.sliderMoved.emit(self.value())
+            self.setSliderDown(False)   # 自己会发 sliderReleased
+            ev.accept()
+
     class PreviewCanvas(QWidget):
         """预览画面：自己把 Scene 画出来的 QImage 贴上去（不再是 QVideoWidget）。"""
 
@@ -7300,9 +7363,9 @@ def run_gui() -> int:
             self.btn_fwd.setToolTip(tr("前进 5 秒"))
             self.btn_fwd.clicked.connect(lambda: self.on_skip(5.0))
             pbar.addWidget(self.btn_fwd)
-            self.slider_pos = QSlider(Qt.Orientation.Horizontal)
+            self.slider_pos = SeekSlider(Qt.Orientation.Horizontal)
             self.slider_pos.setRange(0, 0)
-            self.slider_pos.setPageStep(0)     # 点哪儿跳哪儿，不是翻页
+            self.slider_pos.setPageStep(0)     # 翻页关掉，点击由 SeekSlider 自己算
             self.slider_pos.setSingleStep(1)
             self.slider_pos.setEnabled(False)
             self.slider_pos.setToolTip(tr("拖动跳到任意位置"))
@@ -7734,7 +7797,7 @@ def run_gui() -> int:
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
             self.settings.save()
-            log("settings saved lang=%s ui=%s theme=%s ratio=%s size=%s" % (
+            log("settings saved lang=%s ui=%s theme=%s ratio=%s size=%sx%s" % (
                 self.settings["lang"], self.settings["ui"],
                 self.settings["theme"], self.settings["ratio"],
                 self.settings["width"], self.settings["height"]))

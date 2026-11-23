@@ -2981,7 +2981,7 @@ check("不支持的倍速退回 1 倍", _s64["preview_speed"] == 1.0,
 _s64.update(preview_speed=1.5)
 check("支持的倍速留得住", _s64["preview_speed"] == 1.5, _s64["preview_speed"])
 
-check("控制条有进度条", "self.slider_pos = QSlider(" in _src)
+check("控制条有进度条", "self.slider_pos = SeekSlider(" in _src)
 check("控制条有播放按钮", 'self.btn_play = QPushButton("▶")' in _src)
 check("控制条有质量下拉", "self.cmb_quality = QComboBox()" in _src)
 check("进度条接上总长", "durationChanged.connect(self.on_duration)" in _src)
@@ -3259,6 +3259,61 @@ _pj54d.clips = [p.Clip(IMG[0], 2.0, xfade=True, xfade_name="fade"),
 check("跟随全局时长的转场不被动",
       _pj54d.fit_transitions() == 0 and _pj54d.clips[0].xfade_dur is None,
       _pj54d.clips[0].xfade_dur)
+
+# ---------------- 69 进度条点击跳转 + 设置保存不再崩
+# (1) 纯几何：鼠标 x → 数值。以前 pageStep=0 导致点滑轨毫无反应。
+check("滑轨中点取一半", p.slider_value_from_x(217, 0, 434, 12, 0, 3000) == 1500,
+      p.slider_value_from_x(217, 0, 434, 12, 0, 3000))
+check("滑轨 75% 取 2268", p.slider_value_from_x(325, 0, 434, 12, 0, 3000) == 2268,
+      p.slider_value_from_x(325, 0, 434, 12, 0, 3000))
+check("点到最左是 0", p.slider_value_from_x(0, 0, 434, 12, 0, 3000) == 0)
+check("点到最右是最大值", p.slider_value_from_x(434, 0, 434, 12, 0, 3000) == 3000)
+check("超出边界夹住", p.slider_value_from_x(9999, 0, 434, 12, 0, 3000) == 3000)
+check("反向滑轨取反", p.slider_value_from_x(325, 0, 434, 12, 0, 3000, True) == 732,
+      p.slider_value_from_x(325, 0, 434, 12, 0, 3000, True))
+check("滑轨太窄不炸", p.slider_value_from_x(10, 0, 8, 12, 0, 3000) in (0, 3000))
+check("区间为空不炸", p.slider_value_from_x(10, 0, 0, 0, 5, 5) == 5)
+check("非零下界也按比例", p.slider_value_from_x(217, 0, 434, 12, 100, 200) == 150,
+      p.slider_value_from_x(217, 0, 434, 12, 100, 200))
+
+# (2) 接线：进度条用 SeekSlider，鼠标事件自己算
+check("进度条换成 SeekSlider", "self.slider_pos = SeekSlider(Qt.Orientation.Horizontal)" in _src)
+check("SeekSlider 有按下处理", "class SeekSlider(QSlider):" in _src and
+      "def mousePressEvent(self, ev):" in _src)
+check("SeekSlider 用纯几何换算", "return slider_value_from_x(" in _src)
+check("拖动也走同一套换算", _src.count("self._value_at(ev.position().x())") >= 3,
+      _src.count("self._value_at(ev.position().x())"))
+
+# (3) 设置保存这条路上 log 的占位符与实参必须对得上。
+#     线上真的崩过：on_settings 里 log("...%s" % (...6 个值)) 少一个占位符，
+#     TypeError 把后面 apply_theme() 全吞了，于是"切主题不生效还看不出错"。
+import ast as _ast
+import re as _re
+_src_tree = _ast.parse(_src)
+_fmt_bad = []
+for _node in _ast.walk(_src_tree):
+    if not (isinstance(_node, _ast.Call) and isinstance(_node.func, _ast.Name)
+            and _node.func.id in ("log", "print")):
+        continue
+    for _arg in _node.args:
+        if not (isinstance(_arg, _ast.BinOp)
+                and isinstance(_arg.op, _ast.Mod)
+                and isinstance(_arg.left, _ast.Constant)
+                and isinstance(_arg.left.value, str)):
+            continue
+        _n = len(_re.findall(r"%(?!%)[-+ #0]*\d*(?:\.\d+)?[sdfrxegc]",
+                             _arg.left.value))
+        if isinstance(_arg.right, _ast.Tuple):
+            _m = len(_arg.right.elts)
+        elif isinstance(_arg.right, _ast.Dict):
+            continue
+        else:
+            _m = 1
+        if _n != _m:
+            _fmt_bad.append((_node.lineno, _n, _m))
+check("log/print 的 %s 个数与实参一致", not _fmt_bad, _fmt_bad)
+check("设置保存的日志行有 6 个占位符",
+      _src.count('log("settings saved lang=%s ui=%s theme=%s ratio=%s size=%sx%s"') == 1)
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
