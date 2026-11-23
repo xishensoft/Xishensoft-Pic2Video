@@ -8826,6 +8826,7 @@ def run_gui() -> int:
             """
             if (ev.type() != QEvent.Type.KeyPress
                     or QApplication.activeModalWidget() is not None
+                    or QApplication.activePopupWidget() is not None
                     or not self.isActiveWindow()):
                 return super().eventFilter(obj, ev)
             focus = QApplication.focusWidget()

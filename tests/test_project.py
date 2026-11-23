@@ -3376,6 +3376,7 @@ check("输入框/下拉框/列表里不抢方向键",
       "QLineEdit, QTextEdit, QPlainTextEdit," in _ev_body
       and "QAbstractSpinBox, QComboBox," in _ev_body)
 check("模态框打开时不插手", "QApplication.activeModalWidget()" in _ev_body)
+check("右键菜单弹出时不抢方向键", "QApplication.activePopupWidget()" in _ev_body)
 check("全应用装了这个过滤器",
       "QApplication.instance().installEventFilter(self)" in _src)
 
