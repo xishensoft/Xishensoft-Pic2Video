@@ -4097,6 +4097,87 @@ for _key in ("点画面：播放 / 暂停", "总长 = 下面这个秒数",
           all(_i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")),
           {_l: _i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")})
 
+# ---------------- 85 时间线：框选 / 整块拖动 / 字幕轨
+check("连续行号能认出来", p.timeline_block_rows([3, 1, 2]) == (1, 3),
+      p.timeline_block_rows([3, 1, 2]))
+check("不连续的行号返回 None", p.timeline_block_rows([0, 2]) is None,
+      p.timeline_block_rows([0, 2]))
+check("空选择返回 None", p.timeline_block_rows([]) is None,
+      p.timeline_block_rows([]))
+
+_d3 = [3.0, 3.0, 3.0, 3.0]
+check("整块拖到最前", p.timeline_block_dest(_d3, [1, 2], 0.0) == 0,
+      p.timeline_block_dest(_d3, [1, 2], 0.0))
+check("整块拖到中间按中点判", p.timeline_block_dest(_d3, [1, 2], 4.0) == 1,
+      p.timeline_block_dest(_d3, [1, 2], 4.0))
+check("整块拖到末尾", p.timeline_block_dest(_d3, [1, 2], 20.0) == 2,
+      p.timeline_block_dest(_d3, [1, 2], 20.0))
+check("非连续不给落点", p.timeline_block_dest(_d3, [0, 2], 4.0) == 0,
+      p.timeline_block_dest(_d3, [0, 2], 4.0))
+
+_bp = p.Project(); _bp.mode = "free"; _bp.add_images([IMG[0]] * 4)
+for _c in _bp.clips:
+    _c.dur = 3.0
+_bp.clips[1].fade = True
+_bp.clips[2].xfade_name = "wipeleft"
+_bp.clips[2].xfade_dur = 0.8
+_bp.clips[2].brightness = 0.2
+_ids = [id(_c) for _c in _bp.clips]
+check("整块挪动成功", _bp.move_block([1, 2], 0) is True)
+check("整块顺序和内部设置都保住",
+      [id(_c) for _c in _bp.clips] == [_ids[1], _ids[2], _ids[0], _ids[3]]
+      and _bp.clips[0].fade and _bp.clips[1].xfade_name == "wipeleft"
+      and abs(_bp.clips[1].brightness - 0.2) < 1e-6,
+      [_bp.clips[0].fade, _bp.clips[1].xfade_name])
+check("整块挪到末尾", _bp.move_block([0, 1], 99) is True
+      and [id(_c) for _c in _bp.clips] == [_ids[0], _ids[3], _ids[1], _ids[2]],
+      [id(_c) == _ids[0] for _c in _bp.clips])
+check("不连续的整块拒绝", _bp.move_block([0, 2], 0) is False)
+check("越界行号拒绝", _bp.move_block([9, 10], 0) is False)
+
+_sp = p.Project(); _sp.mode = "free"; _sp.add_images([IMG[0]] * 3)
+_sp.cues = [p._cue(1.0, 3.0, "第一句"), p._cue(4.0, 5.0, "第二句", "Default")]
+check("字幕整条挪到指定时间",
+      _sp.set_cue_start(0, 5.0) is True
+      and abs(_sp.cues[0]["start"] - 5.0) < 1e-6
+      and abs(_sp.cues[0]["end"] - 7.0) < 1e-6)
+check("字幕不越过片尾", _sp.set_cue_start(0, 99.0) is True
+      and abs(_sp.cues[0]["start"] - 7.0) < 1e-6
+      and abs(_sp.cues[0]["end"] - 9.0) < 1e-6,
+      _sp.cues[0])
+check("字幕不越过片头", _sp.set_cue_start(0, -3.0) is True
+      and _sp.cues[0]["start"] == 0.0
+      and abs(_sp.cues[0]["end"] - 2.0) < 1e-6, _sp.cues[0])
+check("字幕挪完仍是原来的字和样式",
+      _sp.set_cue_start(1, 2.5) is True
+      and _sp.cues[1]["text"] == "第二句"
+      and _sp.cues[1]["style"] == "Default"
+      and abs(_sp.cues[1]["start"] - 2.5) < 1e-6)
+check("没有这一条就返回 False", _sp.set_cue_start(9, 0.0) is False)
+
+for _need in ("def _subs_rect", "def _sub_spans", "def _hit_sub",
+              "show_subs", "blockMoved = pyqtSignal(object, int)",
+              "audioGroupMoved = pyqtSignal(object)",
+              "subtitleMoved = pyqtSignal(int, float)",
+              "timeline_block_dest", "\"marquee\"", "\"clips\"",
+              "self._marquee", "drop_guide"):
+    check("时间线源码有 " + _need, _need in _src)
+for _need in ("self.timeline.blockMoved.connect",
+              "self.timeline.audioGroupMoved.connect",
+              "self.timeline.subtitleMoved.connect",
+              "def on_timeline_block_move", "def on_audio_group_move",
+              "def on_subtitle_move", "bool(self.project.cues))"):
+    check("窗口接线有 " + _need, _need in _src)
+check("字幕轨颜色有独立两种", "sub_sel" in _src and '"sub"' in _src)
+
+for _key in ("挪动选中的段", "已把 {n} 段挪到第 {k} 段",
+             "已挪 {n} 条音频", "字幕已挪到 {time}", "改字幕时间",
+             "时间线：空白处拖一下可以框选多个片段；拖选中的一段就是整块挪动"):
+    check("字幕轨词条四语齐 " + _key,
+          all(_i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")),
+          {_l: _i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")})
+
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

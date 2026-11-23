@@ -3228,3 +3228,40 @@ _TR_EXTRA57 = [
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA57:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA58 = [
+    ("挪动选中的段", "挪動選中的段", "Move selected clips",
+     "選択したクリップを移動", "선택한 클립 이동"),
+    ("已把 {n} 段挪到第 {k} 段", "已把 {n} 段挪到第 {k} 段",
+     "Moved {n} clip(s) to position {k}",
+     "{n} 本を {k} 番目へ移動しました",
+     "{n}개를 {k}번째로 옮겼습니다"),
+    ("已挪 {n} 条音频", "已挪 {n} 條音訊",
+     "Moved {n} audio clip(s)", "音声 {n} 本を移動しました",
+     "오디오 {n}개를 옮겼습니다"),
+    ("字幕已挪到 {time}", "字幕已挪到 {time}",
+     "Subtitle moved to {time}", "字幕を {time} へ移動しました",
+     "자막을 {time}(으)로 옮겼습니다"),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA58:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA59 = [
+    ("改字幕时间", "改字幕時間", "Retime subtitle",
+     "字幕の時間を変更", "자막 시간 변경"),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA59:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA60 = [
+    ("时间线：空白处拖一下可以框选多个片段；拖选中的一段就是整块挪动",
+     "時間軸：空白處拖一下可以框選多個片段；拖選中的一段就是整塊挪動",
+     "Timeline: drag on empty space to box-select clips; drag a selected clip to move the whole block",
+     "タイムライン：空白をドラッグすると複数クリップを範囲選択、選択中のクリップをドラッグするとまとめて移動",
+     "타임라인: 빈 곳을 드래그하면 여러 클립을 범위 선택하고, 선택된 클립을 드래그하면 통째로 이동합니다"),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA60:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)

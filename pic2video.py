@@ -2331,6 +2331,36 @@ class Project:
         self.clips.insert(min(dest, len(self.clips)), clip)
         self.normalize()
 
+    def move_block(self, rows, dest: int) -> bool:
+        """把连续选中的一段整体挪到 dest（挪完后的起始下标）。"""
+        block = timeline_block_rows(rows)
+        if block is None:
+            return False
+        lo, hi = block
+        if not (0 <= lo <= hi < len(self.clips)):
+            return False
+        picked = self.clips[lo:hi + 1]
+        rest = self.clips[:lo] + self.clips[hi + 1:]
+        dest = max(0, min(int(dest), len(rest)))
+        self.clips = rest[:dest] + picked + rest[dest:]
+        self.normalize()
+        return True
+
+    def set_cue_start(self, index: int, start: float) -> bool:
+        """把第 index 条字幕整条挪到 start 秒（时长不变，夹在片长里）。"""
+        if not (0 <= index < len(self.cues)):
+            return False
+        cue = self.cues[index]
+        dur = max(0.0, _doc_num(cue.get("end"), 0.0)
+                  - _doc_num(cue.get("start"), 0.0))
+        total = self.total()
+        start = max(0.0, _doc_num(start, 0.0))
+        if total > 0.0:
+            start = min(start, max(0.0, total - dur))
+        cue["start"] = round(start, 3)
+        cue["end"] = round(start + dur, 3)
+        return True
+
     # -- 帧数 ----------------------------------------------------------
     def frame_counts(self) -> list[int]:
         """按累计时间取整，保证总帧数 = round(总时长 * FPS)，不漂移。"""
@@ -2741,6 +2771,30 @@ def timeline_ticks(start: float, span: float, width: float,
                     timeline_tick_label(t, step)))
         t += step
     return out
+
+
+def timeline_block_rows(rows):
+    """连续的一段行号（升序去重）；不连续返回 None。"""
+    rows = sorted({int(r) for r in rows})
+    if not rows or rows[-1] - rows[0] + 1 != len(rows):
+        return None
+    return rows[0], rows[-1]
+
+
+def timeline_block_dest(durations, rows, drop_t: float) -> int:
+    """整块拖到 drop_t 时，落回序列里的下标（不含被拖的那几段）。"""
+    block = timeline_block_rows(rows)
+    if block is None or not durations:
+        return 0
+    lo, hi = block
+    rest = [d for i, d in enumerate(durations) if not (lo <= i <= hi)]
+    acc, dest = 0.0, len(rest)
+    for k, d in enumerate(rest):
+        if _doc_num(drop_t, 0.0) < acc + max(0.0, _doc_num(d, 0.0)) / 2.0:
+            dest = k
+            break
+        acc += max(0.0, _doc_num(d, 0.0))
+    return max(0, min(dest, len(rest)))
 
 
 def _write_ass(cues, w: int, h: int, font: str, size: int) -> str:
@@ -4353,8 +4407,9 @@ def cli_export(argv: list[str]) -> int:
 
 def run_gui() -> int:
     from PyQt6.QtCore import (QEvent, QEventLoop, QItemSelectionModel,
-                              QLibraryInfo, QPoint, QPointF, QRect, QSize, Qt,
-                              QThread, QTimer, QTranslator, QUrl, pyqtSignal)
+                              QLibraryInfo, QPoint, QPointF, QRect, QRectF,
+                              QSize, Qt, QThread, QTimer, QTranslator, QUrl,
+                              pyqtSignal)
     from PyQt6.QtGui import (QActionGroup, QBrush, QColor, QConicalGradient, QFont,
                             QFontDatabase, QIcon,
                             QImageReader, QKeySequence, QLinearGradient,
@@ -5532,13 +5587,17 @@ def run_gui() -> int:
         audioTrimDone = pyqtSignal(int)             # 裁完松手（这时才记一步历史）
         menu = pyqtSignal(str, int, object)
         viewChanged = pyqtSignal(float, float)       # 缩放/滚动变了（起点, 窗口长）
+        blockMoved = pyqtSignal(object, int)         # 整块拖动（行号, 落位）
+        audioGroupMoved = pyqtSignal(object)         # 多条音频一起挪 [(序号, 起点)]
+        subtitleMoved = pyqtSignal(int, float)       # 字幕整条挪（序号, 新起点）
 
         DEFAULT_COLORS = {"bg": "#1f2329", "empty": "#9ca3af",
                           "piece_a": "#b86b6b", "piece_b": "#b8a05f",
                           "piece_text": "#111827", "playhead": "#f59e0b",
                           "selected_edge": "#3b82f6", "audio": "#2f6f5e",
                           "audio_sel": "#3f9d84", "overlay": "#566bb0",
-                          "overlay_sel": "#7c8fe0", "border": "#343a46"}
+                          "overlay_sel": "#7c8fe0", "border": "#343a46",
+                          "sub": "#6d5f8f", "sub_sel": "#a78bfa"}
 
         def __init__(self, project, parent=None):
             super().__init__(parent)
@@ -5546,6 +5605,7 @@ def run_gui() -> int:
             self.selected: list[int] = []
             self.sel_audio: list[int] = []
             self.sel_overlay: list[int] = []
+            self.sel_subs: list[int] = []
             self.sel_env = (-1, -1)
             self._waves = {}
             self.play_pos = 0.0
@@ -5557,10 +5617,14 @@ def run_gui() -> int:
             self.zoom = 1.0          # 1.0 = 整条片子铺满，越大看得越细
             self.view_start = 0.0    # 可见窗口从第几秒开始
             self.show_overlay = True # 简洁模式下没画中画就不占这一条
+            self.show_subs = True    # 没有字幕就不占这一条
             self.show_audio = True   # 没有音频同理（配乐是核心，默认给）
+            self.drop_guide = None   # 整块拖动时画一条落点虚线
+            self._marquee = None     # 框选矩形（QRectF），没框选时为 None
             self.c = dict(self.DEFAULT_COLORS)
             self.setMinimumHeight(150)
             self.setMouseTracking(True)
+            self.setToolTip(tr("时间线：空白处拖一下可以框选多个片段；拖选中的一段就是整块挪动"))
             self.setCursor(Qt.CursorShape.PointingHandCursor)
             self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
@@ -5578,25 +5642,39 @@ def run_gui() -> int:
             top = self._video_rect()[1] + 12
             return top, top + max(14, int(self.height() * 0.14))
 
+        def _subs_rect(self):
+            """字幕轨：夹在画中画和音频中间；没有字幕时高度为零。"""
+            if not self.show_subs:
+                edge = self._overlay_rect()[1]
+                return edge, edge
+            top = self._overlay_rect()[1] + (8 if self.show_overlay else 4)
+            return top, top + max(12, int(self.height() * 0.09))
+
         def _audio_rect(self):
-            top = self._overlay_rect()[1] + (14 if self.show_overlay else 8)
+            top = self._subs_rect()[1]
+            top += 6 if self.show_subs else (
+                8 if self.show_overlay else 6)
             if not self.show_audio:
                 return top, top
             return top, max(top + 16, self.height() - 4)
 
         def set_rows(self, show_overlay: bool = True,
-                     show_audio: bool = True):
-            """按界面档位/内容决定画中画轨和音频轨要不要出现。"""
+                     show_audio: bool = True, show_subs: bool = True):
+            """按界面档位/内容决定画中画、字幕、音频轨要不要出现。"""
             show_overlay = bool(show_overlay)
             show_audio = bool(show_audio)
-            if (show_overlay, show_audio) == (self.show_overlay,
-                                              self.show_audio):
+            show_subs = bool(show_subs)
+            if (show_overlay, show_audio, show_subs) == (
+                    self.show_overlay, self.show_audio, self.show_subs):
                 return
             self.show_overlay, self.show_audio = show_overlay, show_audio
+            self.show_subs = show_subs
             if not show_overlay:
                 self.sel_overlay = []
             if not show_audio:
                 self.sel_audio = []
+            if not show_subs:
+                self.sel_subs = []
             self.update()
 
         def _total(self) -> float:
@@ -5690,6 +5768,19 @@ def run_gui() -> int:
                 x0 = timeline_x(max(0.0, o.start), start, span, self.width())
                 x1 = timeline_x(min(total, o.end), start, span, self.width())
                 out.append((x0, max(x0 + 3, x1), o))
+            return out
+
+        def _sub_spans(self):
+            total = self._total()
+            span = self._view_span()
+            start = self.view_start
+            out = []
+            for cue in self.project.cues:
+                t0 = max(0.0, _doc_num(cue.get("start"), 0.0))
+                t1 = min(total, _doc_num(cue.get("end"), t0))
+                x0 = timeline_x(t0, start, span, self.width())
+                x1 = timeline_x(t1, start, span, self.width())
+                out.append((x0, max(x0 + 3, x1), cue))
             return out
 
         def _x_at(self, t: float) -> float:
@@ -5906,6 +5997,33 @@ def run_gui() -> int:
                             f"{int(round(ov.scale))}%",
                             Qt.TextElideMode.ElideRight, avail))
 
+            # 字幕轨（一条字幕一个块，宽度就是它显示的那一段）
+            stop, sbot = self._subs_rect()
+            if self.show_subs:
+                p.setPen(QColor(self.c["empty"]))
+                p.drawText(4, stop - 4, tr("字幕"))
+            for k, (x0, x1, cue) in enumerate(
+                    self._sub_spans() if self.show_subs else []):
+                col = QColor(self.c["sub_sel"] if k in self.sel_subs
+                             else self.c["sub"])
+                p.fillRect(int(x0) + 1, stop + 1, max(2, int(x1 - x0) - 2),
+                           max(4, sbot - stop - 2), col)
+                if k in self.sel_subs:
+                    p.setPen(QPen(QColor(self.c["selected_edge"]), 2))
+                    p.drawRect(int(x0) + 1, stop + 1,
+                               max(2, int(x1 - x0) - 2),
+                               max(4, sbot - stop - 3))
+                if x1 - x0 > 26 and x1 > 0 and x0 < self.width():
+                    p.setPen(QColor(theme.contrast_text(col.name())))
+                    tx = max(int(x0) + 5, 5)
+                    avail = int(min(x1, self.width() - 4)) - tx
+                    if avail > 20:
+                        p.drawText(tx, stop + 12,
+                                   p.fontMetrics().elidedText(
+                                       str(cue.get("text") or "").replace(
+                                           "\n", " "),
+                                       Qt.TextElideMode.ElideRight, avail))
+
             # 音频轨
             aspans = self._audio_spans()
             rows = self._audio_rows(len(aspans))
@@ -5966,6 +6084,13 @@ def run_gui() -> int:
                 p.setPen(QPen(QColor(self.c["playhead"]), 2))
                 p.drawLine(px, 0, px, self.height())
 
+            if self.drop_guide is not None:
+                gx = int(self._x_at(self.drop_guide))
+                if 0 <= gx <= self.width():
+                    p.setPen(QPen(QColor(self.c["selected_edge"]), 2,
+                                  Qt.PenStyle.DashLine))
+                    p.drawLine(gx, TIMELINE_RULER_H, gx, self.height())
+
             if self.snap_guide is not None:
                 gx = int(self._x_at(self.snap_guide))
                 if 0 <= gx <= self.width():
@@ -5973,10 +6098,19 @@ def run_gui() -> int:
                                   Qt.PenStyle.DashLine))
                     p.drawLine(gx, 0, gx, self.height())
 
+            if self._marquee is not None:
+                fill = QColor(self.c["selected_edge"])
+                fill.setAlpha(40)
+                p.fillRect(self._marquee, fill)
+                pen = QColor(self.c["selected_edge"])
+                pen.setAlpha(180)
+                p.setPen(QPen(pen, 1, Qt.PenStyle.DashLine))
+                p.drawRect(self._marquee)
+
         # -- 命中 ------------------------------------------------------
         def _hit_video(self, x, y):
             _t, vh = self._video_rect()
-            if y > vh + 2:
+            if y < TIMELINE_RULER_H or y > vh + 2:
                 return -1, -1.0
             spans, _ = self._spans()
             for i, (x0, x1, _d) in enumerate(spans):
@@ -5991,6 +6125,17 @@ def run_gui() -> int:
             if y < top - 3 or y > bottom + 3:
                 return -1
             for k, (x0, x1, _o) in enumerate(self._overlay_spans()):
+                if x0 - 3 <= x <= x1 + 3:
+                    return k
+            return -1
+
+        def _hit_sub(self, x, y):
+            if not self.show_subs:
+                return -1
+            top, bottom = self._subs_rect()
+            if y < top - 3 or y > bottom + 3:
+                return -1
+            for k, (x0, x1, _cue) in enumerate(self._sub_spans()):
                 if x0 - 3 <= x <= x1 + 3:
                     return k
             return -1
@@ -6109,13 +6254,20 @@ def run_gui() -> int:
                     else:
                         self.selected.append(i)
                     self.selected.sort()
-                else:
+                elif not (i in self.selected and len(self.selected) > 1):
+                    # 点在已选中的一段上、又是多选状态：留着整块，方便一起拖
                     self.selected = [i]
                 self.picked.emit(i)
                 start = sum(c.span for c in self.project.clips[:i])
                 self.seeked.emit(start)
                 self.play_pos = start
-                self._drag = ("clip", i, x, x0)
+                block = timeline_block_rows(self.selected)
+                if block is not None and len(self.selected) > 1:
+                    lo, _hi = block
+                    block_t = sum(c.span for c in self.project.clips[:lo])
+                    self._drag = ("clips", i, x, block_t)
+                else:
+                    self._drag = ("clip", i, x, x0)
                 self.update()
                 return
 
@@ -6126,6 +6278,18 @@ def run_gui() -> int:
                 self._drag = ("overlay", k, x, ov.start)
                 self.play_pos = self._time_at(x)
                 self.seeked.emit(self.play_pos)
+                self.update()
+                return
+
+            k = self._hit_sub(x, y)
+            if k >= 0:
+                self.sel_subs = [k]
+                cue = self.project.cues[k]
+                start = max(0.0, _doc_num(cue.get("start"), 0.0))
+                self.play_pos = start
+                self.seeked.emit(start)
+                self._drag = ("subtitle", k, x, start)
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
                 self.update()
                 return
 
@@ -6149,14 +6313,31 @@ def run_gui() -> int:
                     else:
                         self.sel_audio.append(k)
                     self.sel_audio.sort()
-                else:
+                elif not (k in self.sel_audio and len(self.sel_audio) > 1):
                     self.sel_audio = [k]
-                self._drag = ("audio", k, x, a.start)
+                if len(self.sel_audio) > 1 and k in self.sel_audio:
+                    base = [(idx, self.project.audios[idx].start)
+                            for idx in self.sel_audio]
+                    self._drag = ("audios", k, x, a.start, base)
+                else:
+                    self._drag = ("audio", k, x, a.start)
                 self.update()
                 return
 
-            # 空白处：拖播放头
-            self._drag = ("scrub", -1, x, 0.0)
+            if y < TIMELINE_RULER_H:
+                # 刻度条上拖：正常擦洗播放头
+                self._drag = ("scrub", -1, x, 0.0)
+                self.play_pos = self._time_at(x)
+                self.seeked.emit(self.play_pos)
+                self.update()
+                return
+            # 空白处：单击＝拖播放头，拖出一块＝框选（超过 5px 才切换）
+            self._drag = ("marquee", x, y, x, y,
+                          list(self.selected), list(self.sel_audio),
+                          list(self.sel_overlay),
+                          bool(ev.modifiers() & (
+                              Qt.KeyboardModifier.ShiftModifier
+                              | Qt.KeyboardModifier.ControlModifier)))
             self.play_pos = self._time_at(x)
             self.seeked.emit(self.play_pos)
             self.update()
@@ -6174,11 +6355,79 @@ def run_gui() -> int:
                     x0, x1, _d = spans[i]
                     near = min(abs(x - x0), abs(x - x1)) <= 5
                 if not near:
-                    near = self._hit_audio_edge(x, y)[0] >= 0
+                    near = (self._hit_audio_edge(x, y)[0] >= 0
+                            or self._hit_sub(x, y) >= 0)
                 self.setCursor(Qt.CursorShape.SizeHorCursor if near
                                else Qt.CursorShape.PointingHandCursor)
                 return
             kind = self._drag[0]
+            if kind == "marquee":
+                x0, y0 = self._drag[1], self._drag[2]
+                if (self._marquee is None and abs(x - x0) < 5
+                        and abs(y - y0) < 5):
+                    return
+                base_v, base_a, base_o = self._drag[5:8]
+                add = bool(self._drag[8])
+                rect = QRectF(QPointF(min(x, x0), min(y, y0)),
+                              QPointF(max(x, x0), max(y, y0)))
+                self._marquee = rect
+                sel_v = list(base_v) if add else []
+                sel_a = list(base_a) if add else []
+                sel_o = list(base_o) if add else []
+                vt, vb = self._video_rect()
+                if QRectF(0, vt, self.width(), vb - vt).intersects(rect):
+                    for i, (sx0, sx1, _d) in enumerate(self._spans()[0]):
+                        if sx1 >= rect.left() and sx0 <= rect.right():
+                            sel_v.append(i)
+                ot, ob = self._overlay_rect()
+                if (self.show_overlay
+                        and QRectF(0, ot, self.width(), ob - ot).intersects(rect)):
+                    for k, (sx0, sx1, _o) in enumerate(self._overlay_spans()):
+                        if sx1 >= rect.left() and sx0 <= rect.right():
+                            sel_o.append(k)
+                at, ab = self._audio_rect()
+                if (self.show_audio
+                        and QRectF(0, at, self.width(), ab - at).intersects(rect)):
+                    for k, (sx0, sx1, _a) in enumerate(self._audio_spans()):
+                        if sx1 >= rect.left() and sx0 <= rect.right():
+                            sel_a.append(k)
+                self.selected = sorted(set(sel_v))
+                self.sel_audio = sorted(set(sel_a))
+                self.sel_overlay = sorted(set(sel_o))
+                self.update()
+                return
+            if kind == "clips":
+                _i, _i2, x0, _bt = self._drag
+                rows = self.selected or [self._drag[1]]
+                durations = [c.span for c in self.project.clips]
+                dest = timeline_block_dest(durations, rows, self._time_at(x))
+                block = timeline_block_rows(rows)
+                if block is not None:
+                    lo, hi = block
+                    rest = [d for j, d in enumerate(durations)
+                            if not (lo <= j <= hi)]
+                    self.drop_guide = sum(rest[:dest])
+                self.play_pos = self._time_at(x)
+                self.update()
+                return
+            if kind == "subtitle":
+                _tag, k, x0, start0 = self._drag
+                if 0 <= k < len(self.project.cues):
+                    cue = self.project.cues[k]
+                    dur = max(0.0, _doc_num(cue.get("end"), 0.0)
+                              - _doc_num(cue.get("start"), 0.0))
+                    delta = (x - x0) * self._view_span() / max(1, self.width())
+                    total = self._total()
+                    new = max(0.0, start0 + delta)
+                    new = min(new, max(0.0, total - dur))
+                    cue["start"] = round(new, 3)
+                    cue["end"] = round(new + dur, 3)
+                self.update()
+                return
+            if kind == "audios":
+                self.play_pos = self._time_at(x)
+                self.update()
+                return
             if kind == "scrub":
                 self.play_pos = self._time_at(x)
                 self.seeked.emit(self.play_pos)
@@ -6259,6 +6508,8 @@ def run_gui() -> int:
         def mouseReleaseEvent(self, ev):
             drag, self._drag = self._drag, None
             self.snap_guide = None
+            self.drop_guide = None
+            marquee, self._marquee = self._marquee, None
             self.update()
             self.setCursor(Qt.CursorShape.CrossCursor if self.razor
                            else Qt.CursorShape.PointingHandCursor)
@@ -6266,6 +6517,54 @@ def run_gui() -> int:
                 return
             kind = drag[0]
             x = ev.position().x()
+            if kind == "marquee":
+                if marquee is not None and self.selected:
+                    self.picked.emit(self.selected[0])
+                return
+            if kind == "clips":
+                i = drag[1]
+                rows = self.selected or [i]
+                if abs(x - drag[2]) <= 6:
+                    self.selected = [i]
+                    self.picked.emit(i)
+                    self.update()
+                    return
+                durations = [c.span for c in self.project.clips]
+                dest = timeline_block_dest(durations, rows, self._time_at(x))
+                self.blockMoved.emit(rows, dest)
+                return
+            if kind == "subtitle":
+                _tag, k, x0, start0 = drag
+                if abs(x - x0) > 6 and 0 <= k < len(self.project.cues):
+                    self.subtitleMoved.emit(
+                        k, float(self.project.cues[k].get("start") or 0.0))
+                return
+            if kind == "audios":
+                _tag, idx, x0, start0, base = drag
+                if abs(x - x0) <= 6:
+                    return
+                delta = (x - x0) * self._view_span() / max(1, self.width())
+                a = self.project.audios[idx]
+                start_t = start0 + delta
+                alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
+                if self.snap_on and not alt:
+                    cand = snap_candidates(self.project, self.play_pos)
+                    tol = self._snap_tol()
+                    head, head_hit = snap_value(start_t, cand, tol)
+                    tail, tail_hit = snap_value(start_t + a.dur, cand, tol)
+                    if head_hit is not None and (
+                            tail_hit is None
+                            or abs(head_hit - start_t) <= abs(
+                                tail_hit - (start_t + a.dur))):
+                        start_t = head
+                    elif tail_hit is not None:
+                        start_t = tail - a.dur
+                delta = start_t - start0
+                floor = min((s for _k, s in base), default=0.0)
+                delta = max(delta, -floor)
+                items = [(k, max(0.0, s + delta)) for k, s in base]
+                self.audioGroupMoved.emit(items)
+                return
             if kind == "clip":
                 i = drag[1]
                 if abs(x - drag[2]) > 6:
@@ -8425,6 +8724,9 @@ def run_gui() -> int:
             self.timeline.trimmed.connect(self.on_timeline_trim)
             self.timeline.moved.connect(self.on_timeline_move)
             self.timeline.audioMoved.connect(self.on_audio_move)
+            self.timeline.audioGroupMoved.connect(self.on_audio_group_move)
+            self.timeline.blockMoved.connect(self.on_timeline_block_move)
+            self.timeline.subtitleMoved.connect(self.on_subtitle_move)
             self.timeline.audioVolume.connect(self.on_audio_volume)
             self.timeline.envelopeChanged.connect(self.on_envelope_changed)
             self.timeline.overlayMoved.connect(self.on_overlay_moved)
@@ -8734,7 +9036,8 @@ def run_gui() -> int:
             self.left_tabs.setTabVisible(3, advanced)
             # 简洁模式没画中画时，别空占一条「画中画」轨
             self.timeline.set_rows(
-                advanced or bool(self.project.overlays), True)
+                advanced or bool(self.project.overlays), True,
+                bool(self.project.cues))
 
         def _sync_tl_bar(self):
             """时间线底下的缩放条：标准以上常驻，简洁模式放大过才露。"""
@@ -9686,6 +9989,42 @@ def run_gui() -> int:
             self._history_push(tr("调整顺序"))
             if 0 <= i < self.list.count():
                 self.list.setCurrentRow(i)
+
+        def on_timeline_block_move(self, rows, dest):
+            """时间线上多选的一段整块拖到别处：保持内部顺序和各自的设置。"""
+            rows = [int(r) for r in (rows or [])]
+            log("timeline block move rows=%s -> %s" % (rows, dest))
+            if not self.project.move_block(rows, dest):
+                return
+            self._refresh_all()
+            self._select_rows(list(range(dest, dest + len(rows))))
+            self._history_push(tr("挪动选中的段"))
+            self.lbl_status.setText(
+                tr("已把 {n} 段挪到第 {k} 段", n=len(rows), k=dest + 1))
+
+        def on_audio_group_move(self, items):
+            """多选音频一起拖：保持彼此间距，整组挪同一个偏移。"""
+            items = list(items or [])
+            for k, start in items:
+                if 0 <= k < len(self.project.audios):
+                    self.project.audios[k].start = max(0.0, float(start))
+            if not items:
+                return
+            self.timeline.update()
+            self._mark_stale()
+            self._history_push(tr("移音频"))
+            self.lbl_status.setText(tr("已挪 {n} 条音频", n=len(items)))
+
+        def on_subtitle_move(self, k, start):
+            """字幕轨上整条拖动：改这条字幕的进出时间，导出跟着走。"""
+            if not self.project.set_cue_start(int(k), float(start)):
+                return
+            self._refresh_subtitles()
+            self.timeline.update()
+            self._mark_stale()
+            self._history_push(tr("改字幕时间"))
+            self.lbl_status.setText(tr("字幕已挪到 {time}", time=human_time(
+                float(start))))
 
         def add_audio_extra(self, path: str):
             """再叠一条音频（不占 BGM 那条，起始位置跟着播放头）。"""
