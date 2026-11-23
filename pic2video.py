@@ -559,8 +559,8 @@ class Settings:
         "tts_proxy": "",          # 合成时走这个代理，空 = 直连
         "tts_gap": 0.6,           # 段与段之间的停顿（秒）
         "tts_cleanup": True,      # 合成完顺手清一下（去咔哒、去噗声）
-        "tts_voice_b": "zh-CN-YunjianNeural",   # 对话稿里「听友」的音色
-        "tts_prefix": False,      # 字幕带「主讲：」这种前缀
+        "tts_voice_b": "zh-CN-YunjianNeural",   # 双人对话里角色 B 的音色
+        "tts_prefix": False,      # 字幕带「角色 A：」这种前缀
         "tts_script": "",         # 上次的文稿，重开还在
         "preview_quality": "normal",   # 样片清晰度：fast/normal/sharp/full
         "preview_speed": 1.0,          # 上次用的预览倍速（0.5..2.0）
@@ -8637,7 +8637,7 @@ def run_gui() -> int:
             self.cmb_tts_voice_b = QComboBox()
             self.cmb_tts_voice_b.setEditable(True)
             self.cmb_tts_voice_b.setToolTip(
-                tr("对话稿里「听友」用这个音色"))
+                tr("双人对话里「角色 B」用这个音色"))
             self._fill_voices(str(self.settings["tts_provider"]),
                               str(self.settings["tts_voice_b"]),
                               self.cmb_tts_voice_b)
@@ -8673,10 +8673,10 @@ def run_gui() -> int:
             trow.addWidget(self.btn_tts_audition)
             trow.addStretch(1)
             vvp.addLayout(trow)
-            self.chk_tts_prefix = QCheckBox(tr("字幕带「主讲：」这样的前缀"))
+            self.chk_tts_prefix = QCheckBox(tr("字幕带「角色 A：」这样的前缀"))
             self.chk_tts_prefix.setChecked(bool(self.settings["tts_prefix"]))
             self.chk_tts_prefix.setToolTip(
-                tr("勾上以后字幕会写成「主讲：……」，不勾只写台词"))
+                tr("勾上以后字幕会写成「角色 A：……」，不勾只写台词"))
             vform.addRow(tr("字幕前缀"), self.chk_tts_prefix)
             self._show_dialogue(False)
             vvp.addSpacing(4)
@@ -8917,10 +8917,10 @@ def run_gui() -> int:
             self.cmb_tts_voice.setToolTip(
                 tr("下拉里是常用音色，也能直接敲服务商的音色名"))
             self.cmb_tts_voice_b.setToolTip(
-                tr("对话稿里「听友」用这个音色"))
-            self.chk_tts_prefix.setText(tr("字幕带「主讲：」这样的前缀"))
+                tr("双人对话里「角色 B」用这个音色"))
+            self.chk_tts_prefix.setText(tr("字幕带「角色 A：」这样的前缀"))
             self.chk_tts_prefix.setToolTip(
-                tr("勾上以后字幕会写成「主讲：……」，不勾只写台词"))
+                tr("勾上以后字幕会写成「角色 A：……」，不勾只写台词"))
             self.spin_tts_rate.setToolTip(tr("0 是原速；正数更快，负数更慢"))
             self.progress_tts.setFormat(tr("正在合成 %v/%m 段"))
             self.btn_tts_start.setText(tr("开始合成"))
@@ -9251,7 +9251,7 @@ def run_gui() -> int:
             return text
 
         def _tts_voice_b(self) -> str:
-            """「听友」的音色；空着就跟着主音色。"""
+            """角色 B 的音色；空着就跟着角色 A。"""
             cmb = self.cmb_tts_voice_b
             idx = cmb.currentIndex()
             data = cmb.itemData(idx)
@@ -9261,14 +9261,14 @@ def run_gui() -> int:
             return text or self._tts_voice()
 
         def _dialogue_turns(self) -> list:
-            """文稿里有没有「主讲：」「听友：」轮次。"""
+            """文稿里有没有「角色 A：」「角色 B：」轮次。"""
             try:
                 return tts_engine.parse_dialogue(self._script_text())
             except Exception:
                 return []
 
         def _show_dialogue(self, on: bool):
-            """没检测到对话稿时把 B 音色与字幕前缀藏起来。"""
+            """没检测到双人对话时把 B 音色与字幕前缀藏起来。"""
             for fld in (self.cmb_tts_voice_b, self.chk_tts_prefix):
                 if not hasattr(self, "_tts_form"):
                     continue
@@ -9372,10 +9372,10 @@ def run_gui() -> int:
                 turns = self._dialogue_turns()
                 if turns:
                     plan = tts_engine.dialogue_plan(text, self._tts_provider())
-                    a = len([t for t in turns if t["speaker"] == "主讲"])
+                    a = len([t for t in turns if t["speaker"] == "角色 A"])
                     b = len(turns) - a
                     self.lbl_plan.setText(tr(
-                        "对话稿：主讲 {a} 轮、听友 {b} 轮，会切成 {n} 段",
+                        "双人对话：角色 A {a} 轮、角色 B {b} 轮，会切成 {n} 段",
                         a=a, b=b, n=len(plan)))
                 else:
                     plan = tts_engine.make_plan(text, self._tts_provider())
@@ -9444,8 +9444,8 @@ def run_gui() -> int:
                       extra={"model": str(s["tts_model"]),
                              "region": str(s["tts_azure_region"])})
             if self._dialogue_turns():
-                kw["voices"] = {"主讲": self._tts_voice(),
-                                "听友": self._tts_voice_b()}
+                kw["voices"] = {"角色 A": self._tts_voice(),
+                                "角色 B": self._tts_voice_b()}
                 kw["gap"] = float(tts_engine.DIALOGUE_GAP)
                 kw["cue_prefix"] = bool(self.chk_tts_prefix.isChecked())
             return kw

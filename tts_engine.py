@@ -228,13 +228,23 @@ def make_plan(text: str, provider: str = "edge") -> list:
 
 
 # ---------------------------------------------------------------- 对话模式
-DIALOGUE_SPEAKERS = ("主讲", "听友")
+DIALOGUE_SPEAKERS = ("角色 A", "角色 B")
 DIALOGUE_GAP = 0.35        # 轮与轮之间的停顿（比普通段间 0.6 秒短）
-_SPEAKER_RE = re.compile(r"^\s*(主讲|听友)\s*[：:]\s*(.*)$")
+_SPEAKER_RE = re.compile(r"^\s*(角色\s*[ABab]|主讲|听友|[ABab])\s*[：:]\s*(.*)$")
+
+
+def _speaker_name(raw: str) -> str:
+    """把各种写法归一成「角色 A」/「角色 B」（旧的「主讲 / 听友」也认）。"""
+    key = re.sub(r"\s+", "", str(raw or "")).upper()
+    if key in ("角色A", "A", "主讲"):
+        return "角色 A"
+    if key in ("角色B", "B", "听友"):
+        return "角色 B"
+    return "角色 A"
 
 
 def parse_dialogue(text: str) -> list:
-    """把「主讲：…」「听友：…」逐轮的文稿拆成 [{"speaker","text"}]。
+    """把「角色 A：…」「角色 B：…」逐轮的文稿拆成 [{"speaker","text"}]。
 
     没有轮次标记就返回空列表（调用方按单人处理）。第一句标记之前的文字
     当作旁白忽略掉，避免把标题、说明也念出来。
@@ -252,7 +262,7 @@ def parse_dialogue(text: str) -> list:
             if speaker and "".join(buf).strip():
                 turns.append({"speaker": speaker, "text": " ".join(
                     x for x in buf if x).strip()})
-            speaker = hit.group(1)
+            speaker = _speaker_name(hit.group(1))
             buf = [hit.group(2).strip()]
             continue
         if speaker:
@@ -264,7 +274,7 @@ def parse_dialogue(text: str) -> list:
 
 
 def dialogue_plan(text: str, provider: str = "edge", limit: int = 0) -> list:
-    """对话稿的合成计划：一轮一条（太长再按句子拆），带 speaker。"""
+    """双人对话的合成计划：一轮一条（太长再按句子拆），带 speaker。"""
     turns = parse_dialogue(text)
     if not turns:
         return []
@@ -788,7 +798,7 @@ def synth_plan(plan, *, provider: str = "edge", voice: str = "", rate: int = 0,
     """按计划逐段合成（有缓存就用缓存），再拼成一条旁白 + 句级字幕。
 
     voices 是 {角色: 音色}，对话稿每段按 seg["speaker"] 挑音色；cue_prefix
-    为真时给字幕加「主讲：」这样的前缀。
+    为真时给字幕加「角色 A：」这样的前缀。
     """
     plan = list(plan or [])
     if not plan:

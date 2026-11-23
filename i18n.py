@@ -3490,3 +3490,29 @@ _TR_EXTRA61 = (
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA61:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA62 = (
+    ("双人对话里「角色 B」用这个音色",
+     "雙人對話裡「角色 B」用這個音色",
+     "The voice for character B in a two-person dialogue",
+     "二者対話の「キャラクター B」に使う声",
+     "2인 대화에서 '캐릭터 B'에 쓸 목소리"),
+    ("字幕带「角色 A：」这样的前缀",
+     "字幕帶「角色 A：」這樣的前綴",
+     "Prefix captions with the character name",
+     "字幕に「キャラクター A：」の接頭辞を付ける",
+     "자막 앞에 '캐릭터 A:' 접두어 붙이기"),
+    ("勾上以后字幕会写成「角色 A：……」，不勾只写台词",
+     "勾上以後字幕會寫成「角色 A：……」，不勾只寫台詞",
+     "Captions read Character A: ... when on; just the line when off",
+     "オンのとき字幕は「キャラクター A：……」、オフなら台詞のみ",
+     "켜면 자막이 '캐릭터 A: …'로 표시되고, 끄면 대사만 표시됩니다"),
+    ("双人对话：角色 A {a} 轮、角色 B {b} 轮，会切成 {n} 段",
+     "雙人對話：角色 A {a} 輪、角色 B {b} 輪，會切成 {n} 段",
+     "Dialogue: {a} character A turns / {b} character B turns, {n} chunks",
+     "二者対話：キャラクター A {a} 回・キャラクター B {b} 回、{n} 分割",
+     "2인 대화: 캐릭터 A {a}턴 / 캐릭터 B {b}턴, {n}개 구간"),
+)
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA62:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)
