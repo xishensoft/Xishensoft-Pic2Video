@@ -2987,3 +2987,12 @@ _TR_EXTRA47 = [
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA47:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+
+
+_TR_EXTRA48 = [
+    ("（已清理，响度 {lu} LUFS）", "（已清理，響度 {lu} LUFS）", " (cleaned, {lu} LUFS)",
+     "（クリーン済み、{lu} LUFS）", "（정리됨, {lu} LUFS）"),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA48:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)

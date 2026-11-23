@@ -8765,7 +8765,8 @@ def run_gui() -> int:
                         api_key=(s["tts_keys"] or {}).get(provider, ""),
                         base_url=s["tts_base_url"],
                         proxy=s["tts_proxy"],
-                        gap=float(s["tts_gap"]))
+                        gap=float(s["tts_gap"]),
+                        cleanup=bool(s["tts_cleanup"]))
 
         def on_tts_start(self):
             if self._tts_running():
@@ -8850,9 +8851,13 @@ def run_gui() -> int:
             self._refresh_all()
             self._mark_dirty()
             self._history_push(tr("生成旁白"))
+            note = ""
+            if res.get("cleaned"):
+                note = tr("（已清理，响度 {lu} LUFS）",
+                          lu="%.1f" % float(res.get("loudness") or 0.0))
             self.lbl_tts_status.setText(tr(
                 "旁白好了：{dur}，{n} 条字幕。总长已改成「跟旁白」。",
-                dur=human_time(dur), n=len(self.project.cues)))
+                dur=human_time(dur), n=len(self.project.cues)) + note)
             self.lbl_status.setText(tr("旁白好了：{dur}", dur=human_time(dur)))
 
         def _play_audition(self, path):

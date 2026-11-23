@@ -3837,6 +3837,14 @@ check("提供方名字有译文",
           for lang in ("zh-TW", "en", "ja", "ko")))
 
 
+# ---------------- 77 配音清理接线（T12 音频清理与响度）
+check("配音把清理开关传下去", 'cleanup=bool(s["tts_cleanup"])' in _src)
+check("合成完显示响度", '已清理，响度 {lu} LUFS' in _src and 'res.get("cleaned")' in _src)
+check("清理默认是开的", p.Settings(os.path.join(tmp, "settings_clean.json"))["tts_cleanup"] is True)
+check("清理词条四语齐", all("（已清理，响度 {lu} LUFS）" in _i18n[L] for L in ("zh-TW", "en", "ja", "ko")),
+      {L: _i18n[L].get("（已清理，响度 {lu} LUFS）") for L in ("en", "ja")})
+
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

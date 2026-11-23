@@ -204,7 +204,7 @@ def fake_synth(text, voice, rate, out, api_key="", base_url="", proxy=""):
 
 seen = []
 res = T.synth_plan(plan2, provider="edge", voice="v1", rate=0, root=pipe_root,
-                   synth_fn=fake_synth, gap=0.6,
+                   synth_fn=fake_synth, cleanup=False, gap=0.6,
                    on_progress=lambda done, total, cached: seen.append((done, total, cached)))
 check("整篇合成两段都调用", calls["n"] == 2, calls["n"])
 check("整篇总长 = 两段 + 间隔", abs(res["dur"] - 2.6) < 0.2, round(res["dur"], 2))
@@ -213,7 +213,7 @@ check("第二段字幕被推后", abs(res["cues"][1]["start"] - 1.6) < 0.12, res
 check("进度回调按顺序", [x[0] for x in seen] == [1, 2] and all(x[1] == 2 for x in seen), seen)
 
 again = T.synth_plan(plan2, provider="edge", voice="v1", rate=0, root=pipe_root,
-                     synth_fn=fake_synth, gap=0.6)
+                     synth_fn=fake_synth, cleanup=False, gap=0.6)
 check("第二次全部走缓存", calls["n"] == 2 and again["cached"] == 2, [calls["n"], again["cached"]])
 check("缓存复用总长一致", abs(again["dur"] - res["dur"]) < 0.02)
 check("缓存复用字幕一致", len(again["cues"]) == 2)
@@ -241,7 +241,7 @@ try:
     T.synth_plan([{"index": 0, "text": "甲。", "chars": 2},
                   {"index": 1, "text": "乙。", "chars": 2}],
                  provider="edge", voice="v9", rate=0, root=os.path.join(tmp, "pipe2"),
-                 synth_fn=bad_synth, gap=0.6)
+                 synth_fn=bad_synth, cleanup=False, gap=0.6)
     ok = False
 except T.TtsError as exc:
     ok = exc.reason == "quota"
@@ -319,6 +319,63 @@ check("挂旁白后总长按旁白", abs(pr2.total() - 5.5) < 1e-6, pr2.total())
 idx = [i for i, a in enumerate(pr2.audios) if a.path == nar][0]
 pr2.remove_audio([idx])
 check("删掉旁白音频就清掉旁白", pr2.narration_dur == 0.0 and pr2.narration_path == "")
+
+# ---------------- 11 音频清理与响度
+chain = T.clean_chain()
+check("清理滤镜链齐", all(k in chain for k in ("silenceremove", "adeclick", "highpass=f=65",
+                                             "lowpass=f=16000", "loudnorm=I=-14.0",
+                                             "alimiter", "aresample=48000")), chain)
+check("清理链带上量出来的响度", "measured_I=-30.00" in T.clean_chain(
+    {"input_i": -30.0, "input_tp": -12.0, "input_lra": 3.0,
+     "input_thresh": -40.0, "target_offset": 0.0}))
+check("目标响度可改", "loudnorm=I=-16.0" in T.clean_chain(None, -16.0))
+
+sample = os.path.join(tmp, "tone_sil.wav")
+made = T.run_ffmpeg(["-y", "-f", "lavfi", "-i",
+                     "sine=frequency=440:sample_rate=48000:duration=1",
+                     "-af", "adelay=600:all=1", "-t", "1.6", sample])
+if not made or not os.path.exists(sample):
+    skip("清理/响度实测", "这台机器上 ffmpeg 没做出测试音频")
+else:
+    lead = T.silence_lead(sample)
+    check("量得出开头静音", abs(lead - 0.6) < 0.12, lead)
+    got = T.clean_mix(sample, [{"start": 0.7, "end": 1.2, "text": "第一句。"},
+                                {"start": 1.2, "end": 1.6, "text": "第二句。"}])
+    check("清理跑通了", got["cleaned"] is True, got)
+    check("清理后时长约 1 秒", abs(got["dur"] - 1.0) < 0.25, got["dur"])
+    check("字幕跟着往前挪", bool(got["cues"]) and got["cues"][0]["start"] < 0.25, got["cues"])
+    check("清理后响度 -14 上下 1.5", abs(float(got["loudness"] or 0.0) + 14.0) < 1.5, got["loudness"])
+
+moved = T.shift_cues([{"start": 0.1, "end": 0.3, "text": "a"},
+                      {"start": 0.5, "end": 1.0, "text": "b"}], 0.4, 2.0)
+check("挪字幕越界就丢", [c["text"] for c in moved] == ["b"], moved)
+check("挪字幕保留间隔", abs(moved[0]["start"] - 0.1) < 1e-6 and abs(moved[0]["end"] - 0.6) < 1e-6, moved)
+check("不挪就原样", T.shift_cues([{"start": 0.5, "end": 1.0, "text": "b"}], 0.0, 2.0)
+      == [{"start": 0.5, "end": 1.0, "text": "b"}])
+
+broken = T.clean_mix(os.path.join(tmp, "nope.wav"), [{"start": 0, "end": 1, "text": "x"}])
+check("清理失败不弄丢旁白", broken["cleaned"] is False and broken["dur"] == 0.0, broken)
+
+
+def _fake_synth(text, voice, rate, out, api_key="", base_url="", proxy="", cancel=None):
+    T.run_ffmpeg(["-y", "-f", "lavfi", "-i",
+                  "sine=frequency=440:sample_rate=48000:duration=0.8",
+                  "-af", "adelay=500:all=1", "-t", "1.3", out])
+    return {"audio": out, "dur": 1.3,
+            "cues": [{"start": 0.55, "end": 1.25, "text": "第一句。"}]}
+
+
+plan = T.make_plan("第一句。", "edge")
+raw = T.synth_plan(plan, provider="edge", voice="v1", root=os.path.join(tmp, "tts_off"),
+                   synth_fn=_fake_synth, cleanup=False)
+check("关掉清理就不动音频", raw["cleaned"] is False and abs(raw["dur"] - 1.3) < 0.1, raw["dur"])
+check("关掉清理字幕不动", abs(raw["cues"][0]["start"] - 0.55) < 0.02, raw["cues"])
+done = T.synth_plan(plan, provider="edge", voice="v1", root=os.path.join(tmp, "tts_on"),
+                    synth_fn=_fake_synth, cleanup=True)
+check("默认清理是开的", done["cleaned"] is True, done)
+check("清理后总长变短", done["dur"] < raw["dur"] - 0.2, (raw["dur"], done["dur"]))
+check("清理后字幕提前", done["cues"][0]["start"] < raw["cues"][0]["start"] - 0.2,
+      (raw["cues"][0]["start"], done["cues"][0]["start"]))
 
 print()
 print("RESULT:", "ALL PASS" if not fails else "%d FAIL -> %s" % (len(fails), fails),

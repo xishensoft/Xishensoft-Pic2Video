@@ -58,6 +58,8 @@ EDGE_ZH_VOICES = [
 ]
 
 TTS_GAP = 0.6            # 段与段之间的停顿（秒）
+# 旁白是单声道，96k 的 AAC 够用；别用 192k —— ffmpeg 9.x 对单声道 192k CBR 会卡死在半个帧上。
+TTS_BITRATE = "96k"
 CUE_MAX_CHARS = 18       # 一行字幕最多几个字
 CUE_MAX_LINES = 2        # 一条字幕最多几行
 TTS_MIN_RATE, TTS_MAX_RATE = -50, 100   # 语速百分比
@@ -428,15 +430,27 @@ def _tool(name: str, env: str) -> str:
     return name
 
 
-def run_ffmpeg(args) -> bool:
+FFMPEG_TIMEOUT = 600.0   # 单次转码兜底上限（秒）；卡住就杀掉重来，别让整条流程挂死
+
+
+def run_ffmpeg(args, timeout: float = FFMPEG_TIMEOUT) -> bool:
     prepend_tools()
     cmd = [_tool("ffmpeg", "PIC2VIDEO_FFMPEG"), "-nostdin", "-hide_banner", "-loglevel", "error"] + list(args)
     try:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, timeout=timeout or None,
                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
     return proc.returncode == 0
+
+
+def run_ffmpeg_retry(args, timeout: float = FFMPEG_TIMEOUT, tries: int = 2) -> bool:
+    """偶尔会碰上 ffmpeg 卡在某个输入上不动；杀掉重来一次通常就好了。"""
+    for i in range(max(1, int(tries))):
+        if run_ffmpeg(args, timeout):
+            return True
+    return False
 
 
 def probe_duration(path: str) -> float:
@@ -463,8 +477,10 @@ def merge_segments(paths, out_path: str, gap: float = TTS_GAP) -> str:
         raise TtsError("text", "没有可以合并的音频")
     os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
     if len(paths) == 1:
-        ok = run_ffmpeg(["-y", "-i", paths[0], "-vn", "-c:a", "aac", "-b:a", "192k",
-                         "-ar", "48000", "-ac", "1", out_path])
+        ok = run_ffmpeg_retry(["-y", "-i", paths[0], "-vn",
+                               "-af", "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=mono",
+                               "-c:a", "aac", "-b:a", TTS_BITRATE,
+                               "-ar", "48000", "-ac", "1", out_path])
         if not ok:
             raise TtsError("provider", "合并音频失败")
         return out_path
@@ -490,11 +506,154 @@ def merge_segments(paths, out_path: str, gap: float = TTS_GAP) -> str:
             streams.append("[g%d]" % i)
     parts.append("%sconcat=n=%d:v=0:a=1[aout]" % ("".join(streams), n + gap_inputs))
     args += ["-filter_complex", ";".join(parts), "-map", "[aout]", "-vn",
-             "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "1", out_path]
-    if not run_ffmpeg(args):
+             "-c:a", "aac", "-b:a", TTS_BITRATE, "-ar", "48000", "-ac", "1", out_path]
+    if not run_ffmpeg_retry(args):
         raise TtsError("provider", "合并音频失败")
     return out_path
 
+
+
+
+LOUDNESS_TARGET = -14.0
+CLEAN_THRESHOLD_DB = -45.0
+CLEAN_SILENCE = 0.12
+
+
+def _ffmpeg_stderr(args) -> tuple:
+    """跑一次 ffmpeg，返回 (成败, stderr 文本)；清理/测量要用 stderr 里的数字。"""
+    prepend_tools()
+    cmd = [_tool("ffmpeg", "PIC2VIDEO_FFMPEG"), "-nostdin", "-hide_banner"] + list(args)
+    try:
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, timeout=120,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.TimeoutExpired):
+        return False, ""
+    return proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+
+
+def silence_lead(path: str, threshold: float = CLEAN_THRESHOLD_DB) -> float:
+    """开头那段静音有多长（秒）；没有就是 0。"""
+    ok, text = _ffmpeg_stderr(["-i", str(path), "-af",
+                               "silencedetect=noise=%sdB:d=0.06" % int(threshold),
+                               "-f", "null", "-"])
+    if not ok:
+        return 0.0
+    starts, ends = [], []
+    for line in text.splitlines():
+        line = line.strip()
+        if "silence_start:" in line:
+            try:
+                starts.append(float(line.split("silence_start:")[1].split()[0]))
+            except (ValueError, IndexError):
+                pass
+        elif "silence_end:" in line:
+            try:
+                ends.append(float(line.split("silence_end:")[1].split()[0]))
+            except (ValueError, IndexError):
+                pass
+    if starts and starts[0] <= 0.02 and ends:
+        return max(0.0, ends[0])
+    return 0.0
+
+
+def measure_loudness(path: str) -> dict:
+    """量一遍响度（EBU R128）；量不出来回空字典。"""
+    ok, text = _ffmpeg_stderr(["-i", str(path), "-af", "loudnorm=print_format=json",
+                               "-f", "null", "-"])
+    if not ok:
+        return {}
+    start = text.rfind("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return {}
+    try:
+        got = json.loads(text[start:end + 1])
+    except ValueError:
+        return {}
+    out = {}
+    for k in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset"):
+        try:
+            out[k] = float(got.get(k))
+        except (TypeError, ValueError):
+            return {}
+    return out
+
+
+def clean_chain(measured: dict = None, target: float = LOUDNESS_TARGET) -> str:
+    """去咔哒 / 去噗声 / 剪首尾静音 / 响度拉到 target LUFS / 兜底限幅。"""
+    parts = [
+        "silenceremove=start_periods=1:start_threshold=%sdB:start_silence=0.0:"
+        "stop_periods=-1:stop_threshold=%sdB:stop_silence=%.2f"
+        % (int(CLEAN_THRESHOLD_DB), int(CLEAN_THRESHOLD_DB), CLEAN_SILENCE),
+        "adeclick=w=30:o=75",
+        "highpass=f=65",
+        "lowpass=f=16000",
+    ]
+    ln = ("loudnorm=I=%.1f:TP=-1.5:LRA=11" % float(target))
+    if measured:
+        ln += (":measured_I=%.2f:measured_TP=%.2f:measured_LRA=%.2f"
+               ":measured_thresh=%.2f:offset=%.2f:linear=true"
+               % (measured["input_i"], measured["input_tp"], measured["input_lra"],
+                  measured["input_thresh"], measured["target_offset"]))
+    parts.append(ln)
+    parts.append("alimiter=limit=0.891")
+    parts.append("aresample=48000")
+    return ",".join(parts)
+
+
+def shift_cues(cues, by: float, total: float = 0.0):
+    """整条字幕往前挪 by 秒（剪掉开头静音时用），挪没了就丢。"""
+    out = []
+    try:
+        by = float(by)
+    except (TypeError, ValueError):
+        by = 0.0
+    if by <= 0:
+        return normalize_cues(cues, total)
+    for c in cues or []:
+        try:
+            st = float(c.get("start", 0.0)) - by
+            en = float(c.get("end", st)) - by
+        except (TypeError, ValueError):
+            continue
+        text = str(c.get("text", ""))
+        if en <= 0.0 or not text:
+            continue
+        out.append({"start": round(max(0.0, st), 3), "end": round(max(0.02, en), 3),
+                    "text": text})
+    return normalize_cues(out, total)
+
+
+def clean_mix(path: str, cues=None, target: float = LOUDNESS_TARGET) -> dict:
+    """把合成好的旁白过一遍清理：剪静音 + 去咔哒/噗声 + 响度归一。
+    清理失败不算致命：退回原文件，把 cleaned 标成 False，别把已经合成好的旁白弄丢。"""
+    path = str(path)
+    dur0 = probe_duration(path)
+    lead = silence_lead(path)
+    measured = measure_loudness(path)
+    tmp = path + ".clean.m4a"
+    af = clean_chain(measured, target)
+    ok = run_ffmpeg_retry(["-y", "-i", path, "-vn", "-af", af, "-c:a", "aac", "-b:a", TTS_BITRATE,
+                           "-ar", "48000", "-ac", "1", tmp])
+    if not ok or not os.path.exists(tmp) or os.path.getsize(tmp) <= 0:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        return {"audio": path, "dur": dur0, "lead": 0.0, "cleaned": False,
+                "loudness": measured.get("input_i", 0.0), "cues": normalize_cues(cues, dur0)}
+    try:
+        os.replace(tmp, path)
+    except OSError:
+        return {"audio": path, "dur": dur0, "lead": 0.0, "cleaned": False,
+                "loudness": measured.get("input_i", 0.0), "cues": normalize_cues(cues, dur0)}
+    dur = probe_duration(path) or max(0.0, dur0 - lead)
+    after = measure_loudness(path)
+    shifted = shift_cues(cues, lead, dur)
+    return {"audio": path, "dur": dur, "lead": lead, "cleaned": True,
+            "loudness": after.get("input_i", 0.0), "cues": shifted}
 
 
 # ---------------------------------------------------------------- 整篇流程
@@ -564,7 +723,8 @@ def fold_cues(cues, max_chars: int = CUE_MAX_CHARS, max_lines: int = CUE_MAX_LIN
 def synth_plan(plan, *, provider: str = "edge", voice: str = "", rate: int = 0,
                root: str = "", api_key: str = "", base_url: str = "",
                proxy: str = "", cancel=None, synth_fn=None,
-               on_progress=None, gap: float = TTS_GAP) -> dict:
+               on_progress=None, gap: float = TTS_GAP,
+               cleanup: bool = True, loudness: float = LOUDNESS_TARGET) -> dict:
     """按计划逐段合成（有缓存就用缓存），再拼成一条旁白 + 句级字幕。"""
     plan = list(plan or [])
     if not plan:
@@ -612,8 +772,19 @@ def synth_plan(plan, *, provider: str = "edge", voice: str = "", rate: int = 0,
     merge_segments(audio_paths, out_path, gap=gap)
     total_dur = probe_duration(out_path) or max(0.0, offset - gap)
     cues = normalize_cues(cues, total_dur)
+    cleaned = False
+    loudness_in = 0.0
+    if cleanup:
+        if cancel is not None and cancel.is_set():
+            raise TtsError("cancelled", "已取消")
+        got = clean_mix(out_path, cues, loudness)
+        cues = got["cues"]
+        total_dur = got["dur"] or total_dur
+        cleaned = bool(got.get("cleaned"))
+        loudness_in = float(got.get("loudness") or 0.0)
     return {"audio": out_path, "dur": total_dur, "cues": cues,
-            "segments": total, "cached": cached, "key": key}
+            "segments": total, "cached": cached, "key": key,
+            "cleaned": cleaned, "loudness": loudness_in}
 
 # ---------------------------------------------------------------- Edge 合成
 def _rate_arg(rate) -> str:
