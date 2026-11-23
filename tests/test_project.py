@@ -3006,6 +3006,224 @@ check("控制条词条四语齐全",
       all(_k in tbl for _k in _c64_keys for tbl in _i18n.values()),
       [k for k in _c64_keys if not all(k in tbl for tbl in _i18n.values())])
 
+# ---------------- 65 实时合成：时间映射 / 画面 / 转场 / 画中画
+from PyQt6.QtGui import QImage as _QImg, QColor as _QCol
+_scd = tempfile.mkdtemp(prefix="p2v_scene_")
+def _solid(name, color, w=160, h=90):
+    path = os.path.join(_scd, name)
+    img = _QImg(w, h, _QImg.Format.Format_RGB32)
+    img.fill(_QCol(color))
+    img.save(path, "PNG")
+    return path
+_red, _blue, _green = _solid("red.png", "#ff0000"), \
+    _solid("blue.png", "#0000ff"), _solid("green.png", "#00ff00", 60, 60)
+
+def _scene(clips, counts=None, **kw):
+    opts = dict(w=160, h=90, fit="own", bg_blur=False, transition="none",
+                transition_sec=0.3, xfade_sec=0.3, motion="none",
+                crop_focus="center", subtitle_size=20,
+                subtitle_font="Microsoft YaHei")
+    opts.update(kw)
+    if counts is None:
+        counts = [int(round(c.dur * 30)) for c in clips]
+    return p.Scene(clips, counts, 30, opts)
+
+def _px(sc, t, x=80, y=45):
+    c = sc.frame_at(t).pixelColor(x, y)
+    return (c.red(), c.green(), c.blue())
+
+_sc65 = _scene([p.Clip(_red, 1.0), p.Clip(_blue, 1.0)])
+check("Scene 总长按帧数算", abs(_sc65.total - 2.0) < 1e-9, _sc65.total)
+check("Scene 段起点正确", [round(s, 3) for s in _sc65.starts] == [0.0, 1.0],
+      _sc65.starts)
+check("硬切前段是红的", _px(_sc65, 0.1) == (255, 0, 0), _px(_sc65, 0.1))
+check("硬切后段是蓝的", _px(_sc65, 1.4) == (0, 0, 255), _px(_sc65, 1.4))
+check("超出总长取最后一帧", _px(_sc65, 99.0)[2] == 255)
+check("负时间取第一帧", _px(_sc65, -5.0) == (255, 0, 0))
+_f = _sc65.frame_at(0.1)
+check("画面尺寸等于预览参数", (_f.width(), _f.height()) == (160, 90),
+      (_f.width(), _f.height()))
+
+_sx = _scene([p.Clip(_red, 1.0, xfade=True, xfade_name="fade", xfade_dur=0.4),
+              p.Clip(_blue, 1.0)])
+check("交叉淡化重叠帧数", _sx.overlaps == [12], _sx.overlaps)
+check("交叉淡化后段起点提前", abs(_sx.starts[1] - 0.8) < 1e-9, _sx.starts)
+check("淡化起点还是纯红", _px(_sx, 0.79) == (255, 0, 0), _px(_sx, 0.79))
+_mid = _px(_sx, 1.0)
+check("淡化中点是红蓝各半", abs(_mid[0] - 128) <= 3 and abs(_mid[2] - 128) <= 3,
+      _mid)
+check("淡化结尾基本是蓝", _px(_sx, 1.19)[2] > 200, _px(_sx, 1.19))
+check("淡化不改总长", abs(_sx.total - 2.0) < 1e-9, _sx.total)
+
+_sf = _scene([p.Clip(_red, 1.0, fade=True), p.Clip(_blue, 1.0)],
+             transition_sec=0.3)
+check("自己开淡入：开头是黑的", _px(_sf, 0.02)[0] < 40, _px(_sf, 0.02))
+check("自己开淡入：中段正常", _px(_sf, 0.5) == (255, 0, 0))
+check("自己开淡入：结尾又黑", _px(_sf, 0.98)[0] < 40, _px(_sf, 0.98))
+
+_sx_names = ["wipeleft", "wiperight", "wipeup", "wipedown", "slideleft",
+             "slideright", "circleopen", "circleclose", "fadeblack",
+             "pixelize", "radial"]
+def _xf(name):
+    return _scene([p.Clip(_red, 1.0, xfade=True, xfade_name=name,
+                          xfade_dur=0.4), p.Clip(_blue, 1.0)])
+
+_wl = _xf("wipeleft")
+check("向左擦除：左边还是旧画面", _px(_wl, 1.0, 20, 45) == (255, 0, 0))
+check("向左擦除：右边已是新画面", _px(_wl, 1.0, 140, 45) == (0, 0, 255))
+_wr = _xf("wiperight")
+check("向右擦除方向相反", _px(_wr, 1.0, 20, 45) == (0, 0, 255)
+      and _px(_wr, 1.0, 140, 45) == (255, 0, 0))
+_wu = _xf("wipeup")
+check("向上擦除自下而上", _px(_wu, 1.0, 80, 10) == (255, 0, 0)
+      and _px(_wu, 1.0, 80, 80) == (0, 0, 255))
+_wd = _xf("wipedown")
+check("向下擦除自上而下", _px(_wd, 1.0, 80, 10) == (0, 0, 255)
+      and _px(_wd, 1.0, 80, 80) == (255, 0, 0))
+_sl = _xf("slideleft")
+check("向左推移不留黑边", _px(_sl, 1.0, 20, 45) == (255, 0, 0)
+      and _px(_sl, 1.0, 140, 45) == (0, 0, 255))
+_sr = _xf("slideright")
+check("向右推移不留黑边", _px(_sr, 1.0, 20, 45) == (0, 0, 255)
+      and _px(_sr, 1.0, 140, 45) == (255, 0, 0))
+_co = _xf("circleopen")
+check("圆形展开：中间已是新画面", _px(_co, 1.0, 80, 45) == (0, 0, 255))
+check("圆形展开：四角还是旧画面", _px(_co, 1.0, 4, 4) == (255, 0, 0))
+_cc = _xf("circleclose")
+check("圆形收拢：中间还是旧画面", _px(_cc, 1.0, 80, 45) == (255, 0, 0))
+check("圆形收拢：四角已是新画面", _px(_cc, 1.0, 4, 4) == (0, 0, 255))
+_fb = _xf("fadeblack")
+check("黑场过渡中途接近全黑", max(_px(_fb, 1.0)) < 12, _px(_fb, 1.0))
+_pz = _xf("pixelize")
+check("马赛克转场中途是混色", 60 <= _px(_pz, 1.0)[0] <= 200
+      and 60 <= _px(_pz, 1.0)[2] <= 200, _px(_pz, 1.0))
+_rd = _xf("radial")
+check("径向转场左右不同", _px(_rd, 1.0, 20, 45) != _px(_rd, 1.0, 140, 45),
+      (_px(_rd, 1.0, 20, 45), _px(_rd, 1.0, 140, 45)))
+check("12 个转场名都能画出来",
+      all(_xf(n).frame_at(1.0).width() == 160 for n in p.XFADE_NAMES))
+
+_ov65 = p.Overlay(_green, 0.5, 1.5, scale=50, anchor="center", opacity=100)
+_sov = p.Scene([p.Clip(_red, 2.0)], [60], 30,
+               dict(w=160, h=90, fit="own", bg_blur=False,
+                    transition="none", subtitle_size=20),
+               overlays=p.overlay_specs([_ov65], 0, 2.0))
+check("画中画没到点不出现", _px(_sov, 0.2) == (255, 0, 0), _px(_sov, 0.2))
+check("画中画到点压在上面", _px(_sov, 1.0) == (0, 255, 0), _px(_sov, 1.0))
+check("画中画过了点消失", _px(_sov, 1.8) == (255, 0, 0), _px(_sov, 1.8))
+
+_sm = _scene([p.Clip(_red, 1.0)], motion="in")
+check("推近从 1.0 开始", abs(_sm._zoom(0, 0.0) - 1.0) < 1e-9, _sm._zoom(0, 0.0))
+check("推近到结尾变大", _sm._zoom(0, 0.99) > 1.0 + p.MOTION_AMOUNT * 0.9,
+      _sm._zoom(0, 0.99))
+check("镜头拉远从大开始", abs(_scene([p.Clip(_red, 1.0)], motion="out")
+                            ._zoom(0, 0.0) - (1.0 + p.MOTION_AMOUNT)) < 1e-6)
+
+_sc65.reconfigure([p.Clip(_red, 1.0), p.Clip(_blue, 1.0), p.Clip(_red, 1.0)],
+                  [30, 30, 30], 30,
+                  dict(w=160, h=90, fit="own", bg_blur=False,
+                       transition="none", subtitle_size=20))
+check("重建后总长变 3 秒", abs(_sc65.total - 3.0) < 1e-9, _sc65.total)
+check("重建后解码过的图还留着", len(_sc65._imgs) == 2, len(_sc65._imgs))
+
+check("字幕去 ASS 标签", p._plain_cue("{pos(1,2)}你好") == ["你好"],
+      p._plain_cue("{pos(1,2)}你好"))
+check("字幕 \\N 拆行", p._plain_cue("上\\N下") == ["上", "下"],
+      p._plain_cue("上\\N下"))
+check("空字幕给一条空行", p._plain_cue("") == [""])
+
+# ---------------- 66 音轨主时钟：只混音频
+_ag = p.build_audio_graph(6.0, timeline=[(True, 3.0), (False, 1.5), (True, 1.5)],
+                          volume=0.5, fade_in=0.3, fade_out=0.3)
+check("音频图最后落到 aout", _ag.endswith("[aout]"), _ag[-40:])
+check("音频图按片头片尾补静音", "anullsrc" in _ag
+      and "concat=n=3:v=0:a=1" in _ag)
+check("音频图带淡入淡出", "afade=t=in" in _ag and "afade=t=out" in _ag)
+check("音频图带整段音量", "volume=0.500" in _ag)
+check("没有额外音轨就不 amix", "amix=" not in _ag)
+_ag2 = p.build_audio_graph(4.0, timeline=[(True, 4.0)],
+                           extras=[{"index": 1, "start": 1.0, "dur": 2.0,
+                                    "volume": 0.5}])
+check("多轨走 amix 并延时", "amix=inputs=2" in _ag2
+      and "adelay=1000|1000" in _ag2, _ag2[-120:])
+_span66 = p.audio_timeline([p.Clip(IMG[0], 1.0), p.Clip(IMG[0], 1.0)],
+                           [30, 30], 30, 2.0)
+check("音轨时间线按段切", len(_span66) == 2
+      and abs(sum(d for _, d in _span66) - 2.0) < 0.06, _span66)
+if p.missing_tools():
+    print("  (没 ffmpeg，跳过音轨实测)")
+else:
+    _mixdir = tempfile.mkdtemp(prefix="p2v_mix_")
+    _aout66 = os.path.join(_mixdir, "mix.m4a")
+    _pr66 = p.Project()
+    _pr66.add_images([IMG[0], IMG[1]])
+    _pr66.clips[0].dur = 1.0
+    _pr66.clips[1].dur = 1.0
+    _pr66.fps = 30
+    _pr66.audios = [p.AudioClip(TONE, 6.0, 0.0, 1.0, gap=True)]
+    p.render_audio_mix(_pr66.clips, _pr66.frame_counts(), _pr66.audios,
+                       _aout66, fps=30)
+    _d66 = subprocess.run([p.FFPROBE, "-v", "error", "-show_entries",
+                           "format=duration", "-of",
+                           "default=nw=1:nk=1", _aout66],
+                          capture_output=True, text=True).stdout.strip()
+    check("音轨时长跟成片一致", abs(float(_d66 or 0) - 2.0) < 0.05, _d66)
+    _c66 = subprocess.run([p.FFPROBE, "-v", "error", "-select_streams", "a:0",
+                           "-show_entries", "stream=codec_name", "-of",
+                           "default=nw=1:nk=1", _aout66],
+                          capture_output=True, text=True).stdout.strip()
+    check("音轨是 aac", _c66 == "aac", _c66)
+    _sil66 = os.path.join(_mixdir, "silent.m4a")
+    p.render_audio_mix(_pr66.clips, _pr66.frame_counts(), [], _sil66, fps=30)
+    check("没音乐也有一条静音轨当钟",
+          os.path.exists(_sil66) and os.path.getsize(_sil66) > 200)
+
+# ---------------- 67 实时预览接线
+check("预览换成自绘画布", "self.video = PreviewCanvas()" in _src
+      and "class PreviewCanvas(QWidget)" in _src)
+check("播放器不再挂视频输出", "setVideoOutput" not in _src)
+check("播放时按播放器位置逐帧画", "def _tick_frame" in _src
+      and "self._draw_frame(self.player.position() / 1000.0)" in _src)
+check("改参数立刻重建场景", "def _refresh_scene" in _src
+      and "self.scene.reconfigure(" in _src)
+check("预览不再渲整片", "preview_{self.preview_seq}.mp4" not in _src,
+      "还留着整片预览路径")
+check("音轨单独混成主时钟", "class AudioMixWorker(QThread)" in _src
+      and "def render_audio_mix" in _src)
+check("音轨有指纹防抖", "def _audio_signature" in _src
+      and "self._mix_timer.start()" in _src)
+check("拖动进度条实时出帧", "self._render_at(cur)" in _src)
+check("画面按时间现画", "self.scene.frame_at(t)" in _src)
+check("预览词条四语齐全", all(k in tbl for k in (
+      "实时合成", "预览：实时合成", "预览已更新（实时合成）",
+      "预览音频失败", "音频混音失败") for tbl in _i18n.values()),
+      [k for k in ("实时合成", "预览：实时合成") if not all(
+          k in tbl for tbl in _i18n.values())])
+
+# ---------------- 68 视频片段：按时间出帧（片头片尾）
+if p.missing_tools():
+    print("  (没 ffmpeg，跳过视频片段实测)")
+else:
+    _vdir = tempfile.mkdtemp(prefix="p2v_vid_")
+    _vpath = os.path.join(_vdir, "clip.mp4")
+    subprocess.run([p.FFMPEG, "-y", "-nostdin", "-loglevel", "error",
+                    "-f", "lavfi", "-i",
+                    "testsrc=size=160x90:rate=30:duration=2",
+                    "-pix_fmt", "yuv420p", "-c:v", "libx264",
+                    "-preset", "ultrafast", _vpath], check=False)
+    _vclip = p.Clip(_vpath, 1.0, kind="intro")
+    _sv68 = p.Scene([_vclip, p.Clip(_red, 1.0)], [30, 30], 30,
+                    dict(w=160, h=90, fit="own", bg_blur=False,
+                         transition="none", subtitle_size=20))
+    _vf1 = _sv68.frame_at(0.1)
+    _vf2 = _sv68.frame_at(0.9)
+    check("视频片段能出帧", not _vf1.isNull() and _vf1.width() == 160)
+    check("视频两帧画面不同", _vf1.cacheKey() != _vf2.cacheKey())
+    _vf3 = _sv68.frame_at(0.2)
+    check("视频往回跳也能出帧", not _vf3.isNull() and _vf3.width() == 160)
+    _sv68.close()
+    check("关掉场景会放掉视频管道", not _sv68._readers)
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

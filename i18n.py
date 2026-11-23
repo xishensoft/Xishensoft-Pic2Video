@@ -2724,3 +2724,34 @@ _TR_EXTRA37 = {
 for _k, _trs in _TR_EXTRA37.items():
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
         TR[_lang].setdefault(_k, _v)
+
+# 实时预览（合成器 / 音频主时钟）
+_TR_EXTRA38 = {
+    "实时合成": ("即時合成", "Live composite",
+             "リアルタイム合成", "실시간 합성"),
+    "预览：实时合成": ("預覽：即時合成", "Preview: live composite",
+                  "プレビュー：リアルタイム合成", "미리보기: 실시간 합성"),
+    "预览已更新（实时合成）": ("預覽已更新（即時合成）",
+                     "Preview updated (live composite)",
+                     "プレビューを更新しました（リアルタイム合成）",
+                     "미리보기가 갱신되었습니다(실시간 합성)"),
+    "预览音频失败": ("預覽音訊失敗", "Preview audio failed",
+               "プレビューの音声に失敗しました", "미리보기 오디오 실패"),
+    "音频混音失败": ("音訊混音失敗", "Audio mix failed",
+               "音声ミックスに失敗しました", "오디오 믹스 실패"),
+}
+for _k, _trs in _TR_EXTRA38.items():
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
+        TR[_lang].setdefault(_k, _v)
+
+# 实时预览：设置页提示改成「已实时」
+_TR_EXTRA39 = {
+    "参数已更新：{w}x{h} {fps}fps，预览已实时": (
+        "參數已更新：{w}x{h} {fps}fps，預覽已即時",
+        "Updated: {w}x{h} {fps}fps — preview is live",
+        "更新しました：{w}x{h} {fps}fps、プレビューはリアルタイムです",
+        "업데이트됨: {w}x{h} {fps}fps — 미리보기가 실시간입니다"),
+}
+for _k, _trs in _TR_EXTRA39.items():
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
+        TR[_lang].setdefault(_k, _v)

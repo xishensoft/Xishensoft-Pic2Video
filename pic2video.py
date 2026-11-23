@@ -46,7 +46,7 @@ components.prepend_path()      # tools/ 里的 ffmpeg 优先于系统那份
 # exe 是窗口程序，没有控制台：起子进程时别让它继承无效的句柄
 CREATION_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 WIDTH, HEIGHT, FPS = 1920, 1080, 30
 PREVIEW_W, PREVIEW_H = 960, 540
@@ -2613,7 +2613,586 @@ def grab_cover(video_path: str, out_path: str, at: float,
                        creationflags=CREATION_NO_WINDOW)
     if p.returncode != 0 or not os.path.exists(out_path):
         raise RenderError(tr("封面截不出来：{msg}", msg=(p.stderr or "")[-200:]))
-    return out_path
+# ---------------------------------------------------------------- 预览合成
+# 预览不再「渲一条整片再播」，而是按时间直接画出这一帧：
+# 图片解码一次进内存，缩放/铺底/淡入淡出/推近拉远/转场/画中画/字幕
+# 都在这里用 QPainter 拼出来。时间映射与 build_graph 完全一致，
+# 只有 12 个转场是近似实现（ffmpeg 的 xfade 没有逐像素公开公式）。
+
+def _preview_cache_dir() -> str:
+    path = os.path.join(tempfile.gettempdir(), "p2v_preview")
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        pass
+    return path
+
+
+def _plain_cue(text: str) -> list[str]:
+    r"""字幕正文去掉 ASS 覆盖标签，按换行拆开（\N 与真换行都算）。"""
+    out = []
+    for line in (text or "").replace("\\N", "\n").replace("\r", "").split("\n"):
+        clean, depth = [], 0
+        for ch in line:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth = max(0, depth - 1)
+            elif depth == 0:
+                clean.append(ch)
+        out.append("".join(clean).strip())
+    return [ln for ln in out if ln] if any(ln for ln in out) else [""]
+
+
+class VideoFrameReader:
+    """逐帧读视频：一条 ffmpeg 管道顺序读，跳太远才重开，别再一帧起一个进程。"""
+
+    def __init__(self, path: str, start: float, w: int, h: int, fps: int):
+        from PyQt6.QtGui import QImage
+        self._QImage = QImage
+        self.path = path
+        self.start = max(0.0, float(start))
+        self.w, self.h = max(2, int(w)), max(2, int(h))
+        self.fps = max(1, int(fps))
+        self.index = -1
+        self.proc = None
+
+    def close(self):
+        proc, self.proc = self.proc, None
+        self.index = -1
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+
+    def _open(self, index: int):
+        self.close()
+        t = self.start + index / float(self.fps)
+        vf = ("scale=%d:%d:force_original_aspect_ratio=increase,"
+              "crop=%d:%d" % (self.w, self.h, self.w, self.h))
+        cmd = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
+               "-ss", "%.3f" % t, "-i", self.path, "-vf", vf,
+               "-f", "rawvideo", "-pix_fmt", "rgb32", "-"]
+        self.proc = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, creationflags=CREATION_NO_WINDOW)
+        self.index = index
+
+    def _read(self, need: int):
+        proc = self.proc
+        if proc is None or proc.stdout is None:
+            return None
+        try:
+            buf = proc.stdout.read(need)
+        except (OSError, ValueError):
+            return None
+        if not buf or len(buf) < need:
+            return None
+        return buf
+
+    def frame(self, index: int):
+        index = max(0, int(index))
+        if self.proc is None or index < self.index or index > self.index + 90:
+            self._open(index)
+        need = self.w * self.h * 4
+        while self.index < index:
+            if self._read(need) is None:
+                return self._QImage()
+            self.index += 1
+        data = self._read(need)
+        if data is None:
+            return self._QImage()
+        self.index += 1
+        img = self._QImage(data, self.w, self.h,
+                           self._QImage.Format.Format_RGB32)
+        return img.copy()
+
+
+class Scene:
+    """一个可以随时画任意时刻画面的预览引擎（不落盘、不编码）。"""
+
+    def __init__(self, clips, counts, fps, opts, overlays=None, cues=None,
+                 cache_dir=""):
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import (QBrush, QColor, QFont, QImage, QPainter,
+                                 QPainterPath, QPen)
+        self._Qt = Qt
+        self._QColor = QColor
+        self._QFont = QFont
+        self._QImage = QImage
+        self._QPainter = QPainter
+        self._QPainterPath = QPainterPath
+        self._QPen = QPen
+        self._QBrush = QBrush
+
+        self.cache_dir = cache_dir or _preview_cache_dir()
+        self._imgs: dict = {}
+        self._bases: dict = {}
+        self._video_frames: dict = {}
+        self._video_order: list = []
+        self._readers: dict = {}
+        self._geom = None
+        self.total = 0.0
+        self.reconfigure(clips, counts, fps, opts, overlays, cues)
+
+    def reconfigure(self, clips, counts, fps, opts, overlays=None, cues=None):
+        """换时间线/参数但留住解码好的图：改一处参数不用重新读盘。"""
+        self.clips = [c.copy() for c in (clips or [])]
+        self.fps = max(1, int(fps))
+        self.w = max(2, int(opts.get("w", WIDTH)))
+        self.h = max(2, int(opts.get("h", HEIGHT)))
+        self.fit = opts.get("fit", "own")
+        self.bg_blur = bool(opts.get("bg_blur", True))
+        self.pad_color = opts.get("pad_color", "#000000")
+        self.bg_path = opts.get("bg_path", "")
+        self.transition = opts.get("transition", "none")
+        self.transition_sec = float(opts.get("transition_sec", 0.3))
+        self.xfade_sec = float(opts.get("xfade_sec", self.transition_sec))
+        self.motion = opts.get("motion", "none")
+        self.crop_focus = opts.get("crop_focus", "center")
+        self.cues = [dict(c) for c in (cues or [])]
+        self.subtitle_font = opts.get("subtitle_font", "Microsoft YaHei")
+        self.subtitle_size = int(opts.get("subtitle_size", 48))
+
+        geom = (self.w, self.h, self.fit, self.bg_blur, self.pad_color,
+                self.bg_path, self.crop_focus)
+        if geom != self._geom:
+            self._bases.clear()        # 画面几何变了，底图得重铺
+        self._geom = geom
+
+        counts = list(counts or [])
+        if len(counts) < len(self.clips):
+            counts += [1] * (len(self.clips) - len(counts))
+        total_frames = sum(counts)
+        self.total = total_frames / float(self.fps) if total_frames else 0.0
+        self.counts2, self.overlaps = _xfade_plan(
+            self.clips, counts, self.fps, self.xfade_sec)
+        self.segs = [nf / float(self.fps) for nf in self.counts2]
+        self.starts = []
+        acc = 0.0
+        for i, seg in enumerate(self.segs):
+            self.starts.append(acc)
+            d_next = (self.overlaps[i] / float(self.fps)
+                      if i < len(self.overlaps) else 0.0)
+            acc += seg - d_next
+        self.overlays = [dict(o) for o in (overlays or [])]
+
+    # -- 画面 -----------------------------------------------------------
+    def _blank(self, color="#000000"):
+        img = self._QImage(self.w, self.h,
+                           self._QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(self._QColor(color))
+        return img
+
+    def _load(self, path: str):
+        try:
+            stamp = os.path.getmtime(path)
+        except OSError:
+            stamp = 0.0
+        key = (path, stamp)
+        img = self._imgs.get(key)
+        if img is not None:
+            return img
+        img = self._QImage(path)
+        if img.isNull():
+            img = self._blank("#000000")
+        if len(self._imgs) > 64:
+            self._imgs.pop(next(iter(self._imgs)))
+        self._imgs[key] = img
+        return img
+
+    def _cover(self, img, focus: str | None = None):
+        sw, sh = img.width(), img.height()
+        if sw <= 0 or sh <= 0:
+            return self._blank()
+        k = max(self.w / float(sw), self.h / float(sh))
+        nw, nh = max(1, int(round(sw * k))), max(1, int(round(sh * k)))
+        sc = img.scaled(nw, nh, self._Qt.AspectRatioMode.IgnoreAspectRatio,
+                        self._Qt.TransformationMode.SmoothTransformation)
+        frac = CROP_FOCUS.get(focus or self.crop_focus, 0.5)
+        x = max(0, (nw - self.w) // 2)
+        y = max(0, int(round((nh - self.h) * frac)))
+        return sc.copy(x, y, self.w, self.h)
+
+    def _contain(self, img):
+        """ffmpeg 的 force_original_aspect_ratio=decrease：小图不放大。"""
+        sw, sh = img.width(), img.height()
+        if sw <= 0 or sh <= 0:
+            return self._blank()
+        k = min(1.0, min(self.w / float(sw), self.h / float(sh)))
+        if k >= 0.999:
+            return img
+        return img.scaled(max(1, int(round(sw * k))),
+                          max(1, int(round(sh * k))),
+                          self._Qt.AspectRatioMode.IgnoreAspectRatio,
+                          self._Qt.TransformationMode.SmoothTransformation)
+
+    def _blur(self, img):
+        """gblur 的近似：缩到 1/12 再放大回来，够糊也够快。"""
+        sw = max(2, self.w // 12)
+        sh = max(2, self.h // 12)
+        small = img.scaled(sw, sh, self._Qt.AspectRatioMode.IgnoreAspectRatio,
+                           self._Qt.TransformationMode.SmoothTransformation)
+        return small.scaled(self.w, self.h,
+                            self._Qt.AspectRatioMode.IgnoreAspectRatio,
+                            self._Qt.TransformationMode.SmoothTransformation)
+
+    def _draw_centered(self, canvas, img, bg_blur=False, darken=0.0):
+        qp = self._QPainter(canvas)
+        if bg_blur:
+            qp.drawImage(0, 0, self._blur(canvas))
+        if darken > 0:
+            qp.fillRect(0, 0, self.w, self.h,
+                        self._QColor(0, 0, 0, int(255 * min(1.0, darken))))
+        qp.drawImage(max(0, (self.w - img.width()) // 2),
+                     max(0, (self.h - img.height()) // 2), img)
+        qp.end()
+
+    def _still_from_video(self, path: str, at: float):
+        """视频素材取一帧（片头片尾 / 视频背景 / 视频画中画）。"""
+        key = (path, round(max(0.0, at), 3))
+        hit = self._video_frames.get(key)
+        if hit is not None:
+            return hit
+        cmd = [FFMPEG, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+               "-ss", "%.3f" % max(0.0, at), "-i", path, "-frames:v", "1",
+               "-f", "image2pipe", "-vcodec", "png", "-"]
+        try:
+            p = subprocess.run(cmd, capture_output=True,
+                               stdin=subprocess.DEVNULL, timeout=20,
+                               creationflags=CREATION_NO_WINDOW)
+            img = self._QImage.fromData(p.stdout, "PNG")
+        except (subprocess.SubprocessError, OSError):
+            img = self._QImage()
+        if img.isNull():
+            img = self._blank()
+        if len(self._video_order) > 240:
+            old = self._video_order.pop(0)
+            self._video_frames.pop(old, None)
+        self._video_frames[key] = img
+        self._video_order.append(key)
+        return img
+
+    def _compose_base(self, clip):
+        """一段的静态底图：铺底 + 缩放 + 调色（调色交给 ffmpeg 一次算准）。"""
+        if clip.is_video:
+            return self._cover(self._still_from_video(clip.path, clip.src_in))
+        src = self._load(clip.path)
+        if self.fit == "cover":
+            base = self._cover(src)
+        elif self.fit == "color":
+            base = self._blank(self.pad_color)
+            self._draw_centered(base, self._contain(src))
+        elif self.fit in BG_MODES:
+            bg = self._blank()
+            if self.bg_path and os.path.exists(self.bg_path):
+                if self.bg_path.lower().endswith(tuple(MEDIA_EXTS)):
+                    bg = self._cover(self._still_from_video(self.bg_path, 0.0))
+                else:
+                    bg = self._cover(self._load(self.bg_path))
+            base = bg.copy()
+            self._draw_centered(base, self._contain(src))
+        else:                                    # own：自己铺底（可模糊）
+            base = self._cover(src)
+            self._draw_centered(base, self._contain(src),
+                                bg_blur=self.bg_blur,
+                                darken=0.08 if self.bg_blur else 0.0)
+        chain = clip.color_chain()
+        if chain:
+            base = self._baked_color(base, chain, clip.path)
+        return base
+
+    def _baked_color(self, base, chain: str, path: str):
+        """调色交给 ffmpeg 现算一张（结果按参数缓存，之后一直复用）。"""
+        key = "%s|%s|%s|%d|%d" % (chain, os.path.abspath(path),
+                                  self.fit, self.w, self.h)
+        key = hashlib.sha1(key.encode("utf-8", "replace")).hexdigest()[:16]
+        out = os.path.join(self.cache_dir, "color_%s.png" % key)
+        if os.path.exists(out):
+            done = self._QImage(out)
+            if not done.isNull():
+                return done
+        src = os.path.join(self.cache_dir, "color_%s_src.png" % key)
+        try:
+            base.save(src, "PNG")
+            cmd = [FFMPEG, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+                   "-i", src, "-vf", chain, "-frames:v", "1", out]
+            subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL,
+                           timeout=30, creationflags=CREATION_NO_WINDOW)
+            done = self._QImage(out)
+            if not done.isNull():
+                return done
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return base
+
+    def warm(self, index: int, span: int = 2) -> int:
+        """空闲时把附近几段的底图先铺好，播放切到那段不卡。"""
+        done = 0
+        for i in range(max(0, index), min(len(self.clips), index + span + 1)):
+            if self.clips[i].is_video:
+                continue                  # 视频段自己有解码管道，不铺底图
+            if self._base_key(i) not in self._bases:
+                self._base(i)
+                done += 1
+        return done
+
+    def _base_key(self, i: int):
+        c = self.clips[i]
+        try:
+            stamp = os.path.getmtime(c.path)
+        except OSError:
+            stamp = 0.0
+        return (c.path, stamp, c.kind, c.src_in, round(c.brightness, 3),
+                round(c.contrast, 3), round(c.saturation, 3), c.lut,
+                self.w, self.h, self.fit, self.bg_blur, self.pad_color,
+                self.bg_path, self.crop_focus)
+
+    def _base(self, i: int):
+        key = self._base_key(i)
+        hit = self._bases.get(key)
+        if hit is None:
+            if len(self._bases) > 96:
+                self._bases.pop(next(iter(self._bases)))
+            hit = self._compose_base(self.clips[i])
+            self._bases[key] = hit
+        return hit
+
+    def _zoom(self, i: int, lt: float) -> float:
+        """Ken Burns：跟 zoompan 的 on/(nf-1) 对齐。"""
+        amt = MOTION_AMOUNT
+        seg = max(1e-6, self.segs[i])
+        nf = max(1, self.counts2[i])
+        on = int(round(max(0.0, min(1.0, lt / seg)) * (nf - 1)))
+        if (self.motion not in MOTIONS or self.motion == "none" or nf <= 1
+                or self.clips[i].is_video):
+            return 1.0
+        direction = ("in" if i % 2 == 0 else "out") \
+            if self.motion == "inout" else self.motion
+        if direction == "out":
+            return 1.0 + amt * (1.0 - on / float(max(1, nf - 1)))
+        return 1.0 + amt * (on / float(max(1, nf - 1)))
+
+    def _reader_for(self, path: str, start: float):
+        key = (path, round(float(start), 3), self.w, self.h, self.fps)
+        reader = self._readers.get(key)
+        if reader is None:
+            if len(self._readers) >= 4:
+                old = next(iter(self._readers))
+                self._readers.pop(old).close()
+            reader = VideoFrameReader(path, start, self.w, self.h, self.fps)
+            self._readers[key] = reader
+        return reader
+
+    def _video_picture(self, clip, lt: float):
+        reader = self._reader_for(clip.path, clip.src_in)
+        img = reader.frame(int(max(0.0, lt) * self.fps))
+        if img.isNull():
+            return self._blank()
+        return img
+
+    def close(self):
+        for reader in self._readers.values():
+            reader.close()
+        self._readers.clear()
+
+    def _content(self, i: int, lt: float):
+        """第 i 段在段内 lt 秒时的画面（含推拉与淡入淡出）。"""
+        clip = self.clips[i]
+        if clip.is_video:
+            base = self._video_picture(clip, lt)
+        else:
+            base = self._base(i)
+            z = self._zoom(i, lt)
+            if z > 1.0001:
+                nw = max(2, int(round(self.w * z)))
+                nh = max(2, int(round(self.h * z)))
+                canvas = base.scaled(
+                    nw, nh, self._Qt.AspectRatioMode.IgnoreAspectRatio,
+                    self._Qt.TransformationMode.SmoothTransformation)
+                x = max(0, (nw - self.w) // 2)
+                y = max(0, (nh - self.h) // 2)
+                base = canvas.copy(x, y, self.w, self.h)
+        seg = self.segs[i]
+        want_fade = bool(clip.fade)
+        if not clip.is_video and self.transition == "fade":
+            want_fade = True
+        td = min(max(0.0, self.transition_sec), seg / 2.0)
+        alpha = 0.0
+        if want_fade and td > 0.02 and seg > 0.1:
+            if lt < td:
+                alpha = 1.0 - lt / td
+            elif lt > seg - td:
+                alpha = min(1.0, (lt - (seg - td)) / td)
+        if alpha > 0.001:
+            out = base.copy()
+            qp = self._QPainter(out)
+            qp.fillRect(0, 0, self.w, self.h,
+                        self._QColor(0, 0, 0, int(255 * alpha)))
+            qp.end()
+            return out
+        return base
+
+    # -- 转场（近似 xfade 的 12 个名字）--------------------------------
+    def _pixelated(self, img, blocks: int):
+        bw, bh = max(1, self.w // blocks), max(1, self.h // blocks)
+        small = img.scaled(bw, bh, self._Qt.AspectRatioMode.IgnoreAspectRatio,
+                           self._Qt.TransformationMode.FastTransformation)
+        return small.scaled(self.w, self.h,
+                            self._Qt.AspectRatioMode.IgnoreAspectRatio,
+                            self._Qt.TransformationMode.FastTransformation)
+
+    def _blend(self, a, b, name: str, p: float):
+        p = max(0.0, min(1.0, p))
+        out = self._blank()
+        qp = self._QPainter(out)
+        if name == "fadeblack":
+            if p < 0.5:
+                qp.drawImage(0, 0, a)
+                qp.fillRect(0, 0, self.w, self.h,
+                            self._QColor(0, 0, 0, int(255 * min(1.0, p * 2))))
+            else:
+                qp.drawImage(0, 0, b)
+                qp.fillRect(0, 0, self.w, self.h,
+                            self._QColor(0, 0, 0,
+                                         int(255 * max(0.0, (1 - p) * 2))))
+        elif name in ("wipeleft", "wiperight", "wipeup", "wipedown"):
+            qp.drawImage(0, 0, a)
+            if name == "wipeleft":
+                rect = (int(self.w * (1 - p)), 0, int(self.w * p), self.h)
+            elif name == "wiperight":
+                rect = (0, 0, int(self.w * p), self.h)
+            elif name == "wipeup":
+                rect = (0, int(self.h * (1 - p)), self.w, int(self.h * p))
+            else:
+                rect = (0, 0, self.w, int(self.h * p))
+            qp.setClipRect(*rect)
+            qp.drawImage(0, 0, b)
+            qp.setClipping(False)
+        elif name in ("slideleft", "slideright"):
+            dx = int(self.w * p) * (-1 if name == "slideleft" else 1)
+            qp.drawImage(dx, 0, a)
+            qp.drawImage((self.w if name == "slideleft" else -self.w) + dx,
+                         0, b)
+        elif name in ("circleopen", "circleclose"):
+            radius = (self.w ** 2 + self.h ** 2) ** 0.5 / 2.0
+            r = radius * (p if name == "circleopen" else (1 - p))
+            path = self._QPainterPath()
+            path.addEllipse(self.w / 2.0 - r, self.h / 2.0 - r, r * 2, r * 2)
+            if name == "circleopen":
+                qp.drawImage(0, 0, a)
+                qp.setClipPath(path)
+                qp.drawImage(0, 0, b)
+            else:
+                qp.drawImage(0, 0, b)
+                qp.setClipPath(path)
+                qp.drawImage(0, 0, a)
+            qp.setClipping(False)
+        elif name == "radial":
+            qp.drawImage(0, 0, a)
+            path = self._QPainterPath()
+            path.moveTo(self.w / 2.0, self.h / 2.0)
+            path.arcTo(-self.w, -self.h, self.w * 3, self.h * 3, 90, -360 * p)
+            path.closeSubpath()
+            qp.setClipPath(path)
+            qp.drawImage(0, 0, b)
+            qp.setClipping(False)
+        elif name == "pixelize":
+            blocks = max(2, int(round(2 + 14 * (1 - abs(2 * p - 1)))))
+            qp.drawImage(0, 0, self._pixelated(a, blocks))
+            qp.setOpacity(p)
+            qp.drawImage(0, 0, self._pixelated(b, blocks))
+        else:                                      # fade 及未知名字
+            qp.drawImage(0, 0, a)
+            qp.setOpacity(p)
+            qp.drawImage(0, 0, b)
+        qp.end()
+        return out
+
+    # -- 整帧 -----------------------------------------------------------
+    def _segment_at(self, t: float):
+        if not self.clips:
+            return -1, 0.0
+        t = max(0.0, min(t, max(0.0, self.total - 1e-6)))
+        lo, hi = 0, len(self.starts) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self.starts[mid] <= t:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo, t - self.starts[lo]
+
+    def frame_at(self, t: float):
+        if not self.clips:
+            return self._blank()
+        i, lt = self._segment_at(t)
+        frame = self._content(i, lt)
+        d_prev = (self.overlaps[i - 1] / float(self.fps)
+                  if i > 0 and i - 1 < len(self.overlaps) else 0.0)
+        if d_prev > 1e-6 and lt < d_prev:
+            hit = boundary_xfade(self.clips, i - 1, self.xfade_sec)
+            name = hit[0] if hit else "fade"
+            prev = self._content(i - 1, t - self.starts[i - 1])
+            frame = self._blend(prev, frame, name, lt / d_prev)
+        if self.overlays:
+            frame = self._draw_overlays(frame.copy(), t)
+        if self.cues:
+            active = [c for c in self.cues
+                      if _doc_num(c.get("start"), -1) <= t
+                      < _doc_num(c.get("end"), -1)]
+            if active:
+                frame = self._draw_subtitles(frame.copy(), active)
+        return frame
+
+    def _draw_overlays(self, frame, t: float):
+        qp = self._QPainter(frame)
+        for ov in self.overlays:
+            if not (ov["start"] <= t <= ov["end"]):
+                continue
+            tw = max(2, int(round(self.w * ov["scale"] / 100.0)))
+            if ov["path"].lower().endswith(tuple(MEDIA_EXTS)):
+                img = self._reader_for(ov["path"], 0.0).frame(
+                    int(max(0.0, t - ov["start"]) * self.fps))
+            else:
+                img = self._load(ov["path"])
+            if img.isNull():
+                continue
+            th = max(2, int(round(img.height() * tw / max(1, img.width()))))
+            x = (self.w - tw) * ov["ax"] + self.w * ov["dx"] / 100.0
+            y = (self.h - th) * ov["ay"] + self.h * ov["dy"] / 100.0
+            qp.setOpacity(max(0.0, min(1.0, ov["opacity"] / 100.0)))
+            qp.drawImage(int(x), int(y), img.scaled(
+                tw, th, self._Qt.AspectRatioMode.IgnoreAspectRatio,
+                self._Qt.TransformationMode.SmoothTransformation))
+        qp.end()
+        return frame
+
+    def _draw_subtitles(self, frame, cues):
+        qp = self._QPainter(frame)
+        qp.setRenderHint(self._QPainter.RenderHint.Antialiasing, True)
+        font = self._QFont(self.subtitle_font)
+        font.setPixelSize(max(8, int(self.subtitle_size)))
+        qp.setFont(font)
+        line_h = max(10, int(self.subtitle_size * 1.25))
+        bottom = self.h - 40
+        for cue in cues:
+            lines = _plain_cue(cue.get("text", ""))
+            total_h = line_h * len(lines)
+            y = bottom - total_h
+            for line in lines:
+                metrics = qp.fontMetrics()
+                tw = metrics.horizontalAdvance(line)
+                path = self._QPainterPath()
+                path.addText((self.w - tw) / 2.0, y + line_h * 0.82, font, line)
+                qp.setPen(self._QPen(self._QColor("#000000"),
+                                     max(1.0, self.subtitle_size * 0.06)))
+                qp.drawPath(path)
+                qp.fillPath(path, self._QColor("#ffffff"))
+                y += line_h
+        qp.end()
+        return frame
 
 
 def _sec(value: float) -> str:
@@ -2862,6 +3441,157 @@ def build_graph(counts: list[int], total: float, w: int = WIDTH, h: int = HEIGHT
     else:
         parts.append(audio + "[aout]")
     return ";".join(parts)
+
+
+def build_audio_graph(total: float, *, timeline=None, audio_index: int = 0,
+                      volume: float = 1.0, fade_in: float = FADE_IN,
+                      fade_out: float = FADE_OUT, music_start: float = 0.0,
+                      extras=None, bgm_gain: float = 0.0,
+                      bgm_points=None) -> str:
+    """只出音轨的 filtergraph（预览用：不碰视频，几毫秒就能混完）。
+
+    规则跟 build_graph 的音频段一致：跟 BGM 时片头片尾静音、
+    整段音量、首尾淡入淡出、每段增益与包络、多音轨 amix。
+    """
+    mstart = max(0.0, float(music_start))
+    spans = timeline if timeline else [(True, total)]
+    split = any(not is_img for is_img, _ in spans)
+    parts = []
+    if split:
+        labels, times, idx = [], [], 0
+        pos = mstart
+        run = 0.0
+        for is_img, dur in spans:
+            if is_img:
+                parts.append(f"[{audio_index}:a]atrim=start={pos:.3f}:"
+                             f"end={pos + dur:.3f},asetpts=N/SR/TB[bgs{idx}]")
+                pos += dur
+            else:
+                parts.append(f"anullsrc=channel_layout=stereo:sample_rate=48000,"
+                             f"atrim=0:{dur:.3f},asetpts=N/SR/TB[bgs{idx}]")
+            times.append((run, run + dur, is_img))
+            run += dur
+            labels.append(f"[bgs{idx}]")
+            idx += 1
+        parts.append("".join(labels) + f"concat=n={idx}:v=0:a=1[bgm0]")
+        head, pre = "[bgm0]", "anull"
+        img_start = next((a for a, b, ok in times if ok), 0.0)
+        img_end = max((b for a, b, ok in times if ok), default=img_start)
+    else:
+        head = f"[{audio_index}:a]"
+        pre = (f"atrim=start={mstart:.3f}:"
+               f"end={mstart + total:.3f},asetpts=N/SR/TB")
+        img_start, img_end = 0.0, total
+
+    filters = []
+    if abs(volume - 1.0) > 0.005:
+        filters.append(f"volume={max(0.0, float(volume)):.3f}")
+    if fade_in > 0:
+        filters.append(f"afade=t=in:st={_sec(img_start)}:d={fade_in:.3f}")
+    span = max(0.0, img_end - img_start)
+    fade = min(max(0.0, float(fade_out)), max(0.0, span - 0.05))
+    if fade > 0.05:
+        filters.append(
+            f"afade=t=out:st={max(img_start, img_end - fade):.3f}:d={fade:.3f}")
+    audio = head + pre
+    if filters:
+        audio += "," + ",".join(filters)
+    fx = audio_fx(bgm_gain, bgm_points)
+    if fx:
+        audio += "," + fx
+
+    if extras:
+        main_label = "[bgmain]"
+        parts.append(audio + main_label)
+        mix = [main_label]
+        for k, ex in enumerate(extras):
+            ch = (f"[{ex['index']}:a]atrim=start=0:end={ex['dur']:.3f},"
+                  f"asetpts=N/SR/TB")
+            vol = float(ex.get("volume", 1.0))
+            if abs(vol - 1.0) > 0.005:
+                ch += f",volume={max(0.0, vol):.3f}"
+            ms = int(round(max(0.0, float(ex["start"])) * 1000))
+            ch += f",adelay={ms}|{ms}"
+            ex_fx = audio_fx(ex.get("gain_db", 0.0), ex.get("points"),
+                             t0=max(0.0, float(ex["start"])))
+            if ex_fx:
+                ch += "," + ex_fx
+            ch += f"[ax{k}]"
+            parts.append(ch)
+            mix.append(f"[ax{k}]")
+        parts.append("".join(mix) +
+                     f"amix=inputs={len(mix)}:normalize=0:duration=longest,"
+                     f"apad,atrim=0:{total:.3f}[aout]")
+    else:
+        parts.append(audio + "[aout]")
+    return ";".join(parts)
+
+
+def audio_timeline(clips, counts, fps: int, total: float,
+                   xfade_sec: float = 0.3) -> list:
+    """每段在成片里占的区间（跟 render 里算音画同步用的那份一致）。"""
+    counts2, overlaps = _xfade_plan(clips, counts, fps, xfade_sec)
+    segs = [nf / float(fps) for nf in counts2]
+    spans, acc = [], 0.0
+    for i, seg in enumerate(segs):
+        d_next = overlaps[i] / float(fps) if i < len(segs) - 1 else 0.0
+        spans.append((acc, acc + seg - d_next))
+        acc += seg - (d_next if i < len(segs) - 1 else 0.0)
+    timeline = [(not c.is_video, max(0.05, spans[i][1] - spans[i][0]))
+                for i, c in enumerate(clips)]
+    if abs(sum(d for _, d in timeline) - total) > 0.05:
+        timeline = [(not c.is_video, counts[i] / float(fps))
+                    for i, c in enumerate(clips)]
+    return timeline
+
+
+def render_audio_mix(clips, counts, audio, out_path, *, fps: int = FPS,
+                     volume: float = 1.0, fade_in: float = FADE_IN,
+                     fade_out: float = FADE_OUT, music_start: float = 0.0,
+                     xfade_sec: float = 0.3, ab: str = "192k") -> str:
+    """只把音频混成一个 .m4a（预览的主时钟，几毫秒到几百毫秒）。"""
+    if not counts:
+        raise RenderError(tr("没有图片"))
+    total = sum(counts) / float(fps)
+    timeline = audio_timeline(clips, counts, fps, total, xfade_sec)
+    items = _audio_items(audio)
+    bgm = next((a for a in items if a.get("gap")), None)
+    extras = [a for a in items if not a.get("gap")]
+    cmd = [FFMPEG, "-y", "-nostdin", "-hide_banner", "-loglevel", "error"]
+    if bgm and bgm.get("path"):
+        adur = bgm.get("dur") or probe_duration(bgm["path"])
+        adur = max(0.0, adur - max(0.0, float(music_start)))
+        need = sum(d for is_img, d in timeline if is_img)
+        if adur > 0 and adur + 0.05 < need:
+            cmd += ["-stream_loop", "-1"]
+        cmd += ["-i", bgm["path"]]
+    else:
+        cmd += ["-f", "lavfi", "-i",
+                "anullsrc=channel_layout=stereo:sample_rate=48000"]
+    extra_specs = []
+    for k, ex in enumerate(extras):
+        cmd += ["-i", ex["path"]]
+        dur = ex.get("dur") or probe_duration(ex["path"])
+        extra_specs.append({"index": 1 + k, "start": ex.get("start", 0.0),
+                            "dur": max(0.05, dur),
+                            "volume": ex.get("volume", 1.0),
+                            "gain_db": ex.get("gain_db", 0.0),
+                            "points": ex.get("points")})
+    graph = build_audio_graph(
+        total, timeline=timeline, audio_index=0, volume=volume,
+        fade_in=fade_in, fade_out=fade_out, music_start=music_start,
+        extras=extra_specs,
+        bgm_gain=bgm.get("gain_db", 0.0) if bgm else 0.0,
+        bgm_points=bgm.get("points") if bgm else None)
+    cmd += ["-filter_complex", graph, "-map", "[aout]", "-vn",
+            "-c:a", "aac", "-b:a", (ab if isinstance(ab, str) and ab else "192k"),
+            "-ar", "48000", "-ac", "2", "-t", f"{total:.3f}", out_path]
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", stdin=subprocess.DEVNULL,
+                       creationflags=CREATION_NO_WINDOW)
+    if p.returncode != 0 or not os.path.exists(out_path):
+        raise RenderError((p.stderr or "")[-300:] or tr("音频混音失败"))
+    return out_path
 
 
 def _audio_items(audio) -> list[dict]:
@@ -3253,15 +3983,14 @@ def cli_export(argv: list[str]) -> int:
 
 def run_gui() -> int:
     from PyQt6.QtCore import (QEvent, QEventLoop, QLibraryInfo, QPoint, QPointF,
-                              QSize, Qt, QThread, QTimer, QTranslator, QUrl,
-                              pyqtSignal)
+                              QRect, QSize, Qt, QThread, QTimer, QTranslator,
+                              QUrl, pyqtSignal)
     from PyQt6.QtGui import (QBrush, QColor, QConicalGradient, QFont,
                             QFontDatabase, QIcon,
                             QImageReader, QKeySequence, QLinearGradient,
                             QPainter, QPainterPath, QPalette, QPen, QPixmap,
                             QPolygonF, QShortcut)
     from PyQt6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
-    from PyQt6.QtMultimediaWidgets import QVideoWidget
     from PyQt6.QtWidgets import (
         QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QColorDialog,
         QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
@@ -4191,6 +4920,37 @@ def run_gui() -> int:
                     self.stopped.emit()
                 else:
                     self.ok.emit(self.out)
+
+    class AudioMixWorker(QThread):
+        """只混音轨：预览的主时钟。画面由 Scene 现画，不用等视频编码。"""
+
+        ok = pyqtSignal(str, str)
+        bad = pyqtSignal(str)
+
+        def __init__(self, clips, counts, audio, out, opts=None, sig="",
+                     parent=None):
+            super().__init__(parent)
+            self.clips, self.counts = clips, counts
+            self.audio, self.out = audio, out
+            self.opts = opts or {}
+            self.sig = sig
+
+        def run(self):
+            try:
+                render_audio_mix(
+                    self.clips, self.counts, self.audio, self.out,
+                    fps=int(self.opts.get("fps", FPS)),
+                    volume=float(self.opts.get("volume", 1.0)),
+                    fade_in=float(self.opts.get("fade_in", FADE_IN)),
+                    fade_out=float(self.opts.get("fade_out", FADE_OUT)),
+                    music_start=float(self.opts.get("music_start", 0.0)),
+                    xfade_sec=float(self.opts.get("xfade_sec", 0.3)),
+                    ab=str(self.opts.get("ab", "192k")))
+            except Exception as e:  # noqa: BLE001
+                self.bad.emit("%s" % e)
+            else:
+                self.ok.emit(self.out, self.sig)
+
 
     class ImageList(QListWidget):
         """素材列表。
@@ -5795,6 +6555,41 @@ def run_gui() -> int:
         p.setColor(role.Light, QColor(pal["hover"]))
         return p
 
+    class PreviewCanvas(QWidget):
+        """预览画面：自己把 Scene 画出来的 QImage 贴上去（不再是 QVideoWidget）。"""
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self._img = None
+            self.setMinimumSize(480, 270)
+            self.setAutoFillBackground(True)
+            pal = self.palette()
+            pal.setColor(QPalette.ColorRole.Window, QColor("#000000"))
+            self.setPalette(pal)
+            self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                               QSizePolicy.Policy.Expanding)
+
+        def set_frame(self, img):
+            self._img = img
+            self.update()
+
+        def paintEvent(self, _ev):
+            qp = QPainter(self)
+            qp.fillRect(self.rect(), QColor("#000000"))
+            img = self._img
+            if img is None or img.isNull() or img.width() <= 0:
+                qp.end()
+                return
+            k = min(self.width() / float(img.width()),
+                    self.height() / float(img.height()))
+            w = max(1, int(img.width() * k))
+            h = max(1, int(img.height() * k))
+            x = (self.width() - w) // 2
+            y = (self.height() - h) // 2
+            qp.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            qp.drawImage(QRect(x, y, w, h), img)
+            qp.end()
+
     class Window(QMainWindow):
         def __init__(self):
             super().__init__()
@@ -5812,9 +6607,6 @@ def run_gui() -> int:
             self.project = Project(fps=int(self.settings["fps"]))
             self.project.mode = self.settings["mode"]
             self.tmpdir = tempfile.mkdtemp(prefix="pic2video_")
-            self.preview_seq = 0
-            self.preview_path = os.path.join(self.tmpdir, "preview_0.mp4")
-            self._preview_pending = False   # 生成中途又点了一次刷新
             self._scrubbing = False        # 正在拖进度条：别让播放位置抢它
             self._resume_at = 0.0          # 重渲后要跳回的位置
             self.preview_stale = True
@@ -5833,6 +6625,22 @@ def run_gui() -> int:
             self._cover_plan = None    # 这次导出要不要顺带截封面
             self.autosaver = AutoSaver(   # 崩溃/断电后救命的那份
                 os.path.join(components.data_dir(), "自动保存.p2v"), 15.0)
+
+            # 实时预览：画面由 Scene 现画，音轨单独混成一条当主时钟
+            self.scene = None
+            self._audio_worker = None
+            self._audio_sig = None
+            self._audio_seq = 0
+            self._audio_pending = False
+            self._play_after_mix = False
+            self._mix_timer = QTimer(self)
+            self._mix_timer.setSingleShot(True)
+            self._mix_timer.setInterval(250)
+            self._mix_timer.timeout.connect(self._start_audio_mix)
+            self._frame_timer = QTimer(self)
+            self._frame_timer.setInterval(16)
+            self._frame_timer.timeout.connect(self._tick_frame)
+            self._frame_timer.start()
 
             self.player = QMediaPlayer(self)
             self.audio_out = QAudioOutput(self)
@@ -6423,14 +7231,8 @@ def run_gui() -> int:
             right = QWidget()
             rv = QVBoxLayout(right)
             rv.setContentsMargins(0, 0, 0, 0)
-            self.video = QVideoWidget()
-            self.video.setMinimumSize(480, 270)
-            pal = self.video.palette()
-            pal.setColor(QPalette.ColorRole.Window, QColor("#000000"))
-            self.video.setPalette(pal)
-            self.video.setAutoFillBackground(True)
+            self.video = PreviewCanvas()
             self.video.mousePressEvent = self.on_video_click  # type: ignore
-            self.player.setVideoOutput(self.video)
             self.player.mediaStatusChanged.connect(self.on_media_status)
             self.player.positionChanged.connect(self.on_position)
             self.player.durationChanged.connect(self.on_duration)
@@ -6498,7 +7300,7 @@ def run_gui() -> int:
             pbar.addWidget(self.cmb_quality)
             rv.addLayout(pbar)
 
-            self.lbl_preview = QLabel(tr("预览：改完参数点右上角「刷新预览」"))
+            self.lbl_preview = QLabel(tr("预览：实时合成"))
             self.lbl_preview.setEnabled(False)
             rv.addWidget(self.lbl_preview)
             split.addWidget(right)
@@ -6556,11 +7358,6 @@ def run_gui() -> int:
             self.timer.setSingleShot(True)
             self.timer.setInterval(700)
             self.timer.timeout.connect(self.start_fetch)
-            # 简洁模式没有「刷新预览」按钮：改动后自己抖一下再重渲预览
-            self.auto_timer = QTimer(self)
-            self.auto_timer.setSingleShot(True)
-            self.auto_timer.setInterval(900)
-            self.auto_timer.timeout.connect(self.on_preview)
             # 自动保存：每 5 秒问一次要不要写，真正落盘由 AutoSaver 判间隔
             self.autosave_timer = QTimer(self)
             self.autosave_timer.setInterval(5000)
@@ -6614,7 +7411,7 @@ def run_gui() -> int:
                     tr("预览：{name}", name=self.preview_name))
             else:
                 self.lbl_preview.setText(
-                    tr("预览：改完参数点右上角「刷新预览」"))
+                    tr("预览：实时合成"))
             self._player_retranslate()
             self._apply_ui_mode()
             self._refresh_all()
@@ -6693,7 +7490,7 @@ def run_gui() -> int:
             else:
                 self.setStyleSheet(qss)
             self.timeline.set_colors(theme.timeline_colors(pal))
-            self.video.setStyleSheet("QVideoWidget{background:#000000;}")
+            self.video.setStyleSheet("background:#000000;")
             self.lbl_audio.setStyleSheet(f"color:{pal['muted']};")
             self.lbl_preview.setStyleSheet(f"color:{pal['subtext']};")
             self.lbl_playtime.setStyleSheet(f"color:{pal['muted']};")
@@ -6722,15 +7519,6 @@ def run_gui() -> int:
                        self.radio_free, self.spin_total, self.btn_refresh):
                 w_.setVisible(not simple)
             self.btn_more.setVisible(simple)
-            if simple:
-                if self.project.clips:
-                    self._schedule_auto_preview()
-            else:
-                self.auto_timer.stop()
-
-        def _schedule_auto_preview(self):
-            if self.settings["ui"] == "simple" and self.project.clips:
-                self.auto_timer.start()
 
         def _menu_labels(self):
             """右键菜单会出现的四项（冒烟测试用来核对文案）。"""
@@ -6889,9 +7677,10 @@ def run_gui() -> int:
                                    Qt.TransformationMode.SmoothTransformation))
 
         def _mark_stale(self):
+            """任何改动：标记 + 立刻把画面换成新参数的样子（不等渲染）。"""
             self.preview_stale = True
             self.btn_refresh.setText(tr("刷新预览 ●"))
-            self._schedule_auto_preview()
+            self._refresh_scene()
 
         def _clean_stale(self):
             self.preview_stale = False
@@ -6921,7 +7710,7 @@ def run_gui() -> int:
             self._bind_shortcuts()
             w, h = self.settings.size()
             self.lbl_preview.setText(
-                tr("参数已更新：{w}x{h} {fps}fps，点「刷新预览」看效果",
+                tr("参数已更新：{w}x{h} {fps}fps，预览已实时",
                    w=w, h=h, fps=self.settings["fps"]))
             self._follow_audio()
             self.lbl_status.setText(tr("设置已保存"))
@@ -7612,23 +8401,177 @@ def run_gui() -> int:
             if ok:
                 self.on_audio_set_volume(rows, value=val / 100.0)
 
-        # ---------------- 预览
+        # ---------------- 预览（实时合成，不再渲整片）
         def _player_duration(self) -> float:
+            if self.scene is not None and self.scene.total > 0:
+                return self.scene.total
             return max(0.0, self.player.duration() / 1000.0)
 
         def _player_time_text(self, cur: float) -> str:
             return "%s / %s" % (human_time(cur),
                                 human_time(self._player_duration()))
 
+        def _render_at(self, t: float):
+            """按时间现画一帧贴到预览画布上。"""
+            if self.scene is None or self.scene.total <= 0:
+                return
+            t = max(0.0, min(float(t), max(0.0, self.scene.total - 0.001)))
+            try:
+                self.video.set_frame(self.scene.frame_at(t))
+            except Exception as e:  # noqa: BLE001
+                log("preview frame failed: %s" % e)
+
+        def _draw_frame(self, t: float):
+            self._render_at(t)
+            self.timeline.play_pos = max(0.0, float(t))
+            self.timeline.update()
+            self._sync_player(max(0.0, float(t)))
+
+        def _tick_frame(self):
+            """播放时按播放器位置刷新画面（16ms 一次，只画不重算）。"""
+            if self.scene is None or self._scrubbing:
+                return
+            if (self.player.playbackState()
+                    != QMediaPlayer.PlaybackState.PlayingState):
+                return
+            self._draw_frame(self.player.position() / 1000.0)
+
+        def _sync_preview_meta(self):
+            total = self.scene.total if self.scene is not None else 0.0
+            ms = int(round(total * 1000))
+            self.slider_pos.setRange(0, max(0, ms))
+            self.slider_pos.setEnabled(ms > 0)
+            self._sync_player(min(self._playhead(),
+                                  max(0.0, total - 0.001)))
+
+        def _refresh_scene(self):
+            """时间线/参数一变就重建场景模型（图还在缓存里），并立刻画一帧。"""
+            if not hasattr(self, "video"):
+                return                    # 界面还没搭好
+            if not self.project.clips:
+                self.scene = None
+                self.video.set_frame(None)
+                self._sync_preview_meta()
+                return
+            opts = self._opts(preview=True)
+            clips = list(self.project.clips)
+            counts = self.project.frame_counts()
+            if self.scene is None:
+                self.scene = Scene(clips, counts, int(opts["fps"]), opts,
+                                   overlays=opts["overlays"],
+                                   cues=opts["subtitles"])
+            else:
+                self.scene.reconfigure(clips, counts, int(opts["fps"]), opts,
+                                       overlays=opts["overlays"],
+                                       cues=opts["subtitles"])
+            self._sync_preview_meta()
+            self._draw_frame(self._playhead())
+            self._clean_stale()              # 画面已经跟上，不用再挂着「待刷新」
+            self._mix_timer.start()          # 音频防抖：连着改只混最后一次
+            QTimer.singleShot(150, self._warm_scene)
+
+        def _warm_scene(self):
+            """停着的时候把后面一两段先铺好底图。"""
+            if self.scene is None or not self.project.clips:
+                return
+            if (self.player.playbackState()
+                    == QMediaPlayer.PlaybackState.PlayingState):
+                return
+            i, _lt = self.scene._segment_at(self._playhead())
+            try:
+                self.scene.warm(i, 2)
+            except Exception:  # noqa: BLE001
+                pass
+
+        def _audio_signature(self) -> str:
+            """音轨内容指纹：只改画面参数时不必重混音频。"""
+            pr = self.project
+            bits = []
+            for c in pr.clips:
+                bits.append("%s|%d|%s" % (c.path, int(c.dur * 1000), c.kind))
+            for a in pr.audios:
+                bits.append("%s|%d|%d|%.3f|%.3f|%s|%s" % (
+                    a.path, int(a.start * 1000), int(a.dur * 1000),
+                    a.volume, a.gain_db, a.gap, tuple(a.points)))
+            s = self.settings
+            bits += ["%g" % float(s["fade_in"]), "%g" % float(s["fade_out"]),
+                     "%g" % float(s["music_volume"]),
+                     "%g" % float(s["music_start"]),
+                     "%g" % float(s["transition_sec"])]
+            return hashlib.sha1(";".join(bits).encode("utf-8", "replace")
+                                ).hexdigest()
+
+        def _start_audio_mix(self, force: bool = False):
+            if not self.project.clips:
+                return
+            if (self._audio_worker is not None
+                    and self._audio_worker.isRunning()):
+                self._audio_pending = True
+                return
+            sig = self._audio_signature()
+            if (not force and sig == self._audio_sig
+                    and not self.player.source().isEmpty()):
+                return
+            self._audio_seq += 1
+            path = os.path.join(self.tmpdir,
+                                "preview_audio_%d.m4a" % self._audio_seq)
+            worker = AudioMixWorker(
+                list(self.project.clips), self.project.frame_counts(),
+                list(self.project.audios), path, opts=self._scene_opts(),
+                sig=sig, parent=self)
+            worker.ok.connect(self._on_audio_ok)
+            worker.bad.connect(self._on_audio_bad)
+            self._audio_worker = worker
+            worker.start()
+
+        def _scene_opts(self) -> dict:
+            return self._opts(preview=True)
+
+        def _on_audio_ok(self, path, sig):
+            log("preview audio ok %s" % path)
+            self._audio_worker = None
+            self._audio_sig = sig
+            pos = self._playhead()
+            keep = (self.player.playbackState()
+                    == QMediaPlayer.PlaybackState.PlayingState)
+            if self._play_after_mix:
+                self._play_after_mix = False
+                keep = True
+            if pos > 0.05:
+                self._resume_at = pos
+            try:
+                self.player.stop()
+                self.player.setSource(QUrl.fromLocalFile(path))
+            except Exception as e:  # noqa: BLE001
+                log("preview audio attach failed: %s" % e)
+            self.player.setPlaybackRate(float(self.settings["preview_speed"]))
+            if keep:
+                self.player.play()
+            self.lbl_preview.setText(tr("预览：实时合成"))
+            self._draw_frame(self._playhead())
+            if self._audio_pending:
+                self._audio_pending = False
+                self._start_audio_mix()
+            if self.preview_stale:
+                self._clean_stale()
+
+        def _on_audio_bad(self, msg):
+            log("preview audio failed: %s" % msg)
+            self._audio_worker = None
+            self.lbl_status.setText(tr("预览音频失败"))
+            if os.environ.get("PIC2VIDEO_SHOT"):
+                print("PREVIEW_AUDIO_FAILED:", msg)
+                return
+            MsgBox.warn(self, tr("预览失败"), msg)
+
         def seek(self, seconds):
             dur = self._player_duration()
             if dur > 0:
                 seconds = min(max(0.0, seconds), max(0.0, dur - 0.02))
             seconds = max(0.0, seconds)
-            self.player.setPosition(int(seconds * 1000))
-            self.timeline.play_pos = seconds
-            self.timeline.update()
-            self._sync_player(seconds)
+            if not self.player.source().isEmpty():
+                self.player.setPosition(int(seconds * 1000))
+            self._draw_frame(seconds)
 
         def _sync_player(self, cur: float):
             """把播放位置同步到进度条与时间标签（拖动时不抢）。"""
@@ -7658,6 +8601,7 @@ def run_gui() -> int:
             self.lbl_playtime.setText(self._player_time_text(cur))
             self.timeline.play_pos = cur
             self.timeline.update()
+            self._render_at(cur)
 
         def on_scrub_end(self):
             self._scrubbing = False
@@ -7681,12 +8625,10 @@ def run_gui() -> int:
             self.settings.save()
             self.lbl_status.setText(tr("预览质量：{q}", q=self.cmb_quality.itemText(idx)))
             if self.project.clips:
-                self.on_preview()
+                self._refresh_scene()
 
-        def on_duration(self, ms):
-            self.slider_pos.setRange(0, max(0, int(ms)))
-            self.slider_pos.setEnabled(ms > 0)
-            self.lbl_playtime.setText(self._player_time_text(self._playhead()))
+        def on_duration(self, _ms):
+            self._sync_preview_meta()
 
         def on_play_state(self, _state):
             self._sync_play_button()
@@ -7695,8 +8637,15 @@ def run_gui() -> int:
             self.toggle_play()
 
         def toggle_play(self):
-            if self.player.source().isEmpty():
+            if not self.project.clips:
+                self.lbl_status.setText(tr("先加图片"))
+                return
+            if self.scene is None:
                 self.on_preview()
+                return
+            if self.player.source().isEmpty():
+                self._play_after_mix = True
+                self._start_audio_mix(force=True)
                 return
             if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
                 self.player.pause()
@@ -7706,12 +8655,15 @@ def run_gui() -> int:
         def on_media_status(self, status):
             if (status == QMediaPlayer.MediaStatus.LoadedMedia
                     and getattr(self, "_resume_at", 0.0) > 0.05):
-                # 重渲样片后接着看：等文件真加载好再跳，太早 setPosition 不生效
+                # 换过音轨后接着刚才的位置看：等文件真加载好再跳
                 self.player.setPosition(int(self._resume_at * 1000))
                 self._resume_at = 0.0
+                self._draw_frame(self.player.position() / 1000.0)
             if status == QMediaPlayer.MediaStatus.EndOfMedia:
                 self.player.setPosition(0)
                 self.player.play()
+                self._draw_frame(0.0)
+            self._sync_play_button()
 
         def on_position(self, ms):
             self.timeline.play_pos = ms / 1000.0
@@ -7769,72 +8721,20 @@ def run_gui() -> int:
 
         def on_render_stopped(self):
             self._rendering(False)
-            self._preview_pending = False
             self.lbl_status.setText(tr("已取消"))
 
         def on_preview(self):
+            """手动「刷新预览」：画面本来就是实时的，这里顺带重混音轨。"""
             if not self.project.clips:
                 self.lbl_status.setText(tr("先加图片"))
                 return
-            if self.worker is not None and self.worker.isRunning():
-                if self._render_kind == "preview":
-                    self._preview_pending = True   # 跑完自动再来一次
-                return
             self._follow_audio()
-            # 重渲后接着刚才的位置看（第一次还没源文件就从 0 开始）。
-            self._resume_at = (self._playhead()
-                               if not self.player.source().isEmpty() else 0.0)
-            # 先把播放器松手：Windows 上它握着旧文件时 ffmpeg 写不进去，
-            # 正是「预览有时候显示不出来」的一个来源。
-            try:
-                self.player.stop()
-                self.player.setSource(QUrl())
-            except Exception:                     # noqa: BLE001
-                pass
-            self.preview_seq += 1
-            old_preview = self.preview_path
-            self.preview_path = os.path.join(
-                self.tmpdir, f"preview_{self.preview_seq}.mp4")
-            if old_preview != self.preview_path and os.path.exists(old_preview):
-                QTimer.singleShot(1500, lambda p=old_preview: _unlink_quiet(p))
-            log("preview start seq=%d clips=%d" % (self.preview_seq,
-                                                   len(self.project.clips)))
-            self._rendering(True, "preview")
-            self.lbl_status.setText(tr("生成预览…"))
-            self.worker = RenderWorker(
-                list(self.project.clips), self.project.frame_counts(),
-                list(self.project.audios), self.preview_path,
-                opts=self._opts(preview=True), preview=True, parent=self)
-            self.worker.progress.connect(self._on_render_progress)
-            self.worker.ok.connect(self.on_preview_ok)
-            self.worker.bad.connect(self.on_preview_bad)
-            self.worker.stopped.connect(self.on_render_stopped)
-            self.worker.start()
-
-        def on_preview_ok(self, path):
-            log("preview ok %s" % path)
-            self._rendering(False)
-            self._clean_stale()
-            self.player.setSource(QUrl.fromLocalFile(path))
-            self.player.setPlaybackRate(float(self.settings["preview_speed"]))
-            self.player.play()
-            if self._preview_pending:              # 期间又改过东西
-                self._preview_pending = False
-                QTimer.singleShot(200, self.on_preview)
-            self.lbl_status.setText(
-                tr("预览已更新（点画面播放/暂停，点色带跳转）"))
-            self.preview_name = os.path.basename(path)
+            self._refresh_scene()
+            self._audio_sig = None
+            self._start_audio_mix(force=True)
+            self.lbl_status.setText(tr("预览已更新（实时合成）"))
+            self.preview_name = tr("实时合成")
             self.lbl_preview.setText(tr("预览：{name}", name=self.preview_name))
-
-        def on_preview_bad(self, msg):
-            log("preview failed: %s" % msg)
-            self._rendering(False)
-            self._preview_pending = False
-            self.lbl_status.setText(tr("预览失败"))
-            if os.environ.get("PIC2VIDEO_SHOT"):
-                print("PREVIEW_FAILED:", msg)
-                return
-            MsgBox.warn(self, tr("预览失败"), msg)
 
         # ---------------- BGM
         def on_bgm_typed(self, _text):
@@ -8147,9 +9047,13 @@ def run_gui() -> int:
                     return
             self.autosaver.clear()
             self._save_geometry()
+            if self.scene is not None:
+                self.scene.close()
+            self._frame_timer.stop()
+            self._mix_timer.stop()
             if self.worker is not None and self.worker.isRunning():
                 self.worker.cancel()
-            for w in (self.worker, self.fetch_worker):
+            for w in (self.worker, self.fetch_worker, self._audio_worker):
                 if w is not None and w.isRunning():
                     w.wait(3000)
             shutil.rmtree(self.tmpdir, ignore_errors=True)
@@ -8253,7 +9157,6 @@ def run_gui() -> int:
             w.project.set_music_volume(float(w.settings["music_volume"]))
             w.project.normalize()
         w._refresh_all()
-
         def _shot(name):
             w.grab().save(os.path.join(os.path.dirname(shot), name + tag + ".png"))
 
