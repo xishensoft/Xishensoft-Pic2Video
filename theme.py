@@ -215,6 +215,7 @@ def timeline_colors(pal: dict) -> dict:
         "piece_text": pal["piece_text"],
         "playhead": pal["accent2"],
         "selected_edge": pal["accent"],
+        "border": pal["border"],
     }
 
 
@@ -312,6 +313,15 @@ QPushButton:default:hover, QPushButton[accent="true"]:hover {{
 QPushButton:default:pressed, QPushButton[accent="true"]:pressed {{
     background: {p['accent_press']};
 }}
+/* 磁吸 / 切割这类「按下去就是开着」的按钮：亮起来，一眼看出状态 */
+QPushButton:checked {{
+    background: {p['accent']}; color: {p['accent_fg']};
+    border: 1px solid {p['accent']}; font-weight: 600;
+}}
+QPushButton:checked:hover {{
+    background: {p['accent_hover']}; border-color: {p['accent_hover']};
+}}
+QPushButton:checked:pressed {{ background: {p['accent_press']}; }}
 
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
     background: {p['field']}; color: {p['text']};

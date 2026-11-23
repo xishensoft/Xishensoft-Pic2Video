@@ -2658,6 +2658,7 @@ def snap_candidates(project, playhead: float = 0.0, extra=()) -> list:
 
 TIMELINE_ZOOM_MIN = 1.0    # 1.0 = 整条片子铺满时间线
 TIMELINE_ZOOM_MAX = 64.0
+TIMELINE_RULER_H = 18      # 顶部时间刻度条的高度
 
 
 def timeline_span(total: float, zoom: float) -> float:
@@ -2702,6 +2703,44 @@ def timeline_zoom_start(start: float, span: float, anchor: float,
     frac = (float(anchor) - float(start)) / sp
     return timeline_clamp_start(float(anchor) - frac * float(new_span),
                                 total, float(new_span))
+
+
+TIMELINE_TICK_STEPS = (0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0,
+                       30.0, 60.0, 120.0, 300.0, 600.0, 1800.0)
+
+
+def timeline_tick_label(t: float, step: float) -> str:
+    """刻度上的字：不到 1 秒写小数，整分钟写 m:ss，其余写 Ns。"""
+    t = max(0.0, _doc_num(t, 0.0))
+    if step < 0.999:
+        return "%.1fs" % t
+    if t >= 60.0:
+        return human_time(t)
+    return "%ds" % int(round(t))
+
+
+def timeline_ticks(start: float, span: float, width: float,
+                   min_px: float = 64.0) -> list:
+    """时间线顶部的刻度：(时间, x, 标签)。步长按像素密度挑，不挤成一团。"""
+    span = _doc_num(span, 0.0)
+    width = float(width)
+    if span <= 0.0 or width <= 0.0:
+        return []
+    step = TIMELINE_TICK_STEPS[-1]
+    for cand in TIMELINE_TICK_STEPS:
+        if cand / span * width >= min_px:
+            step = cand
+            break
+    start = max(0.0, _doc_num(start, 0.0))
+    first = math.ceil(start / step - 1e-9) * step
+    out = []
+    t = first
+    while t <= start + span + 1e-6 and len(out) < 240:
+        out.append((round(t, 3),
+                    timeline_x(t, start, span, width),
+                    timeline_tick_label(t, step)))
+        t += step
+    return out
 
 
 def _write_ass(cues, w: int, h: int, font: str, size: int) -> str:
@@ -5435,6 +5474,41 @@ def run_gui() -> int:
                 else:
                     x = rect.left() if zone == "before" else rect.right()
                     p.drawLine(x, rect.top(), x, rect.bottom())
+            # 光有高亮看不出「会替换还是插入」，直接把动作写在落点旁边
+            if item is None:
+                text = tr("加到末尾")
+            else:
+                kind = item.data(Qt.ItemDataRole.UserRole + 3) or "image"
+                n = self.row(item) + 1
+                if zone == "replace" and kind == "image":
+                    text = tr("替换第 {n} 张", n=n)
+                elif zone == "before":
+                    text = tr("插到第 {n} 张前面", n=n)
+                else:
+                    # 视频不能替换，中间落点会退化成插到它后面
+                    text = tr("插到第 {n} 张后面", n=n)
+            font = QFont(self.font())
+            font.setPointSize(9)
+            p.setFont(font)
+            fm = p.fontMetrics()
+            tw = fm.horizontalAdvance(text) + 16
+            th = fm.height() + 6
+            if item is None:
+                bx = 8
+                by = max(4, self.viewport().height() - th - 8)
+            else:
+                # 贴在缩略图下沿，别压住上面那行文字
+                bx = max(6, rect.left() + 8)
+                by = max(2, rect.bottom() - th - 6)
+            box = QRect(bx, by, tw, th)
+            p.setPen(QPen(col, 1))
+            p.setBrush(QBrush(self.palette().color(
+                QPalette.ColorRole.Base)))
+            p.drawRoundedRect(box, 5, 5)
+            p.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+            p.drawText(box.adjusted(8, 0, -8, 0),
+                       Qt.AlignmentFlag.AlignVCenter
+                       | Qt.AlignmentFlag.AlignLeft, text)
             p.end()
 
     class Timeline(QWidget):
@@ -5464,7 +5538,7 @@ def run_gui() -> int:
                           "piece_text": "#111827", "playhead": "#f59e0b",
                           "selected_edge": "#3b82f6", "audio": "#2f6f5e",
                           "audio_sel": "#3f9d84", "overlay": "#566bb0",
-                          "overlay_sel": "#7c8fe0"}
+                          "overlay_sel": "#7c8fe0", "border": "#343a46"}
 
         def __init__(self, project, parent=None):
             super().__init__(parent)
@@ -5493,7 +5567,8 @@ def run_gui() -> int:
         # -- 几何 ------------------------------------------------------
         def _video_rect(self):
             h = self.height()
-            return 4, max(30, int(h * 0.46))
+            # 顶部留一条时间刻度，画面块从它下面开始
+            return TIMELINE_RULER_H, max(TIMELINE_RULER_H + 26, int(h * 0.46))
 
         def _overlay_rect(self):
             """画中画轨：夹在画面块和音频块中间；不需要时高度为零。"""
@@ -5745,6 +5820,24 @@ def run_gui() -> int:
             font.setPointSize(9)
             p.setFont(font)
             top, vh = self._video_rect()
+            # 顶部时间刻度：每格至少 64px，缩放/滚动都跟着重算
+            ticks = timeline_ticks(self.view_start, self._view_span(),
+                                   self.width())
+            p.setPen(QPen(QColor(self.c["border"]), 1))
+            p.drawLine(0, TIMELINE_RULER_H - 1, self.width(),
+                       TIMELINE_RULER_H - 1)
+            for _t, _x, _label in ticks:
+                xi = int(_x)
+                if xi < -2 or xi > self.width() + 2:
+                    continue
+                p.setPen(QPen(QColor(self.c["empty"]), 1))
+                p.drawLine(xi, TIMELINE_RULER_H - 6, xi, TIMELINE_RULER_H - 1)
+                p.setPen(QColor(self.c["empty"]))
+                p.drawText(xi + 4, TIMELINE_RULER_H - 5, _label)
+                # 一条很淡的竖线，方便把块和刻度对上
+                p.setPen(QPen(QColor(self.c["border"]), 1,
+                              Qt.PenStyle.DotLine))
+                p.drawLine(xi, TIMELINE_RULER_H, xi, self.height() - 2)
             base = QColor(self.c["piece_a"])
             dark_bg = self.c.get("theme") == "dark"
             crosses = 0.0
@@ -7328,10 +7421,14 @@ def run_gui() -> int:
     class PreviewCanvas(QWidget):
         """预览画面：自己把 Scene 画出来的 QImage 贴上去（不再是 QVideoWidget）。"""
 
+        clicked = pyqtSignal()     # 点画面＝播放 / 暂停
+
         def __init__(self, parent=None):
             super().__init__(parent)
             self._img = None
+            self._press = None
             self.setMinimumSize(480, 270)
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
             self.setAutoFillBackground(True)
             pal = self.palette()
             pal.setColor(QPalette.ColorRole.Window, QColor("#000000"))
@@ -7342,6 +7439,21 @@ def run_gui() -> int:
         def set_frame(self, img):
             self._img = img
             self.update()
+
+        def mousePressEvent(self, ev):
+            if ev.button() == Qt.MouseButton.LeftButton:
+                self._press = ev.position()
+            super().mousePressEvent(ev)
+
+        def mouseReleaseEvent(self, ev):
+            # 按下又松开都在画面里、且没拖远才算「点了一下」
+            if (ev.button() == Qt.MouseButton.LeftButton
+                    and self._press is not None):
+                d = ev.position() - self._press
+                if abs(d.x()) < 6 and abs(d.y()) < 6:
+                    self.clicked.emit()
+            self._press = None
+            super().mouseReleaseEvent(ev)
 
         def paintEvent(self, _ev):
             qp = QPainter(self)
@@ -8000,6 +8112,10 @@ def run_gui() -> int:
             self.spin_total.setEnabled(False)
             self.spin_total.setFixedWidth(96)
             bar.addWidget(self.spin_total)
+            # 这一行字解释当前时长是按谁算的，省得四个控件互相打架
+            self.lbl_mode_hint = QLabel()
+            self.lbl_mode_hint.setObjectName("hint")
+            bar.addWidget(self.lbl_mode_hint)
             bar.addStretch(1)
             self.btn_refresh = QPushButton(tr("刷新预览"))
             self.btn_refresh.clicked.connect(self.on_preview)
@@ -8211,7 +8327,7 @@ def run_gui() -> int:
             rv = QVBoxLayout(right)
             rv.setContentsMargins(0, 0, 0, 0)
             self.video = PreviewCanvas()
-            self.video.mousePressEvent = self.on_video_click  # type: ignore
+            self.video.clicked.connect(self.toggle_play)
             self.player.mediaStatusChanged.connect(self.on_media_status)
             self.player.positionChanged.connect(self.on_position)
             self.player.durationChanged.connect(self.on_duration)
@@ -8342,6 +8458,10 @@ def run_gui() -> int:
             foot = QHBoxLayout()
             self.lbl_status = QLabel(tr("拖图片进来开始"))
             foot.addWidget(self.lbl_status, 1)
+            # 右键功能藏在菜单里，底栏常驻一句提示，别让人到处找
+            self.lbl_tl_tip = QLabel(tr("右键片段：改时长 / 转场 / 调色"))
+            self.lbl_tl_tip.setObjectName("hint")
+            foot.addWidget(self.lbl_tl_tip)
             self.lbl_audio = QLabel()
             self.lbl_audio.setObjectName("hint")
             foot.addWidget(self.lbl_audio)
@@ -8389,6 +8509,8 @@ def run_gui() -> int:
             self.btn_undo_bar.setToolTip(tr("撤销上一步（Ctrl+Z）"))
             self.btn_redo_bar.setText(tr("还原"))
             self.btn_redo_bar.setToolTip(tr("重做（Ctrl+Shift+Z）"))
+            self.video.setToolTip(tr("点画面：播放 / 暂停"))
+            self.lbl_tl_tip.setText(tr("右键片段：改时长 / 转场 / 调色"))
             self.btn_fit.setText(tr("适应窗口"))
             self.btn_fit.setToolTip(tr("时间线缩回全片（Ctrl+0）"))
             self.tl_scroll.setToolTip(
@@ -8598,6 +8720,7 @@ def run_gui() -> int:
             self.radio_total.setVisible(total)
             self.radio_free.setVisible(total)
             self.radio_voice.setVisible(total and bool(self.project.narration_path))
+            self.lbl_mode_hint.setVisible(total)
             # 倍速 / 清晰度是剪辑时才需要调的
             advanced = ui_advanced(tier)
             self.cmb_speed.setVisible(advanced)
@@ -9091,6 +9214,7 @@ def run_gui() -> int:
             self.radio_free.setChecked(m == "free")
             self.radio_voice.setChecked(m == "voice")
             self.spin_total.setEnabled(self.project.mode == "total")
+            self._refresh_mode_hint()
             if self.project.mode == "total":
                 self.spin_total.blockSignals(True)
                 self.spin_total.setValue(self.project.total_setting)
@@ -9112,6 +9236,26 @@ def run_gui() -> int:
                 tr("{n} 张图 · 总长 {total} · {src}", n=n,
                    total=human_time(self.project.total()), src=src) + extra)
 
+        def _refresh_mode_hint(self):
+            """四个时长控件旁边的解释：总长到底按谁算。"""
+            if not hasattr(self, "lbl_mode_hint"):
+                return
+            mode = self.project.mode
+            if mode == "total":
+                text = tr("总长 = 下面这个秒数")
+                tip = tr("图片按比例铺满这个秒数")
+            elif mode == "free":
+                text = tr("每张按自己秒数")
+                tip = tr("逐张秒数：每张自己定，总长自动算")
+            elif mode == "voice":
+                text = tr("总长 = 旁白长度")
+                tip = tr("跟旁白：总长跟旁白一样长")
+            else:
+                text = tr("总长 = 音乐长度")
+                tip = tr("跟 BGM：总长跟音乐一样长")
+            self.lbl_mode_hint.setText(text)
+            self.lbl_mode_hint.setToolTip(tip)
+
         def _refresh_list(self):
             self._rebuilding = True
             cur = self.list.currentRow()
@@ -9122,6 +9266,8 @@ def run_gui() -> int:
                 it.setData(Qt.ItemDataRole.UserRole + 1, c.dur)
                 # 拖拽重排时按这个号找回原来的 Clip（别把调色/转场丢了）
                 it.setData(Qt.ItemDataRole.UserRole + 2, i)
+                # 拖放提示要知道这一行是不是视频（视频不能被替换，只能插到后面）
+                it.setData(Qt.ItemDataRole.UserRole + 3, c.kind)
                 self.list.addItem(it)
             self._update_titles()
             if 0 <= cur < self.list.count():
@@ -9135,6 +9281,7 @@ def run_gui() -> int:
                     continue
                 it.setData(Qt.ItemDataRole.UserRole, c.path)
                 it.setData(Qt.ItemDataRole.UserRole + 1, c.dur)
+                it.setData(Qt.ItemDataRole.UserRole + 3, c.kind)
                 head = {"intro": tr("片头"),
                         "outro": tr("片尾")}.get(c.kind, f"{i + 1}.")
                 it.setText(tr("{i}.  {dur} 秒   {name}", i=head,
@@ -10335,9 +10482,6 @@ def run_gui() -> int:
 
         def on_play_state(self, _state):
             self._sync_play_button()
-
-        def on_video_click(self, ev):
-            self.toggle_play()
 
         def toggle_play(self):
             if not self.project.clips:

@@ -918,6 +918,7 @@ check("系统文件框三件套", "QFileDialog.getExistingDirectory" in src
 check("保存框自动补后缀", 'name += "." + suffix' in src)
 
 # ---- 35 跟素材总长 + 铺满音频 + 视频循环 ----
+
 print()
 _vid2 = os.path.join(tempfile.gettempdir(), "p2v_test_intro.mp4")
 subprocess.run([p.FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i",
@@ -4027,6 +4028,72 @@ for _key in ("BGM 已就绪：{total} · 文件在：{path}", "当前 BGM：{pat
              "{kind}「{name}」已经装进资源目录：\n{path}", "\n\n封面：\n{path}",
              "工程已保存：{path}"):
     check("路径提示词条四语齐 " + _key,
+          all(_i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")),
+          {_l: _i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")})
+
+# ---------------- 84 界面直观点：时间刻度 / 开关点亮 / 点画面播放 / 右键提示 / 模式说明 / 拖放提示
+_t = p.timeline_ticks(0.0, 10.0, 1000.0)
+check("10 秒用 1000px 时每 1 秒一个刻度",
+      [x[2] for x in _t] == ["%ds" % i for i in range(11)], _t[:3])
+check("第一个刻度是 0", _t[0][0] == 0.0 and abs(_t[0][1]) < 1e-6, _t[0])
+check("最后一个刻度在片尾", _t[-1][0] == 10.0, _t[-1])
+_t = p.timeline_ticks(0.0, 60.0, 600.0)
+check("一分钟跨度写 m:ss", _t[-1][2] == p.human_time(60.0), _t[-1])
+check("一分钟跨度步长不挤", _t[1][0] - _t[0][0] >= 10.0, _t[:2])
+_t = p.timeline_ticks(0.0, 5.0, 1000.0)
+check("放大以后步长细到小数", any(x[2].endswith(".5s") for x in _t), [x[2] for x in _t[:6]])
+check("没时长就没刻度", p.timeline_ticks(0.0, 0.0, 1000.0) == [])
+check("没宽度就没刻度", p.timeline_ticks(0.0, 10.0, 0.0) == [])
+_t = p.timeline_ticks(7.3, 10.0, 1000.0)
+check("窗口不在 0 时第一个刻度不早于起点", _t and _t[0][0] >= 7.3, _t[:2])
+check("刻度 x 跟时间对得上",
+      abs(p.timeline_x(_t[1][0], 7.3, 10.0, 1000.0) - _t[1][1]) < 1e-6)
+
+check("时间刻度条高度常量", "TIMELINE_RULER_H = 18" in _src)
+check("画面轨从刻度条下面开始",
+      "return TIMELINE_RULER_H, max(TIMELINE_RULER_H + 26" in _src)
+check("时间线真的画刻度",
+      "ticks = timeline_ticks(self.view_start" in _src
+      and "for _t, _x, _label in ticks:" in _src)
+_qss = TH.build_qss(TH.palette("dark", TH.DEFAULT_ACCENT))
+check("按下去的按钮会点亮",
+      "QPushButton:checked" in _qss and "QPushButton:checked:hover" in _qss)
+check("预览画面能点", "clicked = pyqtSignal()" in _src
+      and "self.video.clicked.connect(self.toggle_play)" in _src)
+check("不再用替换 mousePressEvent 的土办法",
+      "def on_video_click" not in _src
+      and "self.video.mousePressEvent = self.on_video_click" not in _src)
+check("点画面有鼠标手型", "Qt.CursorShape.PointingHandCursor" in _src)
+check("模式说明标签在工具条",
+      "self.lbl_mode_hint = QLabel()" in _src
+      and "self._refresh_mode_hint()" in _src
+      and "def _refresh_mode_hint(self):" in _src)
+check("模式说明有四种说法",
+      all(k in _src for k in ('tr("总长 = 音乐长度")',
+                              'tr("总长 = 下面这个秒数")',
+                              'tr("每张按自己秒数")',
+                              'tr("总长 = 旁白长度")')))
+check("模式说明跟着档位出现", "self.lbl_mode_hint.setVisible(total)" in _src)
+check("右键入口常驻提示",
+      'self.lbl_tl_tip = QLabel(tr("右键片段：改时长 / 转场 / 调色"))' in _src
+      and 'self.lbl_tl_tip.setText(tr("右键片段：改时长 / 转场 / 调色"))' in _src)
+check("列表知道每行是不是视频",
+      _src.count("it.setData(Qt.ItemDataRole.UserRole + 3, c.kind)") >= 2)
+check("拖放写出会替换还是插入",
+      all(k in _src for k in ('tr("替换第 {n} 张", n=n)',
+                              'tr("插到第 {n} 张前面", n=n)',
+                              'tr("插到第 {n} 张后面", n=n)',
+                              'tr("加到末尾")')))
+check("提示框画在落点旁边", "p.drawRoundedRect(box, 5, 5)" in _src)
+for _key in ("点画面：播放 / 暂停", "总长 = 下面这个秒数",
+             "图片按比例铺满这个秒数", "每张按自己秒数",
+             "逐张秒数：每张自己定，总长自动算", "总长 = 旁白长度",
+             "跟旁白：总长跟旁白一样长", "总长 = 音乐长度",
+             "跟 BGM：总长跟音乐一样长",
+             "右键片段：改时长 / 转场 / 调色",
+             "替换第 {n} 张", "插到第 {n} 张前面",
+             "插到第 {n} 张后面", "加到末尾"):
+    check("界面提示词条四语齐 " + _key,
           all(_i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")),
           {_l: _i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")})
 
