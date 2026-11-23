@@ -265,7 +265,7 @@ check("摊出来的字幕不重叠",
           zip(T.spread_cues("第一句。第二句。第三句。", 3.0),
               T.spread_cues("第一句。第二句。第三句。", 3.0)[1:])))
 try:
-    T.synth_for("azure")
+    T.synth_for("nope")
     ok = False
 except T.TtsError as exc:
     ok = exc.reason == "provider"
@@ -452,11 +452,10 @@ check("没有音频要报 provider", no_audio == "provider", no_audio)
 
 check("synth_for 认 gemini", T.synth_for("gemini") is T.synth_gemini)
 try:
-    T.synth_for("azure")
-    azure_open = True
-except T.TtsError as exc:
+    azure_open = T.synth_for("azure") is T.synth_azure
+except T.TtsError:
     azure_open = False
-check("azure 还没接上要明确报错", not azure_open)
+check("azure 接上了", azure_open)
 
 # 429 重试：前两次报额度，第三次成功
 real_post = T._post_json
@@ -561,6 +560,187 @@ plain = T.synth_plan([{"index": 0, "text": "甲。", "chars": 2}],
                      root=os.path.join(tmp, "dlg2"), synth_fn=talk_synth,
                      cleanup=False, gap=0.6, cue_prefix=True)
 check("单人不用前缀", [c["text"] for c in plain["cues"]] == ["甲。"], plain["cues"])
+
+
+
+# ---------------- 14 Azure 语音 / OpenAI 兼容端点
+_ssml = T.azure_ssml("你好 & <停顿>", "zh-CN-YunxiNeural", 10)
+check("SSML 带音色", "name='zh-CN-YunxiNeural'" in _ssml, _ssml)
+check("SSML 带语言", "xml:lang='zh-CN'" in _ssml)
+check("SSML 转义特殊字符", "&amp;" in _ssml and "&lt;停顿&gt;" in _ssml, _ssml)
+check("SSML 带语速", "rate='+10%'" in _ssml, _ssml)
+check("零语速不写 rate", "rate=" not in T.azure_ssml("你好", "", 0))
+check("负语速写成 -20%", "rate='-20%'" in T.azure_ssml("你好", "", -20))
+
+_body = T.openai_body("你好", "nova", "", 50)
+check("OpenAI 默认模型", _body["model"] == "tts-1", _body)
+check("OpenAI 用 mp3", _body["response_format"] == "mp3")
+check("OpenAI 语速折算", abs(_body["speed"] - 1.5) < 1e-6, _body)
+check("OpenAI 原速不传 speed", "speed" not in T.openai_body("你好", "", "", 0))
+check("OpenAI 语速上限夹住",
+      abs(T.openai_body("你好", "", "", 500).get("speed", 0) - 4.0) < 1e-6)
+check("OpenAI 模型可改", T.openai_body("你好", "", "CosyVoice2")["model"] == "CosyVoice2")
+check("四家都接上了",
+      all(T.synth_for(_p) is not None for _p in ("edge", "gemini", "azure", "openai")))
+check("Azure 分派对", T.synth_for("azure") is T.synth_azure)
+check("OpenAI 兼容分派对", T.synth_for("openai") is T.synth_openai)
+
+_real_mp3 = os.path.join(tmp, "real.mp3")
+T.run_ffmpeg(["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+              "-c:a", "libmp3lame", "-q:a", "7", _real_mp3])
+_mp3_bytes = open(_real_mp3, "rb").read()
+_posts = []
+
+
+def fake_bytes(url, body, headers, proxy="", timeout=180.0):
+    _posts.append((url, body, headers))
+    return _mp3_bytes
+
+
+_old_bytes = T._post_bytes
+_old_tpl = T.template_cues
+T._post_bytes = fake_bytes
+T.template_cues = lambda text, dur, proxy="", cancel=None: [
+    {"start": 0.0, "end": max(0.1, dur / 2), "text": "甲。"},
+    {"start": max(0.1, dur / 2), "end": dur, "text": "乙。"}]
+try:
+    got = T.synth_azure("甲乙。", "zh-CN-YunxiNeural", 10,
+                        os.path.join(tmp, "az.mp3"), api_key="fake",
+                        region="eastasia")
+    check("Azure 出音频", os.path.exists(got["audio"]) and abs(got["dur"] - 1.0) < 0.2,
+          round(got["dur"], 2))
+    check("Azure 走对地址", _posts[-1][0].startswith(
+        "https://eastasia.tts.speech.microsoft.com/cognitiveservices/v1"),
+        _posts[-1][0])
+    check("Azure 带订阅 key",
+          _posts[-1][2].get("Ocp-Apim-Subscription-Key") == "fake")
+    check("Azure body 是 SSML", b"<speak" in _posts[-1][1])
+    check("Azure 有时间戳（模板）", len(got["cues"]) == 2, got["cues"])
+    try:
+        T.synth_azure("你好", "", 0, os.path.join(tmp, "az2.mp3"), api_key="")
+        _ok = False
+    except T.TtsError as exc:
+        _ok = exc.reason == "no-key"
+    check("Azure 没 key 报 no-key", _ok)
+
+    op = T.synth_openai("甲乙。", "nova", 40, os.path.join(tmp, "oa.mp3"),
+                        api_key="sk-test",
+                        base_url="https://api.siliconflow.cn/v1")
+    check("OpenAI 兼容出音频", abs(op["dur"] - 1.0) < 0.2, round(op["dur"], 2))
+    check("OpenAI 兼容地址拼对",
+          _posts[-1][0] == "https://api.siliconflow.cn/v1/audio/speech",
+          _posts[-1][0])
+    check("OpenAI 兼容是 Bearer",
+          _posts[-1][2].get("Authorization") == "Bearer sk-test")
+    _sent = json.loads(_posts[-1][1].decode("utf-8"))
+    check("OpenAI 兼容请求体对",
+          _sent["voice"] == "nova" and _sent["model"] == "tts-1"
+          and abs(_sent.get("speed", 0) - 1.4) < 1e-6, _sent)
+    try:
+        T.synth_openai("你好", "", 0, os.path.join(tmp, "oa2.mp3"), api_key="")
+        _ok = False
+    except T.TtsError as exc:
+        _ok = exc.reason == "no-key"
+    check("OpenAI 兼容没 key 报 no-key", _ok)
+finally:
+    T._post_bytes = _old_bytes
+    T.template_cues = _old_tpl
+
+_boom = {"n": 0}
+
+
+def flaky_bytes(url, body, headers, proxy="", timeout=180.0):
+    _boom["n"] += 1
+    if _boom["n"] == 1:
+        raise T.TtsError("quota", "429")
+    return _mp3_bytes
+
+
+T._post_bytes = flaky_bytes
+_old_sleep = T._sleep_cancel
+T._sleep_cancel = lambda sec, cancel=None: None
+T.template_cues = lambda text, dur, proxy="", cancel=None: []
+try:
+    ok = T.synth_openai("你好", "", 0, os.path.join(tmp, "oa3.mp3"), api_key="k")
+    check("配额错误会重试一次", _boom["n"] == 2 and ok["dur"] > 0, _boom["n"])
+    check("摊字幕兜底", len(ok["cues"]) >= 1)
+finally:
+    T._post_bytes = _old_bytes
+    T._sleep_cancel = _old_sleep
+    T.template_cues = _old_tpl
+
+
+# ---------------- 15 base_url 只归 OpenAI 兼容端点 + 音色表
+import base64 as _b64
+import json as _json
+
+check("音色表四家齐", set(T.TTS_VOICES) == {"edge", "gemini", "azure", "openai"},
+      list(T.TTS_VOICES))
+check("Azure 音色 4 个", len(T.TTS_VOICES["azure"]) == 4)
+check("OpenAI 音色 6 个", len(T.TTS_VOICES["openai"]) == 6)
+check("Edge 音色表与引擎一致",
+      list(T.TTS_VOICES["edge"]) == list(T.EDGE_ZH_VOICES))
+
+_seen = []
+
+
+def _fake_bytes(url, body, headers, proxy="", timeout=180.0):
+    _seen.append((url, headers, body))
+    return _openai_mp3
+
+
+_openai_mp3 = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "fixtures", "tone6.m4a"), "rb").read() \
+    if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "fixtures", "tone6.m4a")) else b""
+if not _openai_mp3:
+    _tmp_mp3 = os.path.join(tmp, "t15.mp3")
+    T.run_ffmpeg(["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.4",
+                  "-c:a", "libmp3lame", "-q:a", "7", _tmp_mp3])
+    _openai_mp3 = open(_tmp_mp3, "rb").read()
+
+_old_bytes = T._post_bytes
+_old_tpl = T.template_cues
+T._post_bytes = _fake_bytes
+T.template_cues = lambda text, dur, proxy="", cancel=None: [
+    {"start": 0.0, "end": dur, "text": text}]
+try:
+    _seen.clear()
+    T.synth_azure("测试", voice="zh-CN-XiaoxiaoNeural", out_path=os.path.join(tmp, "a15.mp3"),
+                  api_key="k", base_url="https://api.siliconflow.cn/v1", region="eastasia")
+    check("Azure 不拿 OpenAI 的 base_url 当地址",
+          _seen and "eastasia.tts.speech.microsoft.com" in _seen[0][0], _seen[0][0] if _seen else "")
+
+    _seen.clear()
+    _gem_body = _json.dumps({
+        "outputs": [{"content": [{"inlineData": {
+            "mimeType": "audio/wav",
+            "data": _b64.b64encode(T.pcm_wav_bytes(b"\x00\x00" * 2400)).decode()}}]}]})
+    _old_post_json = T._post_json
+
+    def _fake_post_json(url, payload, api_key, proxy="", timeout=180, headers=None):
+        _seen.append((url, {}, b""))
+        return _json.loads(_gem_body)
+
+    T._post_json = _fake_post_json
+    try:
+        T.synth_gemini("测试", voice="Kore", out_path=os.path.join(tmp, "g15.mp3"),
+                       api_key="k", base_url="https://api.siliconflow.cn/v1")
+        check("Gemini 不拿 OpenAI 的 base_url 当地址",
+              _seen and "generativelanguage.googleapis.com" in _seen[0][0],
+              _seen[0][0] if _seen else "")
+    finally:
+        T._post_json = _old_post_json
+
+    _seen.clear()
+    T.synth_openai("测试", voice="alloy", out_path=os.path.join(tmp, "o15.mp3"),
+                   api_key="k", base_url="https://api.siliconflow.cn/v1")
+    check("OpenAI 兼容端点用自己的 base_url",
+          _seen and _seen[0][0] == "https://api.siliconflow.cn/v1/audio/speech",
+          _seen[0][0] if _seen else "")
+finally:
+    T._post_bytes = _old_bytes
+    T.template_cues = _old_tpl
 
 print()
 print("RESULT:", "ALL PASS" if not fails else "%d FAIL -> %s" % (len(fails), fails),

@@ -3026,3 +3026,12 @@ _TR_EXTRA50 = [
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA50:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+
+
+_TR_EXTRA51 = [
+    ("模型名", "模型名稱", "Model", "モデル名", "모델 이름"),
+    ("例如 FunAudioLLM/CosyVoice2-0.5B（留空 = tts-1）", "例如 FunAudioLLM/CosyVoice2-0.5B（留空 = tts-1）", "e.g. FunAudioLLM/CosyVoice2-0.5B (blank = tts-1)", "例：FunAudioLLM/CosyVoice2-0.5B（空 = tts-1）", "예: FunAudioLLM/CosyVoice2-0.5B (비우면 tts-1)"),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA51:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)

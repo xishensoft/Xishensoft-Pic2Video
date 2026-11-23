@@ -3847,7 +3847,10 @@ check("清理词条四语齐", all("（已清理，响度 {lu} LUFS）" in _i18n
 
 
 # ---------------- 78 Gemini 配音接线
-check("Gemini 音色表来自引擎", '"gemini": list(tts_engine.GEMINI_VOICES)' in _src)
+_eng_src78 = open(p.tts_engine.__file__, encoding="utf-8").read()
+check("Gemini 音色表来自引擎",
+      "TTS_VOICES = tts_engine.TTS_VOICES" in _src
+      and '"gemini": list(GEMINI_VOICES)' in _eng_src78)
 check("Gemini 语速框会禁用",
       'self.spin_tts_rate.setEnabled(provider != "gemini")' in _src)
 check("Gemini 没语速时给提示", "Gemini 没有语速参数：想快就自己改文稿" in _src)
@@ -3899,6 +3902,60 @@ for _key, _tr in (("音色 B", "Voice B"),
     _row = _i18n["en"].get(_key)
     check("对话词条四语齐 " + _key,
           bool(_row) and _tr.lower() in _row.lower(), _row)
+
+
+
+# ---------------- 80 Azure 语音 / OpenAI 兼容端点接线
+_s80 = p.Settings(os.path.join(tmp, "settings_az.json"))
+check("模型名默认空", _s80["tts_model"] == "")
+_s80.update(tts_model="  FunAudioLLM/CosyVoice2-0.5B  ")
+_s80.save()
+_s80 = p.Settings(os.path.join(tmp, "settings_az.json"))
+check("模型名会去空白",
+      _s80["tts_model"] == "FunAudioLLM/CosyVoice2-0.5B", _s80["tts_model"])
+check("Azure 合成在引擎里", callable(getattr(p.tts_engine, "synth_azure", None)))
+check("OpenAI 兼容合成在引擎里", callable(getattr(p.tts_engine, "synth_openai", None)))
+check("SSML 生成在引擎里", callable(getattr(p.tts_engine, "azure_ssml", None)))
+check("请求体生成在引擎里", callable(getattr(p.tts_engine, "openai_body", None)))
+check("四家都在派发表里",
+      p.tts_engine.synth_for("azure") is p.tts_engine.synth_azure
+      and p.tts_engine.synth_for("openai") is p.tts_engine.synth_openai)
+_eng_src80 = open(p.tts_engine.__file__, encoding="utf-8").read()
+for _needle, _where, _why in (
+        ('"azure": synth_azure', _eng_src80, "派发表有 Azure"),
+        ('"openai": synth_openai', _eng_src80, "派发表有 OpenAI 兼容"),
+        ('self.edit_tts_model = QLineEdit(settings["tts_model"])', _src, "设置页有模型名"),
+        ('add_row("模型名", self.edit_tts_model, normal=True)', _src, "模型名进表单"),
+        ('tts_model=self.edit_tts_model.text().strip(),', _src, "保存模型名"),
+        ('extra={"model": str(s["tts_model"]),', _src, "模型名传给引擎"),
+        ('"region": str(s["tts_azure_region"])', _src, "区域传给引擎"),
+        ('**(extra or {})', _eng_src80, "引擎收 extra")):
+    check(_why, _needle in _where, _needle)
+for _key, _en in (("模型名", "Model"),
+                  ("例如 FunAudioLLM/CosyVoice2-0.5B（留空 = tts-1）", "tts-1")):
+    check("模型名词条四语齐 " + _key,
+          bool(_i18n["en"].get(_key)) and _en in _i18n["en"][_key],
+          _i18n["en"].get(_key))
+
+
+
+# ---------------- 81 切服务商：音色表跟着换 / 地址不串味
+for _needle, _why in (
+        ('self.cmb_tts_provider.currentIndexChanged.connect(',
+         "换服务商走 currentIndexChanged（程序化切换也生效）"),
+        ("voices = TTS_VOICES.get(provider) or []", "音色表按服务商取"),
+        ("elif wanted and wanted not in known:", "旧服务商音色名不硬留着"),
+        ("TTS_VOICES = tts_engine.TTS_VOICES", "音色表在引擎里一份"),
+        ('url = AZURE_ENDPOINT % region    # base_url 只属于 OpenAI 兼容端点，别串味',
+         "Azure 不用 OpenAI 的地址"),
+        ("root = GEMINI_API_ROOT    # base_url 只属于 OpenAI 兼容端点，别串味",
+         "Gemini 不用 OpenAI 的地址")):
+    _where = _eng_src80 if _why.startswith(("Azure", "Gemini")) else _src
+    check(_why, _needle in _where, _needle)
+check("引擎音色表 Azure 4 个", len(p.tts_engine.TTS_VOICES["azure"]) == 4)
+check("引擎音色表 OpenAI 6 个", len(p.tts_engine.TTS_VOICES["openai"]) == 6)
+check("界面音色表就是引擎那份",
+      p.TTS_VOICES is p.tts_engine.TTS_VOICES)
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")

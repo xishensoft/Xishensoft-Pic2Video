@@ -717,6 +717,8 @@ def synth_for(provider: str):
     table = {
         "edge": synth_edge,
         "gemini": synth_gemini,
+        "azure": synth_azure,
+        "openai": synth_openai,
     }
     fn = table.get(provider)
     if fn is None:
@@ -781,7 +783,8 @@ def synth_plan(plan, *, provider: str = "edge", voice: str = "", rate: int = 0,
                proxy: str = "", cancel=None, synth_fn=None,
                on_progress=None, gap: float = TTS_GAP,
                cleanup: bool = True, loudness: float = LOUDNESS_TARGET,
-               voices=None, cue_prefix: bool = False) -> dict:
+               voices=None, cue_prefix: bool = False,
+               extra=None) -> dict:
     """按计划逐段合成（有缓存就用缓存），再拼成一条旁白 + 句级字幕。
 
     voices 是 {角色: 音色}，对话稿每段按 seg["speaker"] 挑音色；cue_prefix
@@ -815,7 +818,7 @@ def synth_plan(plan, *, provider: str = "edge", voice: str = "", rate: int = 0,
             out = os.path.join(work_dir, "seg_%04d.mp3" % i)
             os.makedirs(os.path.dirname(out), exist_ok=True)
             got = fn(text, seg_voice, rate, out, api_key=api_key,
-                     base_url=base_url, proxy=proxy)
+                     base_url=base_url, proxy=proxy, **(extra or {}))
             got = {"audio": got["audio"], "dur": float(got["dur"]),
                    "cues": list(got.get("cues") or [])}
             if root:
@@ -893,7 +896,7 @@ async def _edge_collect(text: str, voice: str, rate: int, out_path: str,
 
 def synth_edge(text: str, voice: str = "zh-CN-XiaoxiaoNeural", rate: int = 0,
                out_path: str = "", proxy: str = "", cancel=None,
-               api_key: str = "", base_url: str = "") -> dict:
+               api_key: str = "", base_url: str = "", **kwargs) -> dict:
     """Edge 不用 key；api_key/base_url 只是为了和其它提供方同一个调用形状。"""
     if not str(text or "").strip():
         raise TtsError("text", "文稿是空的")
@@ -1130,13 +1133,13 @@ def template_cues(text: str, dur: float, proxy: str = "", cancel=None) -> list:
 
 def synth_gemini(text: str, voice: str = "", rate: int = 0, out_path: str = "",
                  api_key: str = "", base_url: str = "", proxy: str = "",
-                 cancel=None, speakers=None, parts=None) -> dict:
+                 cancel=None, speakers=None, parts=None, **kwargs) -> dict:
     """Gemini TTS：/v1beta/interactions。rate 不生效（这家没有语速参数）。"""
     if not str(text or "").strip() and not parts:
         raise TtsError("text", "文稿是空的")
     if not api_key:
         raise TtsError("no-key", "Gemini 要自己的 API key")
-    root = str(base_url or GEMINI_API_ROOT).rstrip("/")
+    root = GEMINI_API_ROOT    # base_url 只属于 OpenAI 兼容端点，别串味
     body = gemini_body(text, voice, GEMINI_STYLE, speakers, parts)
     data = None
     for i, delay in enumerate(GEMINI_RETRY_DELAYS + (0.0,)):
@@ -1156,3 +1159,157 @@ def synth_gemini(text: str, voice: str = "", rate: int = 0, out_path: str = "",
     if not cues:
         cues = spread_cues(str(text or ""), dur)
     return {"audio": out_path, "dur": dur, "cues": cues}
+
+
+# ---------------------------------------------------------------- Azure 语音
+AZURE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3"
+AZURE_ENDPOINT = "https://%s.tts.speech.microsoft.com/cognitiveservices/v1"
+AZURE_DEFAULT_REGION = "eastasia"
+AZURE_DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+AZURE_RETRY_DELAYS = (1.0, 2.0, 4.0)
+AZURE_MAX_CHARS = 9000       # 单请求语音上限约 10 分钟，字数再留点余量
+
+
+def azure_ssml(text: str, voice: str = "", rate: int = 0,
+               lang: str = "zh-CN") -> str:
+    """Azure REST 只吃 SSML，把纯文本包成 <speak><voice><prosody>。"""
+    from xml.sax.saxutils import escape
+    body = escape(str(text or ""))
+    name = str(voice or AZURE_DEFAULT_VOICE)
+    pct = int(round(max(-50, min(200, int(rate or 0)))))
+    rate_attr = ""
+    if pct:
+        rate_attr = " rate='%+d%%'" % pct
+    return ("<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' "
+            "xml:lang='%s'><voice name='%s'><prosody%s>%s</prosody>"
+            "</voice></speak>" % (lang, name, rate_attr, body))
+
+
+def _post_bytes(url: str, body: bytes, headers: dict, proxy: str = "",
+                timeout: float = 180.0) -> bytes:
+    """POST 一份原始字节，返回响应字节；HTTP 错误按状态码分类。"""
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(url, data=body, headers=headers,
+                                 method="POST")
+    if proxy:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    else:
+        opener = urllib.request.build_opener()
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read()[:600].decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            detail = ""
+        raise classify_http(int(getattr(exc, "code", 0) or 0), detail) from exc
+    except (TimeoutError, OSError) as exc:
+        raise TtsError("network", str(exc) or "连不上") from exc
+
+
+def synth_azure(text: str, voice: str = "", rate: int = 0, out_path: str = "",
+                api_key: str = "", base_url: str = "", proxy: str = "",
+                cancel=None, region: str = "", **kwargs) -> dict:
+    """Azure 语音：REST + SSML。REST 不给时间戳，字幕走 Edge 对齐模板。"""
+    if not str(text or "").strip():
+        raise TtsError("text", "文稿是空的")
+    if not api_key:
+        raise TtsError("no-key", "Azure 语音要自己的 key（还有区域）")
+    if len(str(text)) > AZURE_MAX_CHARS:
+        raise TtsError("text", "这一段太长，Azure 单次最多约 %d 字" % AZURE_MAX_CHARS)
+    region = str(region or "").strip() or AZURE_DEFAULT_REGION
+    url = AZURE_ENDPOINT % region    # base_url 只属于 OpenAI 兼容端点，别串味
+    body = azure_ssml(text, voice, rate).encode("utf-8")
+    head = {
+        "Ocp-Apim-Subscription-Key": api_key,
+        "Content-Type": "application/ssml+xml",
+        "X-Microsoft-OutputFormat": AZURE_OUTPUT_FORMAT,
+        "User-Agent": "Pic2Video",
+    }
+    raw = b""
+    for i, delay in enumerate(AZURE_RETRY_DELAYS + (0.0,)):
+        try:
+            raw = _post_bytes(url, body, head, proxy)
+            break
+        except TtsError as exc:
+            if exc.reason != "quota" or i >= len(AZURE_RETRY_DELAYS):
+                raise
+            _sleep_cancel(delay, cancel)
+    if not raw:
+        raise TtsError("provider", "Azure 没返回音频")
+    _audio_to_mp3(raw, "audio/mpeg", out_path)
+    dur = probe_duration(out_path)
+    if dur <= 0:
+        raise TtsError("provider", "生成的音频读不出时长")
+    cues = template_cues(text, dur, proxy, cancel) or spread_cues(text, dur)
+    return {"audio": out_path, "dur": dur, "cues": cues}
+
+
+# ---------------------------------------------------------------- OpenAI 兼容端点
+OPENAI_ROOT = "https://api.openai.com/v1"
+OPENAI_DEFAULT_MODEL = "tts-1"
+OPENAI_DEFAULT_VOICE = "alloy"
+OPENAI_RETRY_DELAYS = (1.0, 2.0, 4.0)
+
+
+def openai_body(text: str, voice: str = "", model: str = "",
+                rate: int = 0) -> dict:
+    """OpenAI /v1/audio/speech 的请求体；语速折算成 speed（0.25～4.0）。"""
+    body = {
+        "model": str(model or "").strip() or OPENAI_DEFAULT_MODEL,
+        "input": str(text or ""),
+        "voice": str(voice or "").strip() or OPENAI_DEFAULT_VOICE,
+        "response_format": "mp3",
+    }
+    if int(rate or 0):
+        body["speed"] = round(min(4.0, max(0.25, 1.0 + int(rate) / 100.0)), 3)
+    return body
+
+
+def synth_openai(text: str, voice: str = "", rate: int = 0, out_path: str = "",
+                 api_key: str = "", base_url: str = "", proxy: str = "",
+                 cancel=None, model: str = "", **kwargs) -> dict:
+    """OpenAI 形状的 /audio/speech：OpenAI 官方、硅基流动、火山兼容层都吃这套。"""
+    if not str(text or "").strip():
+        raise TtsError("text", "文稿是空的")
+    if not api_key:
+        raise TtsError("no-key", "这家要自己的 key")
+    root = str(base_url or "").strip().rstrip("/") or OPENAI_ROOT
+    url = root + "/audio/speech"
+    payload = json.dumps(openai_body(text, voice, model, rate),
+                         ensure_ascii=False).encode("utf-8")
+    head = {"Authorization": "Bearer " + api_key,
+            "Content-Type": "application/json"}
+    raw = b""
+    for i, delay in enumerate(OPENAI_RETRY_DELAYS + (0.0,)):
+        try:
+            raw = _post_bytes(url, payload, head, proxy)
+            break
+        except TtsError as exc:
+            if exc.reason != "quota" or i >= len(OPENAI_RETRY_DELAYS):
+                raise
+            _sleep_cancel(delay, cancel)
+    if not raw:
+        raise TtsError("provider", "接口没返回音频")
+    _audio_to_mp3(raw, "audio/mpeg", out_path)
+    dur = probe_duration(out_path)
+    if dur <= 0:
+        raise TtsError("provider", "生成的音频读不出时长")
+    cues = template_cues(text, dur, proxy, cancel) or spread_cues(text, dur)
+    return {"audio": out_path, "dur": dur, "cues": cues}
+
+# ---------------------------------------------------------------- 音色表
+TTS_VOICES = {
+    "edge": list(EDGE_ZH_VOICES),
+    "gemini": list(GEMINI_VOICES),
+    "azure": [("zh-CN-XiaoxiaoNeural", "晓晓（女声）"),
+              ("zh-CN-YunxiNeural", "云希（男声）"),
+              ("zh-CN-YunyangNeural", "云扬（男声）"),
+              ("zh-CN-XiaoyiNeural", "晓伊（女声）")],
+    "openai": [("alloy", "alloy"), ("nova", "nova"),
+               ("shimmer", "shimmer"), ("echo", "echo"),
+               ("onyx", "onyx"), ("fable", "fable")],
+}

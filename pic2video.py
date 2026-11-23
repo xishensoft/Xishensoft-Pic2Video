@@ -499,6 +499,9 @@ def ui_advanced(tier) -> bool:
     return ui_tier(tier) != "simple"
 
 
+TTS_VOICES = tts_engine.TTS_VOICES
+
+
 class Settings:
     """持久设置：存在脚本旁边的 settings.json，坏文件就退回默认值。
 
@@ -543,7 +546,8 @@ class Settings:
         "tts_rate": 0,            # 语速（%，-50..100）
         "tts_keys": {},           # 各家的 key：{"gemini": "...", "azure": "..."}
         "tts_azure_region": "eastasia",
-        "tts_base_url": "",       # OpenAI 兼容端点（硅基流动/火山/MiniMax 等）
+        "tts_base_url": "",
+        "tts_model": "",          # OpenAI 兼容端点的模型名（空 = tts-1）       # OpenAI 兼容端点（硅基流动/火山/MiniMax 等）
         "tts_proxy": "",          # 合成时走这个代理，空 = 直连
         "tts_gap": 0.6,           # 段与段之间的停顿（秒）
         "tts_cleanup": True,      # 合成完顺手清一下（去咔哒、去噗声）
@@ -730,7 +734,8 @@ class Settings:
                     clean[k] = v.strip()
         d["tts_keys"] = clean
         for key, fallback in (("tts_azure_region", "eastasia"),
-                              ("tts_base_url", ""), ("tts_proxy", ""),
+                              ("tts_base_url", ""), ("tts_model", ""),
+                              ("tts_proxy", ""),
                               ("tts_script", "")):
             v = d.get(key)
             d[key] = v.strip() if isinstance(v, str) else fallback
@@ -6685,6 +6690,10 @@ def run_gui() -> int:
             self.edit_tts_base.setPlaceholderText(
                 tr("例如 https://api.siliconflow.cn/v1（留空 = 官方地址）"))
             add_row("OpenAI 兼容地址", self.edit_tts_base, normal=True)
+            self.edit_tts_model = QLineEdit(settings["tts_model"])
+            self.edit_tts_model.setPlaceholderText(
+                tr("例如 FunAudioLLM/CosyVoice2-0.5B（留空 = tts-1）"))
+            add_row("模型名", self.edit_tts_model, normal=True)
             self.edit_tts_proxy = QLineEdit(settings["tts_proxy"])
             self.edit_tts_proxy.setPlaceholderText(
                 tr("例如 http://127.0.0.1:7890（留空 = 直连）"))
@@ -7212,6 +7221,7 @@ def run_gui() -> int:
                 },
                 tts_azure_region=self.edit_azure_region.text().strip() or "eastasia",
                 tts_base_url=self.edit_tts_base.text().strip(),
+                tts_model=self.edit_tts_model.text().strip(),
                 tts_proxy=self.edit_tts_proxy.text().strip(),
                 tts_gap=float(self.spin_tts_gap.value()),
                 tts_cleanup=bool(self.chk_tts_cleanup.isChecked()),
@@ -8087,7 +8097,7 @@ def run_gui() -> int:
             _idx = self.cmb_tts_provider.findData(
                 str(self.settings["tts_provider"]))
             self.cmb_tts_provider.setCurrentIndex(max(0, _idx))
-            self.cmb_tts_provider.activated.connect(
+            self.cmb_tts_provider.currentIndexChanged.connect(
                 lambda _i: self.on_tts_provider_changed())
             vform.addRow(tr("配音服务"), self.cmb_tts_provider)
             self.cmb_tts_voice = QComboBox()
@@ -8716,26 +8726,23 @@ def run_gui() -> int:
                          combo=None):
             """按服务商换音色下拉；wanted 是上次用的，能选回来就选回来。"""
             cmb = combo if combo is not None else self.cmb_tts_voice
-            voices = {
-                "edge": list(tts_engine.EDGE_ZH_VOICES),
-                "gemini": list(tts_engine.GEMINI_VOICES),
-                "azure": [("zh-CN-XiaoxiaoNeural", "晓晓（女声）"),
-                          ("zh-CN-YunxiNeural", "云希（男声）"),
-                          ("zh-CN-YunyangNeural", "云扬（男声）"),
-                          ("zh-CN-XiaoyiNeural", "晓伊（女声）")],
-                "openai": [("alloy", "alloy"), ("nova", "nova"),
-                           ("shimmer", "shimmer"), ("echo", "echo"),
-                           ("onyx", "onyx"), ("fable", "fable")],
-            }.get(provider) or []
+            voices = TTS_VOICES.get(provider) or []
             cmb.blockSignals(True)
             cmb.clear()
             for vid, name in voices:
                 cmb.addItem(name, vid)
             cmb.blockSignals(False)
             hit = cmb.findData(wanted)
+            # 换服务商时，上一个服务商的音色名对新服务商是无效的；
+            # 只有在哪儿都查不到时才当成用户自己敲的自定义音色留着。
+            known = set()
+            for _v in TTS_VOICES:
+                for _vid, _name in TTS_VOICES.get(_v, ()):
+                    known.add(_vid)
+                    known.add(_name)
             if hit >= 0:
                 cmb.setCurrentIndex(hit)
-            elif wanted:
+            elif wanted and wanted not in known:
                 cmb.setEditText(wanted)
             elif voices:
                 cmb.setCurrentIndex(0)
@@ -8838,7 +8845,9 @@ def run_gui() -> int:
                       base_url=s["tts_base_url"],
                       proxy=s["tts_proxy"],
                       gap=float(s["tts_gap"]),
-                      cleanup=bool(s["tts_cleanup"]))
+                      cleanup=bool(s["tts_cleanup"]),
+                      extra={"model": str(s["tts_model"]),
+                             "region": str(s["tts_azure_region"])})
             if self._dialogue_turns():
                 kw["voices"] = {"主讲": self._tts_voice(),
                                 "听友": self._tts_voice_b()}
