@@ -393,6 +393,21 @@ QProgressBar {{
 }}
 QProgressBar::chunk {{ background: {p['accent2']}; border-radius: 4px; }}
 
+QSlider {{ background: transparent; }}
+QSlider::groove:horizontal {{
+    height: 4px; background: {p['border']}; border-radius: 2px;
+}}
+QSlider::sub-page:horizontal {{
+    background: {p['accent']}; border-radius: 2px;
+}}
+QSlider::handle:horizontal {{
+    width: 12px; height: 12px; margin: -5px 0;
+    border-radius: 6px; background: {p['accent']};
+}}
+QSlider::handle:horizontal:hover {{ background: {p['accent_hover']}; }}
+QSlider::handle:horizontal:disabled {{ background: {p['muted']}; }}
+QSlider::sub-page:horizontal:disabled {{ background: {p['border']}; }}
+
 QMenu {{
     background: {p['panel']}; color: {p['text']};
     border: 1px solid {p['border']}; padding: 4px;

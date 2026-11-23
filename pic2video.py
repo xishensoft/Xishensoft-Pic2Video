@@ -46,7 +46,7 @@ components.prepend_path()      # tools/ 里的 ffmpeg 优先于系统那份
 # exe 是窗口程序，没有控制台：起子进程时别让它继承无效的句柄
 CREATION_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 WIDTH, HEIGHT, FPS = 1920, 1080, 30
 PREVIEW_W, PREVIEW_H = 960, 540
@@ -436,6 +436,16 @@ def cover_default_time(clips, counts, fps: int, xfade_sec: float = 0.3) -> float
     return max(0.0, acc + max(0.05, seg) / 2.0)
 
 
+# 预览质量：只影响样片的清晰度，不影响成片。值是「最长边」像素，0 = 跟成片一样大。
+PREVIEW_QUALITY = {"fast": 640, "normal": 960, "sharp": 1280, "full": 0}
+PREVIEW_QUALITY_ORDER = ("fast", "normal", "sharp", "full")
+PREVIEW_QUALITY_LABELS = {"fast": "流畅", "normal": "标准",
+                          "sharp": "清晰", "full": "原尺寸"}
+
+# 预览倍速：只改变播放速度，成片永远按原速导出。
+PREVIEW_SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
+
+
 class Settings:
     """持久设置：存在脚本旁边的 settings.json，坏文件就退回默认值。
 
@@ -474,6 +484,8 @@ class Settings:
         "crop_focus": "center",   # 裁切铺满时留中心 / 偏上 / 偏下
         "subtitle_font": "Microsoft YaHei",   # 烧字幕用的字体
         "subtitle_size": 48,      # 字号（按成片像素算）
+        "preview_quality": "normal",   # 样片清晰度：fast/normal/sharp/full
+        "preview_speed": 1.0,          # 上次用的预览倍速（0.5..2.0）
         "open_after_export": True,   # 导出完自动打开所在文件夹
         "ask_export_dir": True,      # 导出时先问保存到哪（关掉就直接用默认目录）
         "export_preset": "generic",  # 上次用的平台预设（导出框默认选它）
@@ -631,6 +643,13 @@ class Settings:
                 d.get("subtitle_size", 48)))))
         except (TypeError, ValueError):
             d["subtitle_size"] = 48
+        if d.get("preview_quality") not in PREVIEW_QUALITY:
+            d["preview_quality"] = "normal"
+        try:
+            speed = float(d.get("preview_speed", 1.0))
+        except (TypeError, ValueError):
+            speed = 1.0
+        d["preview_speed"] = speed if speed in PREVIEW_SPEEDS else 1.0
         sc = d.get("shortcuts")
         clean = {}
         if isinstance(sc, dict):
@@ -665,9 +684,14 @@ class Settings:
     def size(self) -> tuple[int, int]:
         return even(self.data["width"]), even(self.data["height"])
 
-    def preview_size(self) -> tuple[int, int]:
+    def preview_size(self, quality: str | None = None) -> tuple[int, int]:
+        """样片尺寸：按所选清晰度缩放，最长边不超过那一档；不放大。"""
         w, h = self.size()
-        k = 960.0 / max(w, h)
+        edge = PREVIEW_QUALITY.get(
+            quality or self.data.get("preview_quality"), 960)
+        if edge <= 0:
+            return w, h
+        k = min(1.0, float(edge) / max(w, h))
         return even(w * k), even(h * k)
 
     def crf(self) -> int:
@@ -5791,6 +5815,8 @@ def run_gui() -> int:
             self.preview_seq = 0
             self.preview_path = os.path.join(self.tmpdir, "preview_0.mp4")
             self._preview_pending = False   # 生成中途又点了一次刷新
+            self._scrubbing = False        # 正在拖进度条：别让播放位置抢它
+            self._resume_at = 0.0          # 重渲后要跳回的位置
             self.preview_stale = True
             self.worker = None
             self.fetch_worker = None
@@ -6407,8 +6433,71 @@ def run_gui() -> int:
             self.player.setVideoOutput(self.video)
             self.player.mediaStatusChanged.connect(self.on_media_status)
             self.player.positionChanged.connect(self.on_position)
+            self.player.durationChanged.connect(self.on_duration)
+            self.player.playbackStateChanged.connect(self.on_play_state)
             self.player.errorOccurred.connect(self.on_player_error)
             rv.addWidget(self.video, 1)
+
+            # 预览控制条：播放/暂停、±5 秒、进度条、倍速、样片清晰度
+            pbar = QHBoxLayout()
+            pbar.setContentsMargins(0, 2, 0, 0)
+            pbar.setSpacing(6)
+            self.btn_play = QPushButton("▶")
+            self.btn_play.setFixedSize(34, 26)
+            self.btn_play.setToolTip(tr("播放 / 暂停（空格）"))
+            self.btn_play.clicked.connect(self.toggle_play)
+            pbar.addWidget(self.btn_play)
+            self.btn_back = QPushButton("−5s")
+            self.btn_back.setFixedSize(46, 26)
+            self.btn_back.setToolTip(tr("后退 5 秒"))
+            self.btn_back.clicked.connect(lambda: self.on_skip(-5.0))
+            pbar.addWidget(self.btn_back)
+            self.btn_fwd = QPushButton("+5s")
+            self.btn_fwd.setFixedSize(46, 26)
+            self.btn_fwd.setToolTip(tr("前进 5 秒"))
+            self.btn_fwd.clicked.connect(lambda: self.on_skip(5.0))
+            pbar.addWidget(self.btn_fwd)
+            self.slider_pos = QSlider(Qt.Orientation.Horizontal)
+            self.slider_pos.setRange(0, 0)
+            self.slider_pos.setPageStep(0)     # 点哪儿跳哪儿，不是翻页
+            self.slider_pos.setSingleStep(1)
+            self.slider_pos.setEnabled(False)
+            self.slider_pos.setToolTip(tr("拖动跳到任意位置"))
+            self.slider_pos.sliderPressed.connect(self.on_scrub_start)
+            self.slider_pos.sliderMoved.connect(self.on_scrub_move)
+            self.slider_pos.sliderReleased.connect(self.on_scrub_end)
+            pbar.addWidget(self.slider_pos, 1)
+            self.lbl_playtime = QLabel("0:00 / 0:00")
+            self.lbl_playtime.setMinimumWidth(88)
+            self.lbl_playtime.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            pbar.addWidget(self.lbl_playtime)
+            self.cmb_speed = QComboBox()
+            for _rate in PREVIEW_SPEEDS:
+                self.cmb_speed.addItem("%g×" % _rate, _rate)
+            try:
+                self.cmb_speed.setCurrentIndex(
+                    PREVIEW_SPEEDS.index(float(self.settings["preview_speed"])))
+            except ValueError:
+                pass
+            self.cmb_speed.setFixedWidth(72)
+            self.cmb_speed.setToolTip(tr("预览倍速：只影响播放，不影响成片"))
+            self.cmb_speed.currentIndexChanged.connect(self.on_speed_changed)
+            pbar.addWidget(self.cmb_speed)
+            self.cmb_quality = QComboBox()
+            for _q in PREVIEW_QUALITY_ORDER:
+                self.cmb_quality.addItem(tr(PREVIEW_QUALITY_LABELS[_q]), _q)
+            try:
+                self.cmb_quality.setCurrentIndex(
+                    PREVIEW_QUALITY_ORDER.index(self.settings["preview_quality"]))
+            except ValueError:
+                pass
+            self.cmb_quality.setFixedWidth(96)
+            self.cmb_quality.setToolTip(tr("预览清晰度：只影响样片，不影响成片"))
+            self.cmb_quality.currentIndexChanged.connect(self.on_quality_changed)
+            pbar.addWidget(self.cmb_quality)
+            rv.addLayout(pbar)
+
             self.lbl_preview = QLabel(tr("预览：改完参数点右上角「刷新预览」"))
             self.lbl_preview.setEnabled(False)
             rv.addWidget(self.lbl_preview)
@@ -6526,6 +6615,7 @@ def run_gui() -> int:
             else:
                 self.lbl_preview.setText(
                     tr("预览：改完参数点右上角「刷新预览」"))
+            self._player_retranslate()
             self._apply_ui_mode()
             self._refresh_all()
             self._refresh_history()
@@ -6541,6 +6631,19 @@ def run_gui() -> int:
             need = self.minimumSizeHint().width()
             if need > self.width():
                 self.resize(need, self.height())
+
+        def _player_retranslate(self):
+            """控制条的文案：按钮提示、两档下拉的条目名。"""
+            self.btn_back.setToolTip(tr("后退 5 秒"))
+            self.btn_fwd.setToolTip(tr("前进 5 秒"))
+            self.slider_pos.setToolTip(tr("拖动跳到任意位置"))
+            self.cmb_speed.setToolTip(tr("预览倍速：只影响播放，不影响成片"))
+            self.cmb_quality.setToolTip(tr("预览清晰度：只影响样片，不影响成片"))
+            for i in range(self.cmb_quality.count()):
+                q = self.cmb_quality.itemData(i)
+                self.cmb_quality.setItemText(
+                    i, tr(PREVIEW_QUALITY_LABELS.get(q, "标准")))
+            self._sync_play_button()
 
         # ---------------- 主题
         def _theme_assets(self, pal: dict) -> str:
@@ -6593,6 +6696,7 @@ def run_gui() -> int:
             self.video.setStyleSheet("QVideoWidget{background:#000000;}")
             self.lbl_audio.setStyleSheet(f"color:{pal['muted']};")
             self.lbl_preview.setStyleSheet(f"color:{pal['subtext']};")
+            self.lbl_playtime.setStyleSheet(f"color:{pal['muted']};")
             self.lbl_status.setStyleSheet(f"color:{pal['text']};")
 
         def _on_system_theme(self, *_a):
@@ -6837,7 +6941,8 @@ def run_gui() -> int:
 
         def _opts(self, preview=False):
             s = self.settings
-            w, h = s.preview_size() if preview else s.size()
+            w, h = (s.preview_size(s["preview_quality"]) if preview
+                    else s.size())
             return dict(w=w, h=h, fps=int(s["fps"]), fit=s["fit"],
                         bg_blur=bool(s["bg_blur"]),
                         pad_color=s["pad_color"], bg_path=s["bg_path"],
@@ -7508,10 +7613,83 @@ def run_gui() -> int:
                 self.on_audio_set_volume(rows, value=val / 100.0)
 
         # ---------------- 预览
+        def _player_duration(self) -> float:
+            return max(0.0, self.player.duration() / 1000.0)
+
+        def _player_time_text(self, cur: float) -> str:
+            return "%s / %s" % (human_time(cur),
+                                human_time(self._player_duration()))
+
         def seek(self, seconds):
+            dur = self._player_duration()
+            if dur > 0:
+                seconds = min(max(0.0, seconds), max(0.0, dur - 0.02))
+            seconds = max(0.0, seconds)
             self.player.setPosition(int(seconds * 1000))
             self.timeline.play_pos = seconds
             self.timeline.update()
+            self._sync_player(seconds)
+
+        def _sync_player(self, cur: float):
+            """把播放位置同步到进度条与时间标签（拖动时不抢）。"""
+            if not self._scrubbing:
+                self.slider_pos.blockSignals(True)
+                self.slider_pos.setValue(int(cur * 1000))
+                self.slider_pos.blockSignals(False)
+            self.lbl_playtime.setText(self._player_time_text(cur))
+
+        def _sync_play_button(self):
+            playing = (self.player.playbackState()
+                       == QMediaPlayer.PlaybackState.PlayingState)
+            self.btn_play.setText("⏸" if playing else "▶")
+            self.btn_play.setToolTip(
+                tr("暂停（空格）") if playing else tr("播放（空格）"))
+
+        def on_skip(self, delta: float):
+            t = self._playhead() + delta
+            self.seek(max(0.0, t))
+
+        def on_scrub_start(self):
+            self._scrubbing = True
+
+        def on_scrub_move(self, ms):
+            self._scrubbing = True
+            cur = ms / 1000.0
+            self.lbl_playtime.setText(self._player_time_text(cur))
+            self.timeline.play_pos = cur
+            self.timeline.update()
+
+        def on_scrub_end(self):
+            self._scrubbing = False
+            self.seek(self.slider_pos.value() / 1000.0)
+
+        def on_speed_changed(self, idx):
+            try:
+                rate = float(self.cmb_speed.itemData(idx))
+            except (TypeError, ValueError):
+                return
+            self.player.setPlaybackRate(rate)
+            self.settings.update(preview_speed=rate)
+            self.settings.save()
+            self.lbl_status.setText(tr("预览倍速：{n}×", n="%g" % rate))
+
+        def on_quality_changed(self, idx):
+            q = self.cmb_quality.itemData(idx)
+            if q not in PREVIEW_QUALITY:
+                return
+            self.settings.update(preview_quality=q)
+            self.settings.save()
+            self.lbl_status.setText(tr("预览质量：{q}", q=self.cmb_quality.itemText(idx)))
+            if self.project.clips:
+                self.on_preview()
+
+        def on_duration(self, ms):
+            self.slider_pos.setRange(0, max(0, int(ms)))
+            self.slider_pos.setEnabled(ms > 0)
+            self.lbl_playtime.setText(self._player_time_text(self._playhead()))
+
+        def on_play_state(self, _state):
+            self._sync_play_button()
 
         def on_video_click(self, ev):
             self.toggle_play()
@@ -7526,6 +7704,11 @@ def run_gui() -> int:
                 self.player.play()
 
         def on_media_status(self, status):
+            if (status == QMediaPlayer.MediaStatus.LoadedMedia
+                    and getattr(self, "_resume_at", 0.0) > 0.05):
+                # 重渲样片后接着看：等文件真加载好再跳，太早 setPosition 不生效
+                self.player.setPosition(int(self._resume_at * 1000))
+                self._resume_at = 0.0
             if status == QMediaPlayer.MediaStatus.EndOfMedia:
                 self.player.setPosition(0)
                 self.player.play()
@@ -7533,6 +7716,7 @@ def run_gui() -> int:
         def on_position(self, ms):
             self.timeline.play_pos = ms / 1000.0
             self.timeline.update()
+            self._sync_player(ms / 1000.0)
 
         def on_player_error(self, _err, text):
             """播放器解不开预览文件时，说清楚，并试着重新挂一次。"""
@@ -7597,6 +7781,9 @@ def run_gui() -> int:
                     self._preview_pending = True   # 跑完自动再来一次
                 return
             self._follow_audio()
+            # 重渲后接着刚才的位置看（第一次还没源文件就从 0 开始）。
+            self._resume_at = (self._playhead()
+                               if not self.player.source().isEmpty() else 0.0)
             # 先把播放器松手：Windows 上它握着旧文件时 ffmpeg 写不进去，
             # 正是「预览有时候显示不出来」的一个来源。
             try:
@@ -7629,6 +7816,7 @@ def run_gui() -> int:
             self._rendering(False)
             self._clean_stale()
             self.player.setSource(QUrl.fromLocalFile(path))
+            self.player.setPlaybackRate(float(self.settings["preview_speed"]))
             self.player.play()
             if self._preview_pending:              # 期间又改过东西
                 self._preview_pending = False

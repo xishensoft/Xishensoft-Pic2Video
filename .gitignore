@@ -10,6 +10,7 @@ dist2/
 *.spec
 crash.log
 settings.json
+自动保存.p2v
 tools/
 .venv/
 probe/testout/

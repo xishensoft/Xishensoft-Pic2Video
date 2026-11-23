@@ -2935,6 +2935,77 @@ with tempfile.TemporaryDirectory() as _td63:
     check("资源包预设选的转场能出片", os.path.getsize(_out63c) > 500,
           os.path.getsize(_out63c))
 
+# ---------------- 64 预览控制条：质量档位 / 倍速 / 接线 ----------------
+check("预览质量四档", p.PREVIEW_QUALITY == {"fast": 640, "normal": 960,
+                                        "sharp": 1280, "full": 0},
+      p.PREVIEW_QUALITY)
+check("档位顺序固定",
+      p.PREVIEW_QUALITY_ORDER == ("fast", "normal", "sharp", "full"),
+      p.PREVIEW_QUALITY_ORDER)
+check("每档都有中文名",
+      set(p.PREVIEW_QUALITY_LABELS) == set(p.PREVIEW_QUALITY_ORDER)
+      and all(p.PREVIEW_QUALITY_LABELS[q] for q in p.PREVIEW_QUALITY_ORDER),
+      p.PREVIEW_QUALITY_LABELS)
+check("倍速档位", p.PREVIEW_SPEEDS == (0.5, 0.75, 1.0, 1.25, 1.5, 2.0),
+      p.PREVIEW_SPEEDS)
+
+_sp64 = os.path.join(tmp, "settings_preview.json")
+_s64 = p.Settings(_sp64)
+check("默认预览质量是标准", _s64["preview_quality"] == "normal",
+      _s64["preview_quality"])
+check("默认倍速 1 倍", _s64["preview_speed"] == 1.0, _s64["preview_speed"])
+_s64.update(width=1920, height=1080)
+check("1080p 流畅档 640x360", _s64.preview_size("fast") == (640, 360),
+      _s64.preview_size("fast"))
+check("1080p 标准档 960x540", _s64.preview_size("normal") == (960, 540),
+      _s64.preview_size("normal"))
+check("1080p 清晰档 1280x720", _s64.preview_size("sharp") == (1280, 720),
+      _s64.preview_size("sharp"))
+check("原尺寸档跟成片一样大", _s64.preview_size("full") == (1920, 1080),
+      _s64.preview_size("full"))
+_s64.update(width=1080, height=1920)
+check("竖屏按最长边缩", _s64.preview_size("normal") == (540, 960),
+      _s64.preview_size("normal"))
+_s64.update(width=640, height=360)
+check("小成片不放大", _s64.preview_size("normal") == (640, 360),
+      _s64.preview_size("normal"))
+_s64.update(width=2000, height=800)
+check("超宽画面按长边缩", _s64.preview_size("sharp") == (1280, 512),
+      _s64.preview_size("sharp"))
+_s64.update(preview_quality="huge")
+check("认不出的质量档退回标准", _s64["preview_quality"] == "normal",
+      _s64["preview_quality"])
+_s64.update(preview_speed=3.0)
+check("不支持的倍速退回 1 倍", _s64["preview_speed"] == 1.0,
+      _s64["preview_speed"])
+_s64.update(preview_speed=1.5)
+check("支持的倍速留得住", _s64["preview_speed"] == 1.5, _s64["preview_speed"])
+
+check("控制条有进度条", "self.slider_pos = QSlider(" in _src)
+check("控制条有播放按钮", 'self.btn_play = QPushButton("▶")' in _src)
+check("控制条有质量下拉", "self.cmb_quality = QComboBox()" in _src)
+check("进度条接上总长", "durationChanged.connect(self.on_duration)" in _src)
+check("播放状态接了按钮图标",
+      "playbackStateChanged.connect(self.on_play_state)" in _src)
+check("倍速真的设给播放器", "self.player.setPlaybackRate(rate)" in _src)
+check("有快进快退", "def on_skip(self, delta: float):" in _src)
+check("拖动结束才真跳", "def on_scrub_end(self):" in _src)
+check("样片尺寸取所选清晰度",
+      's.preview_size(s["preview_quality"])' in _src)
+
+_qss64 = TH.build_qss(TH.palette("dark", TH.DEFAULT_ACCENT))
+check("进度条有滑杆样式", "QSlider::handle:horizontal" in _qss64
+      and "QSlider::sub-page:horizontal" in _qss64)
+
+_c64_keys = ["播放 / 暂停（空格）", "播放（空格）", "暂停（空格）", "后退 5 秒",
+             "前进 5 秒", "拖动跳到任意位置",
+             "预览倍速：只影响播放，不影响成片",
+             "预览清晰度：只影响样片，不影响成片",
+             "预览倍速：{n}×", "预览质量：{q}", "流畅", "清晰", "原尺寸"]
+check("控制条词条四语齐全",
+      all(_k in tbl for _k in _c64_keys for tbl in _i18n.values()),
+      [k for k in _c64_keys if not all(k in tbl for tbl in _i18n.values())])
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

@@ -2691,3 +2691,36 @@ _TR_EXTRA36 = {
 for _k, _trs in _TR_EXTRA36.items():
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA37 = {
+    "播放 / 暂停（空格）": ("播放 / 暫停（空白鍵）", "Play / pause (Space)",
+                     "再生 / 一時停止（スペース）", "재생 / 일시정지 (Space)"),
+    "播放（空格）": ("播放（空白鍵）", "Play (Space)", "再生（スペース）",
+                "재생 (Space)"),
+    "暂停（空格）": ("暫停（空白鍵）", "Pause (Space)", "一時停止（スペース）",
+                "일시정지 (Space)"),
+    "后退 5 秒": ("後退 5 秒", "Back 5 s", "5 秒戻る", "5초 뒤로"),
+    "前进 5 秒": ("前進 5 秒", "Forward 5 s", "5 秒進む", "5초 앞으로"),
+    "拖动跳到任意位置": ("拖曳跳到任意位置", "Drag to jump anywhere",
+                  "ドラッグで任意の位置へ", "끌어서 원하는 위치로 이동"),
+    "预览倍速：只影响播放，不影响成片": (
+        "預覽倍速：只影響播放，不影響成片",
+        "Preview speed: playback only, the exported file is unaffected",
+        "プレビュー速度：再生だけに影響し、書き出しには影響しません",
+        "미리보기 배속: 재생에만 적용되고 내보내기에는 영향 없음"),
+    "预览清晰度：只影响样片，不影响成片": (
+        "預覽清晰度：只影響樣片，不影響成片",
+        "Preview quality: sample clip only, the exported file is unaffected",
+        "プレビュー画質：プレビューだけに影響し、書き出しには影響しません",
+        "미리보기 화질: 샘플 영상에만 적용되고 내보내기에는 영향 없음"),
+    "预览倍速：{n}×": ("預覽倍速：{n}×", "Preview speed: {n}×",
+                  "プレビュー速度：{n}×", "미리보기 배속: {n}×"),
+    "预览质量：{q}": ("預覽畫質：{q}", "Preview quality: {q}",
+                 "プレビュー画質：{q}", "미리보기 화질: {q}"),
+    "流畅": ("流暢", "Smooth", "スムーズ", "부드럽게"),
+    "清晰": ("清晰", "Sharp", "シャープ", "선명하게"),
+    "原尺寸": ("原尺寸", "Full size", "元のサイズ", "원본 크기"),
+}
+for _k, _trs in _TR_EXTRA37.items():
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
+        TR[_lang].setdefault(_k, _v)
