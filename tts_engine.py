@@ -27,7 +27,7 @@ import components
 TTS_PROVIDERS = {
     "edge": {"label": "Edge（免费）", "needs_key": False, "key_name": "",
              "timestamps": True, "chunk": 1000,
-             "note": "微软 Edge 朗读接口，不用 key，中文音色多、带时间戳"},
+             "note": "微软 Edge 朗读接口，不用密钥，中文音色多、带时间戳"},
     "gemini": {"label": "Gemini", "needs_key": True, "key_name": "gemini_key",
                "timestamps": False, "chunk": 2800,
                "note": "要自己的 API key；可多说话人；不给时间戳，字幕按 Edge 节奏对齐"},
@@ -900,7 +900,7 @@ async def _edge_collect(text: str, voice: str, rate: int, out_path: str,
 def synth_edge(text: str, voice: str = "zh-CN-XiaoxiaoNeural", rate: int = 0,
                out_path: str = "", proxy: str = "", cancel=None,
                api_key: str = "", base_url: str = "", **kwargs) -> dict:
-    """Edge 不用 key；api_key/base_url 只是为了和其它提供方同一个调用形状。"""
+    """Edge 不用密钥；api_key/base_url 只是为了和其它提供方同一个调用形状。"""
     if not str(text or "").strip():
         raise TtsError("text", "文稿是空的")
     try:
@@ -1220,7 +1220,7 @@ def synth_azure(text: str, voice: str = "", rate: int = 0, out_path: str = "",
     if not str(text or "").strip():
         raise TtsError("text", "文稿是空的")
     if not api_key:
-        raise TtsError("no-key", "Azure 语音要自己的 key（还有区域）")
+        raise TtsError("no-key", "Azure 语音要自己的密钥（还有区域）")
     if len(str(text)) > AZURE_MAX_CHARS:
         raise TtsError("text", "这一段太长，Azure 单次最多约 %d 字" % AZURE_MAX_CHARS)
     region = str(region or "").strip() or AZURE_DEFAULT_REGION
@@ -1279,7 +1279,7 @@ def synth_openai(text: str, voice: str = "", rate: int = 0, out_path: str = "",
     if not str(text or "").strip():
         raise TtsError("text", "文稿是空的")
     if not api_key:
-        raise TtsError("no-key", "这家要自己的 key")
+        raise TtsError("no-key", "这家要自己的密钥")
     root = str(base_url or "").strip().rstrip("/") or OPENAI_ROOT
     url = root + "/audio/speech"
     payload = json.dumps(openai_body(text, voice, model, rate),

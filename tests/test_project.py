@@ -27,7 +27,7 @@ def mk(n=3):
     pr.add_images(IMG[:1] * n)
     return pr
 
-# 1 跟 BGM 均分
+# 1 跟音乐 均分
 pr = mk(3); pr.audio_dur = 7.0; pr.normalize()
 check("bgm 均分 7/3", abs(sum(c.dur for c in pr.clips) - 7.0) < 1e-6 and
       all(abs(c.dur - 7/3) < 1e-6 for c in pr.clips), [round(c.dur, 3) for c in pr.clips])
@@ -50,7 +50,7 @@ check("最大值夹住", abs(sum(c.dur for c in pr.clips) - 7) < 1e-6 and
 pr2 = mk(3); p.set_mode(pr2, "total"); pr2.total_setting = 10.0; pr2.normalize()
 check("自设总长 10", abs(sum(c.dur for c in pr2.clips) - 10) < 1e-6, pr2.mode)
 
-# 6 逐张秒数
+# 6 逐段秒数
 pr3 = mk(3); p.set_mode(pr3, "free")
 for i in range(3): pr3.set_duration(i, 2.0)
 check("逐张自由 6s", abs(pr3.total() - 6) < 1e-9, pr3.total())
@@ -187,15 +187,15 @@ check("tr()/add_row() 的中文都有 4 种译文", not missing, missing[:8])
 check("词条数量", len(base) >= 140, len(base))
 
 I.set_locale("en")
-check("英文查得到", I.tr("加图片") == "Add images", I.tr("加图片"))
-check("英文带占位符", I.tr("已加 {n} 张图", n=3) == "Added 3 image(s)")
+check("英文查得到", I.tr("加素材") == "Add media", I.tr("加素材"))
+check("英文带占位符", I.tr("已加 {n} 段素材", n=3) == "Added 3 clip(s)")
 I.set_locale("zh-CN")
-check("简体直接回原文", I.tr("加图片") == "加图片")
+check("简体直接回原文", I.tr("加素材") == "加素材")
 I.set_locale("ja")
-check("日文查得到", I.tr("加图片") == "画像を追加", I.tr("加图片"))
+check("日文查得到", I.tr("加素材") == "素材を追加", I.tr("加素材"))
 check("缺词条回落中文", I.tr("这是个不存在的词条") == "这是个不存在的词条")
 I.set_locale("fr")
-check("非法语言回落简体", I.current_locale() == "zh-CN" and I.tr("加图片") == "加图片")
+check("非法语言回落简体", I.current_locale() == "zh-CN" and I.tr("加素材") == "加素材")
 
 check("LANGID 0x0804 简体", I.locale_from_langid(0x0804) == "zh-CN")
 check("LANGID 0x1004 新加坡简体", I.locale_from_langid(0x1004) == "zh-CN")
@@ -209,8 +209,8 @@ check("LANGID 其它 → English", I.locale_from_langid(0x0407) == "en")
 I.set_locale("ko")
 check("内部值不受翻译影响", "标准" in p.QUALITY and "自定义" in p.RATIOS
       and p.QUALITY["标准"] == 20)
-check("名字表仍是内部值", p.FIT_LABELS["own"] == "原图铺底" and p.MODE_LABELS["bgm"] == "跟 BGM")
-check("显示用 label 被翻译", p.fit_label("own") == "원본 이미지 배경" and p.mode_label("bgm") == "BGM 길이")
+check("名字表仍是内部值", p.FIT_LABELS["own"] == "原图铺底" and p.MODE_LABELS["bgm"] == "跟音乐")
+check("显示用 label 被翻译", p.fit_label("own") == "원본 이미지 배경" and p.mode_label("bgm") == "음악에 맞추기")
 I.set_locale("zh-CN")
 
 s5 = p.Settings(os.path.join(tmp, "s5.json"))
@@ -468,7 +468,7 @@ _pr.audio_start = 999.0; _pr.audio_len = 0.0
 check("起点超过总长也有下限", _pr.music_length() >= 0.1, _pr.music_length())
 _pr.audio_start = 10.0; _pr.audio_len = 20.0
 _pr.mode = "bgm"; _pr.normalize()
-check("跟 BGM 模式总长=截取长度", abs(_pr.total() - 20.0) < 1e-6, _pr.total())
+check("跟音乐 模式总长=截取长度", abs(_pr.total() - 20.0) < 1e-6, _pr.total())
 _g = p.build_graph([30], 1.0, 320, 180, music_start=12.5)
 check("音频链从 music_start 开始", "atrim=start=12.500:end=13.500" in _g,
       [ln for ln in _g.split(";") if "atrim" in ln][:1])
@@ -615,7 +615,7 @@ check("最大化不靠 Qt 的 isMaximized", "win.isMaximized()" not in _src
 pr = p.Project(); pr.mode = "free"
 pr.audio_dur = 30.0
 pr.add_images([IMG[0]], 2.0)
-check("没设片头片尾就只加图片", [c.kind for c in pr.clips] == ["image"],
+check("没设片头片尾就只加素材", [c.kind for c in pr.clips] == ["image"],
       [c.kind for c in pr.clips])
 
 # 片头片尾需要真视频文件
@@ -649,13 +649,13 @@ else:
           [c.kind for c in pj.clips] == ["image", "image", "outro"],
           [c.kind for c in pj.clips])
 
-    # 跟 BGM：总长 = 音乐完整长度 + 片头片尾
+    # 跟音乐：总长 = 音乐完整长度 + 片头片尾
     pb = p.Project(); pb.mode = "bgm"
     pb.audio_dur = 40.0
     pb.add_images([IMG[0]], 2.0, intro=intro, outro=outro)
     pb.normalize()
     want = pb.music_length() + pb.fixed_span()
-    check("跟 BGM 时总长含片头片尾", abs(pb.total() - want) < 1e-6,
+    check("跟音乐 时总长含片头片尾", abs(pb.total() - want) < 1e-6,
           (pb.total(), want))
     imgs = pb.images()
     check("图片段吃满剩下的时长",
@@ -975,7 +975,7 @@ check("铺满音频：编辑记一步",
       "self._history_push(tr(\"铺满音频\"))" in src)
 check("视频要放长时加 stream_loop",
       'cmd += ["-stream_loop", "-1"]   # 要放得比原片长就循环' in src)
-check("节奏改成下拉：跟 BGM / 跟素材总长",
+check("节奏改成下拉：跟音乐 / 跟素材总长",
       'self.cmb_rhythm.addItem(tr(MODE_LABELS["bgm"]), "bgm")' in src
       and 'self.cmb_rhythm.addItem(tr(MODE_LABELS["material"]), "material")' in src)
 check("节奏下拉带 mode 数据", "self.on_mode(self.cmb_rhythm.currentData())" in src)
@@ -1942,7 +1942,7 @@ check("记住上次预设与封面开关", '"export_preset"] = plan["preset"]' i
       and 'self.settings["cover_export"] = bool(plan.get("cover"))' in _src)
 
 _keys31 = (list(p.EXPORT_PRESETS[k]["label"] for k in p.EXPORT_PRESETS)
-           + ["导出", "自定义", "平台预设", "分辨率", "帧率", "画质（CRF）",
+           + ["导出", "自定义", "平台预设", "分辨率", "帧率", "画质",
               "音频码率", "同时导出封面（同名 .jpg）", "封面时间点",
               "封面没截出来", "封面截不出来：{msg}", "成片不在，封面截不出来",
               "（封面：{name}）"])
@@ -2302,7 +2302,7 @@ check("LUT 不在就算缺素材",
 check("重新定位能把 LUT 换过去",
       _pj58d.relink_media(os.path.join(tmp, "gone.cube"), _real_lut) == 1
       and _pj58d.clips[0].lut == _real_lut)
-check("LUT 目录里的 .cube 能列出来",
+check("滤镜目录里的 .cube 能列出来",
       p.list_luts(tmp) == [_real_lut] and p.list_luts("") == []
       and p.list_luts(os.path.join(tmp, "nope")) == [], p.list_luts(tmp))
 
@@ -2336,7 +2336,7 @@ else:
                  fps=30, crf=28)
         check("LUT 不在要报错", False)
     except p.RenderError as _e:
-        check("LUT 不在要报错", "LUT" in str(_e), str(_e))
+        check("LUT 不在要报错", "滤镜" in str(_e), str(_e))
 
 _src58 = open(os.path.join(ROOT, "pic2video.py"), encoding="utf-8").read()
 check("有调色对话框", "class ColorDialog(FramelessDialog)" in _src58
@@ -2344,22 +2344,22 @@ check("有调色对话框", "class ColorDialog(FramelessDialog)" in _src58
 check("右键菜单有「调色…」", '"调色…"' in _src58
       and "def on_edit_color" in _src58
       and 'ColorDialog.get_values(self, self.project.clips[rows[0]]' in _src58)
-check("调色读设置里的 LUT 目录",
+check("调色读设置里的 滤镜目录",
       'self.settings["lut_dir"]' in _src58
       and "lut_dir=self.edit_lut.text().strip()" in _src58)
-check("设置页有 LUT 目录",
-      '"LUT 目录"' in _src58 and "def _browse_lut" in _src58)
+check("设置页有 滤镜目录",
+      '"滤镜目录"' in _src58 and "def _browse_lut" in _src58)
 _s58 = p.Settings(os.path.join(tmp, "settings_lut.json"))
-check("设置默认没有 LUT 目录", _s58["lut_dir"] == "")
+check("设置默认没有 滤镜目录", _s58["lut_dir"] == "")
 _s58.update(lut_dir=123)
-check("LUT 目录不是文字就洗干净", _s58["lut_dir"] == "")
+check("滤镜目录不是文字就洗干净", _s58["lut_dir"] == "")
 _s58.update(lut_dir="C:\\lut")
-check("LUT 目录能存住", _s58["lut_dir"] == "C:\\lut", _s58["lut_dir"])
+check("滤镜目录能存住", _s58["lut_dir"] == "C:\\lut", _s58["lut_dir"])
 _c58_keys = ["调色", "调色…", "亮度", "对比度", "饱和度", "重置", "不用",
-             "LUT", "LUT 目录", "选 LUT 目录", "{name}（不在目录里）",
-             "调色用的 LUT 不在了：{name}",
-             "放着 .cube 文件的目录（右键「调色…」时从这个目录里列）",
-             "调色只作用在这一段上：先调亮度/对比度/饱和度，再套 LUT。LUT 是 .cube 文件，目录在设置里指定。"]
+             "LUT", "滤镜目录", "选 滤镜目录", "{name}（不在目录里）",
+             "调色用的滤镜文件不在了：{name}",
+             "放着滤镜文件（.cube）的目录（右键「调色…」时从这个目录里列）",
+             "调色只作用在这一段上：先调亮度/对比度/饱和度，再套滤镜。滤镜是 .cube 文件，目录在设置里指定。"]
 check("ffmpeg 的帮助读得到", "-filter_complex" in p.ffmpeg_help())
 if not p.missing_tools():
     _gp58 = os.path.join(tmp, "optprobe.txt")
@@ -2555,12 +2555,12 @@ check("音频轨的底边不低于顶边+16",
       "return top, max(top + 16, self.height() - 4)" in _src60)
 check("音频行按轨道高度分",
       "row = max(10.0, (bottom - top) / n)" in _src60)
-check("增益对话框带 dB 后缀", 'suffix=tr(" dB")' in _src60)
+check("增益对话框带分贝后缀", 'suffix=tr(" 分贝")' in _src60)
 check("数字对话框能带后缀",
       'suffix: str = ""' in _src60
       and 'self.spin.setSuffix(suffix or tr(" 秒"))' in _src60)
 
-_c60_keys = ("增益…", "增益", "这条音频的增益（dB，0 就是原样）：", " dB",
+_c60_keys = ("增益…", "增益", "这条音频的增益（分贝，0 就是原样）：", " dB",
              "清空包络", "音量包络")
 check("音频词条四语齐全",
       all(_k in tbl for _k in _c60_keys for tbl in _i18n.values()),
@@ -2743,7 +2743,7 @@ with tempfile.TemporaryDirectory() as _td61:
     _proj61b.clips = [p.Clip(IMG[0], 2.0, lut=_lutpath.replace("probe.cube",
                                                                "probe2.cube"))]
     check("删包前能算出「第 n 段的 LUT」在用",
-          p.asset_usage(_proj61b, _pkg61b) == [p.tr("第 {n} 段的 LUT", n=1)],
+          p.asset_usage(_proj61b, _pkg61b) == [p.tr("第 {n} 段的滤镜", n=1)],
           p.asset_usage(_proj61b, _pkg61b))
 
     # 每条拒绝路径
@@ -2878,8 +2878,8 @@ _c62_keys = ("字体", "LUT", "转场预设", "资源包", "已装资源包", "�
              "删除所选", "选资源包", "资源包 (*.zip)", "资源包没装上",
              "资源包装好了", "删掉资源包", "删掉", "算了", "删不掉",
              "资源包已经删掉", "字幕字体", "{name}（资源包）",
-             "装不进去：", "认不出来的问题", "第 {n} 段的 LUT",
-             "找不到这个 zip 文件", "文件校验对不上（sha256），包可能坏了")
+             "装不进去：", "认不出来的问题", "第 {n} 段的滤镜",
+             "找不到这个 zip 文件", "文件校验对不上，包可能坏了")
 check("资源包词条四语齐全",
       all(_k in tbl for _k in _c62_keys for tbl in _i18n.values()),
       [k for k in _c62_keys if not all(k in tbl for tbl in _i18n.values())])
@@ -3360,8 +3360,8 @@ check("挪完把选中还原到新位置",
       "self._select_rows(" in _mv_body)
 _ed_body = _func_body("on_edit_dur", "on_rows_moved")
 check("双击改时长支持多选一起改",
-      "for i in rows:" in _ed_body and "选中的 {n} 张一起改（秒）：" in _ed_body)
-check("多选改时长有专门的标题", "改选中图片的时长" in _ed_body)
+      "for i in rows:" in _ed_body and "选中的 {n} 段一起改（秒）：" in _ed_body)
+check("多选改时长有专门的标题", "改选中片段的时长" in _ed_body)
 
 check("音乐链接输入框回车就取音轨",
       "self.edit_bgm.returnPressed.connect(self.start_fetch)" in _src)
@@ -3393,7 +3393,7 @@ _fd_body = _func_body("_relink_from_folder", "_relink_missing")
 check("按文件名在文件夹里找替身",
       "os.path.join(folder, os.path.basename(old))" in _fd_body)
 
-_ux_keys = ["改选中图片的时长", "选中的 {n} 张一起改（秒）：", "一起重新定位",
+_ux_keys = ["改选中片段的时长", "选中的 {n} 段一起改（秒）：", "一起重新定位",
             "选文件夹…", "一个个来", "选这些素材现在所在的文件夹"]
 check("新词条四语齐全",
       all(k in _i18n.get(lang, {}) for k in _ux_keys
@@ -3841,10 +3841,10 @@ check("提供方名字有译文",
 
 # ---------------- 77 配音清理接线（T12 音频清理与响度）
 check("配音把清理开关传下去", 'cleanup=bool(s["tts_cleanup"])' in _src)
-check("合成完显示响度", '已清理，响度 {lu} LUFS' in _src and 'res.get("cleaned")' in _src)
+check("合成完显示响度", '已清理，响度 {lu}' in _src and 'res.get("cleaned")' in _src)
 check("清理默认是开的", p.Settings(os.path.join(tmp, "settings_clean.json"))["tts_cleanup"] is True)
-check("清理词条四语齐", all("（已清理，响度 {lu} LUFS）" in _i18n[L] for L in ("zh-TW", "en", "ja", "ko")),
-      {L: _i18n[L].get("（已清理，响度 {lu} LUFS）") for L in ("en", "ja")})
+check("清理词条四语齐", all("（已清理，响度 {lu}）" in _i18n[L] for L in ("zh-TW", "en", "ja", "ko")),
+      {L: _i18n[L].get("（已清理，响度 {lu}）") for L in ("en", "ja")})
 
 
 
@@ -3857,7 +3857,7 @@ check("Gemini 语速框会禁用",
       'self.spin_tts_rate.setEnabled(provider != "gemini")' in _src)
 check("Gemini 没语速时给提示", "Gemini 没有语速参数：想快就自己改文稿" in _src)
 check("配音页会提示填 key",
-      "要自己的 key：填在「设置 → 配音」里。" in _src)
+      "要自己的密钥：填在「设置 → 配音」里。" in _src)
 check("引擎有 Gemini 模型名", "gemini-3.8-flash-tts" in
       open(os.path.join(ROOT, "tts_engine.py"), encoding="utf-8").read())
 check("需要 key 的四家里 Gemini 其一",
@@ -4003,10 +4003,10 @@ check("取音源落在固定目录", "FetchWorker(url, persistent_media_dir()" i
 check("BGM 文件名带链接指纹，不覆盖上一条",
       'bgm_%s.m4a" % stamp' in _src and 'hashlib.sha1(' in _src)
 check("取完 BGM 写出完整路径",
-      'tr("BGM 已就绪：{total} · 文件在：{path}"' in _src
+      'tr("背景音乐已就绪：{total} · 文件在：{path}"' in _src
       and 'path=path)' in _src)
 check("BGM 路径也挂在输入框 tooltip 上",
-      'self.edit_bgm.setToolTip(tr("当前 BGM：{path}", path=path))' in _src)
+      'self.edit_bgm.setToolTip(tr("当前背景音乐：{path}", path=path))' in _src)
 check("资源包装完告诉用户装在哪",
       'tr("{kind}「{name}」已经装进资源目录：\\n{path}"' in _src
       and 'path=asset_dir(pkg["kind"])' in _src)
@@ -4023,7 +4023,7 @@ check("封面接口把路径交回来", "    return out_path" in _src)
 check("存完工程状态栏写出完整路径",
       'tr("工程已保存：{path}", path=path)' in _src)
 check("封面成功时 SHOT 也打印路径", 'print("COVER_OK:", cover' in _src)
-for _key in ("BGM 已就绪：{total} · 文件在：{path}", "当前 BGM：{path}",
+for _key in ("背景音乐已就绪：{total} · 文件在：{path}", "当前背景音乐：{path}",
              "打开资源文件夹", "在资源管理器里看这些包装在哪",
              "{kind}「{name}」已经装进资源目录：\n{path}", "\n\n封面：\n{path}",
              "工程已保存：{path}"):
@@ -4071,7 +4071,7 @@ check("模式说明标签在工具条",
 check("模式说明有四种说法",
       all(k in _src for k in ('tr("总长 = 音乐长度")',
                               'tr("总长 = 下面这个秒数")',
-                              'tr("每张按自己秒数")',
+                              'tr("每段按自己秒数")',
                               'tr("总长 = 旁白长度")')))
 check("模式说明跟着档位出现", "self.lbl_mode_hint.setVisible(total)" in _src)
 check("右键入口常驻提示",
@@ -4080,19 +4080,19 @@ check("右键入口常驻提示",
 check("列表知道每行是不是视频",
       _src.count("it.setData(Qt.ItemDataRole.UserRole + 3, c.kind)") >= 2)
 check("拖放写出会替换还是插入",
-      all(k in _src for k in ('tr("替换第 {n} 张", n=n)',
-                              'tr("插到第 {n} 张前面", n=n)',
-                              'tr("插到第 {n} 张后面", n=n)',
+      all(k in _src for k in ('tr("替换第 {n} 段", n=n)',
+                              'tr("插到第 {n} 段前面", n=n)',
+                              'tr("插到第 {n} 段后面", n=n)',
                               'tr("加到末尾")')))
 check("提示框画在落点旁边", "p.drawRoundedRect(box, 5, 5)" in _src)
 for _key in ("点画面：播放 / 暂停", "总长 = 下面这个秒数",
-             "图片按比例铺满这个秒数", "每张按自己秒数",
-             "逐张秒数：每张自己定，总长自动算", "总长 = 旁白长度",
+             "图片段按比例铺满这个秒数", "每段按自己秒数",
+             "逐段秒数：每段自己定，总长自动算", "总长 = 旁白长度",
              "跟旁白：总长跟旁白一样长", "总长 = 音乐长度",
-             "跟 BGM：总长跟音乐一样长",
+             "跟音乐：总长跟音乐一样长",
              "右键片段：改时长 / 转场 / 调色",
-             "替换第 {n} 张", "插到第 {n} 张前面",
-             "插到第 {n} 张后面", "加到末尾"):
+             "替换第 {n} 段", "插到第 {n} 段前面",
+             "插到第 {n} 段后面", "加到末尾"):
     check("界面提示词条四语齐 " + _key,
           all(_i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")),
           {_l: _i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")})
@@ -4177,6 +4177,110 @@ for _key in ("挪动选中的段", "已把 {n} 段挪到第 {k} 段",
           all(_i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")),
           {_l: _i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")})
 
+
+# ---------------- 86 素材：图片和视频都能加
+check("认得出图片", p.is_image_path("a.PNG") and not p.is_video_path("a.PNG"))
+check("认得出视频", p.is_video_path("a.MP4") and not p.is_image_path("a.MP4"))
+check("视频段 is_video 为真", p.Clip("a.mp4", 1.0, "video").is_video)
+check("图片段 is_video 为假", not p.Clip("a.png", 1.0).is_video)
+check("素材计数不把片头片尾算进去", True)
+if p.missing_tools():
+    print("  (没 ffmpeg，跳过视频素材实测)")
+else:
+    _vd86 = tempfile.mkdtemp(prefix="p2v_media_")
+    _vp86 = os.path.join(_vd86, "clip.mp4")
+    subprocess.run([p.FFMPEG, "-y", "-nostdin", "-loglevel", "error",
+                    "-f", "lavfi", "-i",
+                    "testsrc=size=160x90:rate=30:duration=1.2",
+                    "-pix_fmt", "yuv420p", "-c:v", "libx264",
+                    "-preset", "ultrafast", _vp86], check=False)
+    _pj86 = p.Project()
+    _pj86.add_media([IMG[0], _vp86])
+    check("混合加素材：图 + 视频两段",
+          [c.kind for c in _pj86.clips] == ["image", "video"],
+          [c.kind for c in _pj86.clips])
+    check("视频段长度用素材自己的",
+          abs(_pj86.clips[1].dur - 1.2) < 0.15, _pj86.clips[1].dur)
+    check("图片段仍按 3 秒", abs(_pj86.clips[0].dur - 3.0) < 1e-6)
+    check("素材计数只算图片和视频",
+          _pj86.image_count() == 1 and _pj86.segment_count() == 2,
+          (_pj86.image_count(), _pj86.segment_count()))
+    check("视频段帧数 = 秒数 * fps", _pj86.frame_counts()[1] == 36,
+          _pj86.frame_counts())
+
+    _pj86.insert_media(0, [_vp86])
+    check("插到最前", [c.kind for c in _pj86.clips] == ["video", "image", "video"])
+
+    _pj86b = p.Project()
+    _pj86b.clips = [p.Clip(IMG[0], 2.5, fade=True, xfade=True,
+                           xfade_name="wipeleft",
+                           brightness=0.2, contrast=1.1, saturation=1.2,
+                           lut="x.cube")]
+    _pj86b.replace_media(0, _vp86)
+    _c86 = _pj86b.clips[0]
+    check("图换视频：类型换过去", _c86.kind == "video" and _c86.is_video)
+    check("图换视频：时长用视频自己的", abs(_c86.dur - 1.2) < 0.15, _c86.dur)
+    check("图换视频：调色 / 转场 / 淡入淡出都留着",
+          _c86.fade and _c86.xfade_name == "wipeleft"
+          and abs(_c86.brightness - 0.2) < 1e-9
+          and _c86.lut == "x.cube")
+    _pj86b.replace_media(0, IMG[1])
+    _c86b = _pj86b.clips[0]
+    check("视频换回图片：类型换回来",
+          _c86b.kind == "image" and not _c86b.is_video)
+    check("视频换回图片：走的仍是这一段原来的时长",
+          abs(_c86b.dur - 1.2) < 0.15, _c86b.dur)
+
+    _round86 = p.Project.from_doc(_pj86.to_doc())
+    check("工程往返后视频段还在",
+          [(c.kind, round(c.dur, 1)) for c in _round86.clips]
+          == [("video", round(_pj86.clips[0].dur, 1)),
+              ("image", 3.0), ("video", round(_pj86.clips[2].dur, 1))],
+          [(c.kind, c.dur) for c in _round86.clips])
+    for _f in os.listdir(_vd86):
+        try:
+            os.remove(os.path.join(_vd86, _f))
+        except OSError:
+            pass
+    try:
+        os.rmdir(_vd86)
+    except OSError:
+        pass
+
+check("加素材的对话框标题改成素材", 'tr("选素材")' in _src)
+check("文件框允许多种视频", '"*.mp4 *.mov *.mkv *.webm *.avi)"' in _src)
+check("窗口加素材走 project.add_media", "self.project.add_media(" in _src)
+check("拖到列表里能替换成视频",
+      "self.project.replace_media(row, good[0])" in _src)
+check("拖到列表里能插入视频",
+      "self.project.insert_media(row + 1, good[1:], dur)" in _src)
+check("拖进窗口时视频算素材而不是背景音乐",
+      "or os.path.splitext(p)[1].lower() in MEDIA_EXTS" in _src
+      and "if os.path.splitext(p)[1].lower() in IMG_EXTS" in _src)
+check("改时长对视频段走裁切", 'if clip.is_video and clip.kind == "video":' in _src
+      and "self.project.set_video_len(i, val)" in _src)
+check("视频缩略图画播放三角", 'if kind in ("video", "intro", "outro"):' in _src)
+check("状态栏用素材段数", _src.count("self.project.segment_count()") >= 2)
+
+for _key86 in ("选素材", "加素材", "已加 {n} 段素材",
+               "图片或视频 (*.jpg *.jpeg *.png *.bmp *.webp *.mp4 *.mov *.mkv *.webm *.avi)",
+               "替换第 {n} 段", "插到第 {n} 段前面", "插到第 {n} 段后面",
+               "图片没有入点，只有视频段能裁",
+               "图片没有出点，只有视频段能裁",
+               "片段转场", "片段转场：硬切 / 淡入淡出",
+               "逐段秒数：每段自己定，总长自动算",
+               "图片段按比例铺满这个秒数",
+               "跟音乐", "跟音乐：总长跟音乐一样长",
+               "实际参数：{w}×{h} · {fps} 帧/秒 · 画质 {crf} · 音频 {ab} · 视频码率约 {mbps} 兆比特/秒",
+               " 分贝", "滤镜（LUT）", "滤镜目录"):
+    check("术语词条四语齐 " + _key86,
+          all(_i18n[_l].get(_key86) for _l in ("zh-TW", "en", "ja", "ko")),
+          {_l: _i18n[_l].get(_key86) for _l in ("zh-TW", "en", "ja", "ko")})
+check("英文里不再说 BGM", _i18n["en"].get("跟音乐") == "Match music")
+check("英文里不再说 images only", _i18n["en"].get("加素材") == "Add media")
+check("英文导出摘要用 fps / Mbps 而不是中文单位",
+      "fps" in _i18n["en"]["实际参数：{w}×{h} · {fps} 帧/秒 · 画质 {crf} · 音频 {ab} · 视频码率约 {mbps} 兆比特/秒"]
+      and "Mbps" in _i18n["en"]["实际参数：{w}×{h} · {fps} 帧/秒 · 画质 {crf} · 音频 {ab} · 视频码率约 {mbps} 兆比特/秒"])
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")

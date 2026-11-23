@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""pic2video —— 图片 + B站 BGM → 视频（单文件小工具）
+"""pic2video —— 图片 + 站内音乐 → 视频（单文件小工具）
 
 把若干张图片按顺序拼成一条 1920x1080 / 30fps 的视频，背景音乐直接从
 bilibili 链接整条取下来（不分离人声）。
@@ -53,6 +53,14 @@ WIDTH, HEIGHT, FPS = 1920, 1080, 30
 PREVIEW_W, PREVIEW_H = 960, 540
 MIN_DUR = 0.2
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+def is_image_path(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in IMG_EXTS
+
+
+def is_video_path(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in MEDIA_EXTS
 MEDIA_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".flv", ".m4v"}
 FADE_IN, FADE_OUT = 0.5, 1.5
 # 画面是 limited range（16–235）。不写清范围/色度，播放器只能猜：猜成 full 就会发灰、发暗。
@@ -255,8 +263,8 @@ RATIO_VALUE = {"16:9": 16 / 9, "9:16": 9 / 16, "1:1": 1.0, "4:5": 0.8,
                "4:3": 4 / 3, "21:9": 21 / 9, "3:4": 3 / 4, "2:3": 2 / 3}
 SHORT_SIDE = 1080  # 选比例时按短边 1080 给出预设尺寸
 QUALITY = {"高": 18, "标准": 20, "小体积": 23}
-MODE_LABELS = {"bgm": "跟 BGM", "material": "跟素材总长",
-               "total": "自设总长", "free": "逐张秒数",
+MODE_LABELS = {"bgm": "跟音乐", "material": "跟素材总长",
+               "total": "自设总长", "free": "逐段秒数",
                "voice": "跟旁白"}
 MODE_BY_LABEL = {v: k for k, v in MODE_LABELS.items()}
 # 交叉淡化能用的转场：全是 ffmpeg xfade 的内置名，不吃外部文件
@@ -291,7 +299,7 @@ SHORTCUT_DEFAULTS = {
     "preview": "F5",
 }
 SHORTCUT_ORDER = ("add", "export", "undo", "redo", "play", "remove", "preview")
-SHORTCUT_LABELS = {"add": "加图片", "export": "导出视频", "undo": "撤回",
+SHORTCUT_LABELS = {"add": "加素材", "export": "导出视频", "undo": "撤回",
                    "redo": "还原", "play": "播放 / 暂停",
                    "remove": "删除素材", "preview": "刷新预览"}
 
@@ -401,7 +409,7 @@ def estimate_kbps(plan: dict) -> int:
         crf = int(plan["crf"])
     except (KeyError, TypeError, ValueError):
         return 0
-    # 以 1080p30 / CRF 20 ≈ 6 Mbps 为基准；CRF 每降 6 码率大约翻一倍
+    # 以 1080p30 / CRF 20 ≈ 6 兆比特/秒 为基准；CRF 每降 6 码率大约翻一倍
     bpp = 6.0e6 / (1920.0 * 1080.0 * 30.0)
     factor = 2.0 ** ((20 - crf) / 6.0)
     return max(100, int(round(w * h * fps * bpp * factor / 1000.0 / 100.0)) * 100)
@@ -849,7 +857,7 @@ def color_filter(brightness: float, contrast: float, saturation: float,
 
 
 def list_luts(folder: str) -> list[str]:
-    """LUT 目录里的 .cube 文件（按文件名排）；目录不在就返回空表。"""
+    """滤镜目录里的 .cube 文件（按文件名排）；目录不在就返回空表。"""
     if not folder or not os.path.isdir(folder):
         return []
     try:
@@ -1292,10 +1300,10 @@ def asset_error_text(exc: "AssetError") -> str:
         "unsafe-path": tr("包里有不安全的路径（绝对路径或 .. 上跳）"),
         "symlink": tr("包里有符号链接，不收"),
         "executable": tr("包里有可执行文件，不收"),
-        "bad-manifest": tr("manifest.json 写得不对"),
+        "bad-manifest": tr("包的清单（manifest.json）写得不对"),
         "bad-entry": tr("包里的文件类型不对"),
-        "missing-entry": tr("manifest 里写的文件不在包里"),
-        "hash-mismatch": tr("文件校验对不上（sha256），包可能坏了"),
+        "missing-entry": tr("清单里写的文件不在包里"),
+        "hash-mismatch": tr("文件校验对不上，包可能坏了"),
         "bad-preset": tr("转场预设写得不对"),
         "exists": tr("同名的包已经装过同一个版本；先删掉再装"),
         "io": tr("写文件失败"),
@@ -1312,7 +1320,7 @@ def asset_usage(project, package: dict, current_font: str = "") -> list:
     for i, clip in enumerate(getattr(project, "clips", None) or []):
         lut = getattr(clip, "lut", "") or ""
         if lut and os.path.abspath(lut).lower().startswith(base + os.sep):
-            used.append(tr("第 {n} 段的 LUT", n=i + 1))
+            used.append(tr("第 {n} 段的滤镜", n=i + 1))
     if package.get("kind") == "font":
         want = str(current_font or "").strip().lower()
         for path in package.get("files") or []:
@@ -1344,7 +1352,7 @@ class Clip:
                  saturation: float = 1.0, lut: str = ""):
         self.path = path
         self.dur = float(dur)
-        self.kind = kind if kind in ("image", "intro", "outro") else "image"
+        self.kind = kind if kind in ("image", "video", "intro", "outro") else "image"
         self.fade = bool(fade)
         self.xfade = bool(xfade)
         self.xfade_name = xfade_name if xfade_name in XFADE_NAMES else ""
@@ -1370,7 +1378,7 @@ class Clip:
 
     @property
     def is_video(self) -> bool:
-        return self.kind in ("intro", "outro")
+        return self.kind in ("video", "intro", "outro")
 
     @property
     def span(self) -> float:
@@ -1667,9 +1675,9 @@ class Project:
     """时间线模型：片头 + 图片序列 + 片尾，外加一条或多条音频。
 
     mode:
-      bgm   跟 BGM：图片段总长 = 音乐长度，片头片尾各占自己的时长
+      bgm   跟音乐：图片段总长 = 音乐长度，片头片尾各占自己的时长
       total 自设总长：整个成片（含片头片尾）= total_setting
-      free  逐张秒数：图片段 = 各图之和
+      free  逐段秒数：图片段 = 各图之和
     固定总长时手改某张，其余按原比例让位，总长守恒（片头片尾不动）。
     """
 
@@ -1840,7 +1848,7 @@ class Project:
         if not isinstance(path, str) or not path:
             raise ProjectFileError("bad-shape", "素材条目缺 path")
         kind = raw.get("kind", "image")
-        if kind not in ("image", "intro", "outro"):
+        if kind not in ("image", "video", "intro", "outro"):
             raise ProjectFileError("bad-shape", "不认识的素材类型：%r" % (kind,))
         dur = max(0.0, _doc_num(raw.get("dur"), 0.0))
         src_in = max(0.0, _doc_num(raw.get("src_in"), 0.0))
@@ -1949,6 +1957,10 @@ class Project:
 
     def image_count(self) -> int:
         return sum(1 for c in self.clips if not c.is_video)
+
+    def segment_count(self) -> int:
+        """画面段的条数（图片 + 视频，不算片头片尾）。"""
+        return sum(1 for c in self.clips if c.kind in ("image", "video"))
 
     def intro(self) -> Clip | None:
         return next((c for c in self.clips if c.kind == "intro"), None)
@@ -2197,6 +2209,74 @@ class Project:
         if clip.is_video:
             return
         clip.path = path
+        self.normalize()
+
+    def add_media(self, paths, dur: float | None = None,
+                  intro: str = "", outro: str = ""):
+        """一段段素材：图片按图算，视频按它自己的长度算，顺序照给进来的来。"""
+        paths = [p for p in paths if p]
+        if not paths:
+            return
+        was_empty = not self.clips
+        t = self.target()
+        n_img = sum(1 for p in paths if is_image_path(p))
+        base = dur if dur is not None else (
+            (t / (self.image_count() + n_img)) if t and n_img else 3.0)
+        at = self._insert_at()
+        made = []
+        for p in paths:
+            if is_video_path(p):
+                made.append(Clip(p, _media_dur(p), "video"))
+            else:
+                made.append(Clip(p, max(MIN_DUR, base)))
+        self.clips[at:at] = made
+        if was_empty:
+            if intro and os.path.exists(intro) and self.intro() is None:
+                self.clips.insert(0, Clip(intro, _media_dur(intro), "intro"))
+            if outro and os.path.exists(outro) and self.outro() is None:
+                self.clips.append(Clip(outro, _media_dur(outro), "outro"))
+        self.normalize()
+
+    def insert_media(self, index: int, paths, dur: float | None = None):
+        """在指定位置插一段段素材（从外面拖到列表某个位置时用）。"""
+        paths = [p for p in paths if p]
+        if not paths:
+            return
+        t = self.target()
+        n_img = sum(1 for p in paths if is_image_path(p))
+        base = dur if dur is not None else (
+            (t / (self.image_count() + n_img)) if t and n_img else 3.0)
+        at = max(0, min(int(index), len(self.clips)))
+        made = []
+        for p in paths:
+            if is_video_path(p):
+                made.append(Clip(p, _media_dur(p), "video"))
+            else:
+                made.append(Clip(p, max(MIN_DUR, base)))
+        self.clips[at:at] = made
+        self.normalize()
+
+    def replace_media(self, index: int, path: str):
+        """换掉这一段；同类（图换图、视频换视频）时保留时长和所有设置。"""
+        if not (0 <= index < len(self.clips)):
+            return
+        clip = self.clips[index]
+        new_video = is_video_path(path)
+        if clip.is_video and new_video:
+            clip.path = path
+            clip.dur = _media_dur(path)
+            clip.src_in = 0.0
+            clip.src_out = None
+        elif not clip.is_video and not new_video:
+            clip.path = path
+        else:
+            dur = _media_dur(path) if new_video else clip.dur
+            self.clips[index] = Clip(
+                path, dur, "video" if new_video else "image",
+                clip.fade, clip.xfade,
+                0.0 if new_video else clip.src_in, None,
+                clip.xfade_name, clip.xfade_dur,
+                clip.brightness, clip.contrast, clip.saturation, clip.lut)
         self.normalize()
 
     def add_video(self, path: str, kind: str) -> Clip | None:
@@ -3870,7 +3950,7 @@ def build_audio_graph(total: float, *, timeline=None, audio_index: int = 0,
                       bgm_points=None) -> str:
     """只出音轨的 filtergraph（预览用：不碰视频，几毫秒就能混完）。
 
-    规则跟 build_graph 的音频段一致：跟 BGM 时片头片尾静音、
+    规则跟 build_graph 的音频段一致：跟音乐 时片头片尾静音、
     整段音量、首尾淡入淡出、每段增益与包络、多音轨 amix。
     """
     mstart = max(0.0, float(music_start))
@@ -3972,7 +4052,7 @@ def render_audio_mix(clips, counts, audio, out_path, *, fps: int = FPS,
                      xfade_sec: float = 0.3, ab: str = "192k") -> str:
     """只把音频混成一个 .m4a（预览的主时钟，几毫秒到几百毫秒）。"""
     if not counts:
-        raise RenderError(tr("没有图片"))
+        raise RenderError(tr("还没有素材"))
     total = sum(counts) / float(fps)
     timeline = audio_timeline(clips, counts, fps, total, xfade_sec)
     items = _audio_items(audio)
@@ -4054,18 +4134,18 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
     外面就能 terminate() 取消这次渲染。
     """
     if not counts:
-        raise RenderError(tr("没有图片"))
+        raise RenderError(tr("还没有素材"))
     for c, nf in zip(clips, counts):
         if c.is_video and not os.path.exists(c.path):
-            raise RenderError(tr("这张图片读不出来：{name}",
+            raise RenderError(tr("这个文件读不出来：{name}",
                                  name=os.path.basename(c.path)))
     bad = [c.path for c in clips if not c.is_video and not image_ok(c.path)]
     if bad:
-        raise RenderError(tr("这张图片读不出来：{name}",
+        raise RenderError(tr("这个文件读不出来：{name}",
                              name=os.path.basename(bad[0])))
     for c in clips:
         if c.lut and not os.path.exists(c.lut):
-            raise RenderError(tr("调色用的 LUT 不在了：{name}",
+            raise RenderError(tr("调色用的滤镜文件不在了：{name}",
                                  name=os.path.basename(c.lut)))
     short = xfade_short(clips, counts, fps, xfade_sec)
     if short:
@@ -4276,18 +4356,18 @@ def cli_export(argv: list[str]) -> int:
                   file=sys.stderr)
             return 2
     import argparse
-    ap = argparse.ArgumentParser(description=tr("图片 + BGM 合成视频（无窗口）"))
+    ap = argparse.ArgumentParser(description=tr("图片和视频 + 音乐合成视频（无窗口）"))
     ap.add_argument("--export", required=True, help=tr("输出 mp4 路径"))
     ap.add_argument("--audio",
                     help=tr("本地音视频文件，或抖音 / YouTube 等视频链接"))
-    ap.add_argument("--bili", help=tr("bilibili 链接或 BV 号（同 --audio）"))
-    ap.add_argument("--total", type=float, help=tr("每张图片的秒数（默认均分音乐）"))
+    ap.add_argument("--bili", help=tr("B 站链接或 BV 号（同 --audio）"))
+    ap.add_argument("--total", type=float, help=tr("每段素材的秒数（默认均分音乐）"))
     ap.add_argument("--keep-audio", action="store_true",
                     help=tr("保留取下来的音频文件"))
     ap.add_argument("--fps", type=int, default=30, help=tr("帧率：30 或 60"))
     ap.add_argument("--fit", choices=list(FIT_MODES) + list(FIT_LEGACY),
                     default="own",
-                    help=tr("铺底：own 原图 / color 纯色 / image 背景图 / video 背景视频 / cover 裁切"))
+                    help=tr("铺底：原图 / 纯色 / 背景图 / 背景视频 / 裁切"))
     ap.add_argument("--ratio", choices=[r for r in RATIOS if r != "自定义"],
                     default="16:9", help=tr("画面比例（默认按短边 1080 算尺寸）"))
     ap.add_argument("--width", type=int, default=None,
@@ -4299,11 +4379,11 @@ def cli_export(argv: list[str]) -> int:
                     help=tr("纯色留白的颜色，如 #ffffff"))
     ap.add_argument("--no-bg-blur", action="store_true", help=tr("背景不模糊"))
     ap.add_argument("--transition", choices=("none", "fade"), default="none",
-                    help=tr("图片转场：none 硬切 / fade 淡入淡出"))
+                    help=tr("片段转场：硬切 / 淡入淡出"))
     ap.add_argument("--motion", choices=list(MOTIONS), default="none",
-                    help=tr("画面动效：none 静止 / in 缓慢推近 / out 缓慢拉远 / inout 交替"))
+                    help=tr("画面动效：静止 / 缓慢推近 / 缓慢拉远 / 交替推拉"))
     ap.add_argument("--crop-focus", choices=list(CROP_FOCUS), default="center",
-                    help=tr("裁切铺满时留住哪里：center 居中 / top 偏上 / bottom 偏下"))
+                    help=tr("裁切铺满时留住哪里：居中 / 偏上 / 偏下"))
     ap.add_argument("--volume", type=int, default=100, metavar="0-200",
                     help=tr("背景音乐音量百分比（默认 100）"))
     ap.add_argument("--music-start", type=float, default=0.0,
@@ -4374,12 +4454,12 @@ def cli_export(argv: list[str]) -> int:
         pr.audio_start = float(st["music_start"])
         pr.audio_len = float(st["music_len"])
         pr.normalize()
-    print(tr("[2/3] {n} 张图，总长 {total}s，{durs}",
+    print(tr("[2/3] {n} 段素材，总长 {total}s，{durs}",
              n=len(pr.clips), total=f"{pr.total():.2f}",
              durs=" + ".join(f"{c.dur:.2f}" for c in pr.clips)))
     out_dir = os.path.dirname(os.path.abspath(a.export)) or "."
     os.makedirs(out_dir, exist_ok=True)
-    print(tr("[3/3] 渲染 {w}x{h} {fps}fps {fit}…",
+    print(tr("[3/3] 渲染 {w}x{h} {fps} 帧/秒 {fit}…",
              w=w, h=h, fps=opts["fps"], fit=fit_label(st["fit"])))
     t0 = time.perf_counter()
     last = [-1]
@@ -4763,7 +4843,7 @@ def run_gui() -> int:
             form.addRow(tr("平台预设"), self.cmb_preset)
             form.addRow(tr("分辨率"), wrap_wh)
             form.addRow(tr("帧率"), self.cmb_fps)
-            form.addRow(tr("画质（CRF）"), self.spin_crf)
+            form.addRow(tr("画质"), self.spin_crf)
             form.addRow(tr("音频码率"), self.cmb_ab)
             self.body.addLayout(form)
 
@@ -4862,8 +4942,8 @@ def run_gui() -> int:
             plan = self.plan()
             mbps = estimate_kbps(plan) / 1000.0
             self.lbl_summary.setText(tr(
-                "实际参数：{w}×{h} · {fps} fps · CRF {crf} · 音频 {ab}"
-                " · 视频码率约 {mbps} Mbps",
+                "实际参数：{w}×{h} · {fps} 帧/秒 · 画质 {crf} · 音频 {ab}"
+                " · 视频码率约 {mbps} 兆比特/秒",
                 w=plan["w"], h=plan["h"], fps=plan["fps"],
                 crf=plan["crf"], ab=plan["ab"], mbps="%.1f" % mbps))
 
@@ -5057,11 +5137,11 @@ def run_gui() -> int:
                 self.cmb_lut.addItem(
                     tr("{name}（不在目录里）", name=os.path.basename(clip.lut)),
                     clip.lut)
-            form.addRow(tr("LUT"), self.cmb_lut)
+            form.addRow(tr("滤镜（LUT）"), self.cmb_lut)
             self.body.addLayout(form)
 
             hint = QLabel(tr("调色只作用在这一段上：先调亮度/对比度/饱和度，"
-                             "再套 LUT。LUT 是 .cube 文件，目录在设置里指定，"
+                             "再套滤镜。滤镜是 .cube 文件，目录在设置里指定，"
                              "也可以从资源包装进来。"))
             hint.setWordWrap(True)
             hint.setObjectName("hint")
@@ -5536,12 +5616,12 @@ def run_gui() -> int:
                 kind = item.data(Qt.ItemDataRole.UserRole + 3) or "image"
                 n = self.row(item) + 1
                 if zone == "replace" and kind == "image":
-                    text = tr("替换第 {n} 张", n=n)
+                    text = tr("替换第 {n} 段", n=n)
                 elif zone == "before":
-                    text = tr("插到第 {n} 张前面", n=n)
+                    text = tr("插到第 {n} 段前面", n=n)
                 else:
                     # 视频不能替换，中间落点会退化成插到它后面
-                    text = tr("插到第 {n} 张后面", n=n)
+                    text = tr("插到第 {n} 段后面", n=n)
             font = QFont(self.font())
             font.setPointSize(9)
             p.setFont(font)
@@ -5905,7 +5985,7 @@ def run_gui() -> int:
             if not spans:
                 p.setPen(QColor(self.c["empty"]))
                 p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                           tr("把图片拖进来，或点「加图片」"))
+                           tr("把图片或视频拖进来，或点「加素材」"))
                 return
             font = QFont(self.font())
             font.setPointSize(9)
@@ -6887,7 +6967,7 @@ def run_gui() -> int:
             add_sep("导出")
             self.edit_dir = QLineEdit(settings["export_dir"])
             self.edit_dir.setPlaceholderText(
-                tr("留空 = 每张图所在目录（关掉「先问我」时就用这里）"))
+                tr("留空 = 每段素材所在目录（关掉「先问我」时就用这里）"))
             browse = QPushButton(tr("浏览…"))
             browse.clicked.connect(self._browse_dir)
             row = QHBoxLayout()
@@ -7044,7 +7124,7 @@ def run_gui() -> int:
 
             self.edit_lut = QLineEdit(settings["lut_dir"])
             self.edit_lut.setPlaceholderText(
-                tr("放着 .cube 文件的目录（右键「调色…」时从这个目录里列）"))
+                tr("放着滤镜文件（.cube）的目录（右键「调色…」时从这个目录里列）"))
             btn_lut = QPushButton(tr("浏览…"))
             btn_lut.clicked.connect(self._browse_lut)
             row_lut = QHBoxLayout()
@@ -7053,7 +7133,7 @@ def run_gui() -> int:
             row_lut.addWidget(btn_lut)
             wrap_lut = QWidget()
             wrap_lut.setLayout(row_lut)
-            add_row("LUT 目录", wrap_lut, normal=True)
+            add_row("滤镜目录", wrap_lut, normal=True)
 
             self.cmb_sub_font = QFontComboBox()
             self.cmb_sub_font.setCurrentFont(QFont(str(settings["subtitle_font"])))
@@ -7078,8 +7158,8 @@ def run_gui() -> int:
                 return ed_
 
             self.lbl_tts_note = QLabel(tr(
-                "Edge 配音免费、不用 key；Gemini / Azure / OpenAI 兼容端点要填自己的 key。"
-                "key 明文存在本机设置文件里，不会上传到别处。"))
+                "Edge 配音免费、不用密钥；Gemini / Azure / OpenAI 兼容端点要填自己的密钥。"
+                "密钥明文存在本机设置文件里，不会上传到别处。"))
             self.lbl_tts_note.setObjectName("hint")
             self.lbl_tts_note.setWordWrap(True)
             self._form().addRow(self.lbl_tts_note)
@@ -7123,8 +7203,8 @@ def run_gui() -> int:
             self.list_assets.setMinimumHeight(96)
             add_row("已装资源包", self.list_assets, pro=True)
             self.lbl_assets = QLabel(tr(
-                "字体包、LUT 包、转场预设包都能从 zip 装进来。"
-                "字体装好后能在这里的「字幕字体」里选，LUT 会出现在右键「调色…」里，"
+                "字体包、滤镜包、转场预设包都能从 zip 装进来。"
+                "字体装好后能在这里的「字幕字体」里选，滤镜会出现在右键「调色…」里，"
                 "转场预设会出现在右键「转场」里。"))
             self.lbl_assets.setObjectName("hint")
             self.lbl_assets.setWordWrap(True)
@@ -7215,10 +7295,10 @@ def run_gui() -> int:
 
             self.cmb_trans = QComboBox()
             self.cmb_trans.addItem(tr("硬切"), "none")
-            self.cmb_trans.addItem(tr("淡入淡出（每张首尾淡黑）"), "fade")
+            self.cmb_trans.addItem(tr("淡入淡出（每段首尾淡黑）"), "fade")
             self.cmb_trans.setCurrentIndex(1 if settings["transition"] == "fade" else 0)
             self.cmb_trans.currentIndexChanged.connect(self._sync_trans)
-            add_row("图片转场", self.cmb_trans, normal=True)
+            add_row("片段转场", self.cmb_trans, normal=True)
 
             self.spin_trans = QDoubleSpinBox()
             self.spin_trans.setRange(0.0, 2.0)
@@ -7426,7 +7506,7 @@ def run_gui() -> int:
             video = self.cmb_fit.currentData() == "video"
             cap = tr("选背景视频") if video else tr("选背景图片")
             flt = (tr("视频 (*.mp4 *.mov *.mkv *.webm)") if video
-                   else tr("图片 (*.jpg *.jpeg *.png *.bmp *.webp)"))
+                   else tr("图片或视频 (*.jpg *.jpeg *.png *.bmp *.webp *.mp4 *.mov *.mkv *.webm *.avi)"))
             picked = FileDialog.get_open_files(
                 self, cap, self.edit_bg.text() or "", flt)
             if picked:
@@ -7434,7 +7514,7 @@ def run_gui() -> int:
 
         def _browse_lut(self):
             picked = FileDialog.get_dir(
-                self, tr("选 LUT 目录"), self.edit_lut.text().strip() or "")
+                self, tr("选 滤镜目录"), self.edit_lut.text().strip() or "")
             if picked:
                 self.edit_lut.setText(picked)
 
@@ -7777,7 +7857,7 @@ def run_gui() -> int:
             self.setWindowFlags(self.windowFlags()
                                 | Qt.WindowType.FramelessWindowHint)
             self.setWindowIcon(_win_icon(32))
-            self.setWindowTitle(tr("图片出片 —— 图片 + B站 BGM → 视频"))
+            self.setWindowTitle(tr("Pic2Video 出片 —— 图片 / 视频 + 站内音乐 → 视频"))
             self.setObjectName("frame")         # 配 QSS 那一圈细边
             self.resize(1180, 800)
             self.setAcceptDrops(True)
@@ -8343,7 +8423,7 @@ def run_gui() -> int:
             outer.setContentsMargins(0, 0, 0, 0)
             outer.setSpacing(0)
             self.titlebar = TitleBar(
-                self, tr("图片出片 —— 图片 + B站 BGM → 视频"), maximize=True)
+                self, tr("Pic2Video 出片 —— 图片 / 视频 + 站内音乐 → 视频"), maximize=True)
             outer.addWidget(self.titlebar)
             body = QWidget()
             v = QVBoxLayout(body)
@@ -8364,7 +8444,7 @@ def run_gui() -> int:
                     b.setToolTip(tip)
                 bar.addWidget(b)
                 return b
-            self.btn_add = btn(tr("加图片"), self.on_add)
+            self.btn_add = btn(tr("加素材"), self.on_add)
             self.btn_add.setMinimumWidth(78)
             self.btn_overlay = btn(
                 tr("画中画"), self.on_add_overlay,
@@ -8393,7 +8473,7 @@ def run_gui() -> int:
             self.cmb_rhythm.activated.connect(
                 lambda _i: self.on_mode(self.cmb_rhythm.currentData()))
             self.radio_total = QRadioButton(tr("自设总长"))
-            self.radio_free = QRadioButton(tr("逐张秒数"))
+            self.radio_free = QRadioButton(tr("逐段秒数"))
             self.radio_voice = QRadioButton(tr("跟旁白"))
             self.radio_voice.setToolTip(
                 tr("按配音页生成的旁白长度铺满画面，画面不会比声音长"))
@@ -8758,7 +8838,7 @@ def run_gui() -> int:
             v.addLayout(tlbar)
 
             foot = QHBoxLayout()
-            self.lbl_status = QLabel(tr("拖图片进来开始"))
+            self.lbl_status = QLabel(tr("拖图片或视频进来开始"))
             foot.addWidget(self.lbl_status, 1)
             # 右键功能藏在菜单里，底栏常驻一句提示，别让人到处找
             self.lbl_tl_tip = QLabel(tr("右键片段：改时长 / 转场 / 调色"))
@@ -8796,7 +8876,7 @@ def run_gui() -> int:
             self._refresh_title()
             self.btn_project.setText(tr("工程"))
             self.btn_project.setToolTip(tr("新建 / 打开 / 保存工程（Ctrl+S 保存）"))
-            self.btn_add.setText(tr("加图片"))
+            self.btn_add.setText(tr("加素材"))
             self.btn_overlay.setText(tr("画中画"))
             self.btn_overlay.setToolTip(
                 tr("压一层画面在成片上：图片或视频都行"))
@@ -8868,7 +8948,7 @@ def run_gui() -> int:
             self.cmb_rhythm.setItemText(0, tr(MODE_LABELS["bgm"]))
             self.cmb_rhythm.setItemText(1, tr(MODE_LABELS["material"]))
             self.radio_total.setText(tr("自设总长"))
-            self.radio_free.setText(tr("逐张秒数"))
+            self.radio_free.setText(tr("逐段秒数"))
             self.radio_voice.setText(tr("跟旁白"))
             self.spin_total.setSuffix(tr(" 秒"))
             self.lbl_bgm.setText(tr("音乐链接"))
@@ -9017,7 +9097,7 @@ def run_gui() -> int:
             }
             for name, w_ in widgets.items():
                 w_.setVisible(name in allowed)
-            # 时长三选一是「自设总长 + 逐张秒数 + 总长输入」一组
+            # 时长三选一是「自设总长 + 逐段秒数 + 总长输入」一组
             total = "total" in allowed
             self.radio_total.setVisible(total)
             self.radio_free.setVisible(total)
@@ -9048,7 +9128,7 @@ def run_gui() -> int:
 
         def _menu_labels(self):
             """右键菜单会出现的四项（冒烟测试用来核对文案）。"""
-            return [tr("上移"), tr("下移"), tr("删除"), tr("这张图显示多久")]
+            return [tr("上移"), tr("下移"), tr("删除"), tr("这一段显示多久")]
 
         def on_list_menu(self, pos):
             """列表右键菜单：上移 / 下移 / 删除 / 改这张的秒数。"""
@@ -9061,7 +9141,7 @@ def run_gui() -> int:
             act_down = menu.addAction(tr("下移"))
             act_del = menu.addAction(tr("删除"))
             menu.addSeparator()
-            act_dur = menu.addAction(tr("这张图显示多久"))
+            act_dur = menu.addAction(tr("这一段显示多久"))
             for a in (act_up, act_down, act_del, act_dur):
                 a.setEnabled(row >= 0)
             picked = menu.exec(self.list.viewport().mapToGlobal(pos))
@@ -9339,7 +9419,7 @@ def run_gui() -> int:
             spec = tts_engine.TTS_PROVIDERS[provider]
             if spec.get("needs_key"):
                 self.lbl_tts_status.setText(tr(
-                    "{name} 要自己的 key：填在「设置 → 配音」里。",
+                    "{name} 要自己的密钥：填在「设置 → 配音」里。",
                     name=tr(spec["label"])))
             else:
                 self.lbl_tts_status.setText(tr("贴好文稿，选个音色，就能合成"))
@@ -9381,8 +9461,8 @@ def run_gui() -> int:
             provider = self._tts_provider()
             spec = tts_engine.TTS_PROVIDERS[provider]
             if spec.get("needs_key") and not self._tts_kwargs()["api_key"]:
-                MsgBox.warn(self, tr("这家要 key"), tr(
-                    "{name} 得先在「设置 → 配音」里填自己的 key。",
+                MsgBox.warn(self, tr("这家要密钥"), tr(
+                    "{name} 得先在「设置 → 配音」里填自己的密钥。",
                     name=tr(spec["label"])))
                 return
             plan = (tts_engine.dialogue_plan(text, provider)
@@ -9462,7 +9542,7 @@ def run_gui() -> int:
             self._history_push(tr("生成旁白"))
             note = ""
             if res.get("cleaned"):
-                note = tr("（已清理，响度 {lu} LUFS）",
+                note = tr("（已清理，响度 {lu}）",
                           lu="%.1f" % float(res.get("loudness") or 0.0))
             self.lbl_tts_status.setText(tr(
                 "旁白好了：{dur}，{n} 条字幕。总长已改成「跟旁白」。文件在：{path}",
@@ -9536,7 +9616,7 @@ def run_gui() -> int:
             if self.project.overlays:
                 extra += tr("（{n} 层画中画）", n=len(self.project.overlays))
             self.lbl_status.setText(
-                tr("{n} 张图 · 总长 {total} · {src}", n=n,
+                tr("{n} 段素材 · 总长 {total} · {src}", n=n,
                    total=human_time(self.project.total()), src=src) + extra)
 
         def _refresh_mode_hint(self):
@@ -9546,16 +9626,16 @@ def run_gui() -> int:
             mode = self.project.mode
             if mode == "total":
                 text = tr("总长 = 下面这个秒数")
-                tip = tr("图片按比例铺满这个秒数")
+                tip = tr("图片段按比例铺满这个秒数")
             elif mode == "free":
-                text = tr("每张按自己秒数")
-                tip = tr("逐张秒数：每张自己定，总长自动算")
+                text = tr("每段按自己秒数")
+                tip = tr("逐段秒数：每段自己定，总长自动算")
             elif mode == "voice":
                 text = tr("总长 = 旁白长度")
                 tip = tr("跟旁白：总长跟旁白一样长")
             else:
                 text = tr("总长 = 音乐长度")
-                tip = tr("跟 BGM：总长跟音乐一样长")
+                tip = tr("跟音乐：总长跟音乐一样长")
             self.lbl_mode_hint.setText(text)
             self.lbl_mode_hint.setToolTip(tip)
 
@@ -9592,7 +9672,7 @@ def run_gui() -> int:
                               name=os.path.basename(c.path)))
 
         def _thumb(self, path, kind="image"):
-            if kind in ("intro", "outro"):
+            if kind in ("video", "intro", "outro"):
                 pm = QPixmap(96, 54)
                 pm.fill(QColor(self.pal["panel"]))
                 p = QPainter(pm)
@@ -9643,7 +9723,7 @@ def run_gui() -> int:
             self._bind_shortcuts()
             w, h = self.settings.size()
             self.lbl_preview.setText(
-                tr("参数已更新：{w}x{h} {fps}fps，预览已实时",
+                tr("参数已更新：{w}x{h} {fps} 帧/秒，预览已实时",
                    w=w, h=h, fps=self.settings["fps"]))
             self._follow_audio()
             self.lbl_status.setText(tr("设置已保存"))
@@ -9686,18 +9766,26 @@ def run_gui() -> int:
         # ---------------- 动作
         def on_add(self):
             paths = FileDialog.get_open_files(
-                self, tr("选图片"), "",
-                tr("图片 (*.jpg *.jpeg *.png *.bmp *.webp)"), multi=True)
+                self, tr("选素材"), "",
+                tr("图片或视频 (*.jpg *.jpeg *.png *.bmp *.webp "
+                   "*.mp4 *.mov *.mkv *.webm *.avi)"), multi=True)
             if paths:
-                self.add_images(paths)
+                self.add_media(paths)
 
-        def add_images(self, paths):
-            log("add_images n=%d first=%s" % (
+        def add_media(self, paths):
+            log("add_media n=%d first=%s" % (
                 len(paths), os.path.basename(paths[0]) if paths else ""))
             good = []
-            for i, p in enumerate(paths, 1):
-                rd = QImageReader(p)
-                if rd.canRead() and rd.size().width() > 0:
+            for p in paths:
+                if is_video_path(p):
+                    try:
+                        ok = probe_duration(p) > 0.05
+                    except Exception:
+                        ok = False
+                else:
+                    rd = QImageReader(p)
+                    ok = rd.canRead() and rd.size().width() > 0
+                if ok:
                     good.append(p)
                 else:
                     self.lbl_status.setText(
@@ -9705,24 +9793,31 @@ def run_gui() -> int:
             if good:
                 dur = (self.settings["per_image"]
                        if self.project.mode == "free" else None)
-                self.project.add_images(
+                self.project.add_media(
                     good, dur=dur,
                     intro=self.settings["intro_path"],
                     outro=self.settings["outro_path"])
                 self.radio_total.setChecked(self.project.mode == "total")
                 self._refresh_all()
-                self.lbl_status.setText(tr("已加 {n} 张图", n=len(good)))
-                self._history_push(tr("加图片"))
+                self.lbl_status.setText(tr("已加 {n} 段素材", n=len(good)))
+                self._history_push(tr("加素材"))
 
         def on_drop_into_list(self, paths, row, zone):
             """从外面拖到素材列表上：左 / 中 / 右三段分别是插前 / 替换 / 插后。"""
             paths = expand_paths(paths)
             good = []
             for p in paths:
-                rd = QImageReader(p)
                 if os.path.isdir(p):
                     continue
-                if rd.canRead() and rd.size().width() > 0:
+                if is_video_path(p):
+                    try:
+                        ok = probe_duration(p) > 0.05
+                    except Exception:
+                        ok = False
+                else:
+                    rd = QImageReader(p)
+                    ok = rd.canRead() and rd.size().width() > 0
+                if ok:
                     good.append(p)
                 else:
                     self.lbl_status.setText(
@@ -9732,13 +9827,13 @@ def run_gui() -> int:
             good.sort(key=lambda p: os.path.basename(p).lower())
             dur = (self.settings["per_image"]
                    if self.project.mode == "free" else None)
-            if (zone == "replace" and 0 <= row < len(self.project.clips)
-                    and not self.project.clips[row].is_video):
-                self.project.replace_image(row, good[0])
+            if zone == "replace" and 0 <= row < len(self.project.clips):
+                self.project.replace_media(row, good[0])
                 if len(good) > 1:
-                    self.project.insert_images(row + 1, good[1:], dur)
+                    self.project.insert_media(row + 1, good[1:], dur)
                 label = tr("替换素材")
-                self.lbl_status.setText(tr("已换成 {n} 张图", n=len(good)))
+                self.lbl_status.setText(
+                    tr("已换成 {n} 段素材", n=len(good)))
             else:
                 if row < 0:
                     at = len(self.project.clips)
@@ -9746,10 +9841,10 @@ def run_gui() -> int:
                     at = row
                 else:
                     at = row + 1
-                self.project.insert_images(at, good, dur)
-                label = tr("加图片")
+                self.project.insert_media(at, good, dur)
+                label = tr("加素材")
                 self.lbl_status.setText(
-                    tr("已插入 {n} 张图", n=len(good)))
+                    tr("已插入 {n} 段素材", n=len(good)))
             self._refresh_all()
             self._history_push(label)
 
@@ -9822,15 +9917,19 @@ def run_gui() -> int:
             many = len(rows) > 1
             val, ok = NumberDialog.get_double(
                 self,
-                tr("改选中图片的时长") if many else tr("这张图显示多久"),
-                tr("选中的 {n} 张一起改（秒）：", n=len(rows)) if many
-                else tr("第 {row} 张（秒）：", row=rows[0] + 1),
+                tr("改选中片段的时长") if many else tr("这一段显示多久"),
+                tr("选中的 {n} 段一起改（秒）：", n=len(rows)) if many
+                else tr("第 {row} 段（秒）：", row=rows[0] + 1),
                 cur, MIN_DUR, 3600, 1)
             if not ok:
                 return
             log("duration rows=%s %.2f -> %.2f" % (rows, cur, val))
             for i in rows:
-                self.project.set_duration(i, val)
+                clip = self.project.clips[i]
+                if clip.is_video and clip.kind == "video":
+                    self.project.set_video_len(i, val)
+                else:
+                    self.project.set_duration(i, val)
             self._refresh_all()
             self._select_rows(rows)
             self._history_push(tr("改时长"))
@@ -9890,7 +9989,7 @@ def run_gui() -> int:
             self._mark_stale()
             self._history_push(tr("改时长"))
             self.lbl_status.setText(
-                tr("{n} 张图 · 总长 {total}", n=self.project.image_count(),
+                tr("{n} 段素材 · 总长 {total}", n=self.project.segment_count(),
                    total=human_time(self.project.total())))
 
         def on_timeline_trim(self, i, edge, delta):
@@ -9911,7 +10010,7 @@ def run_gui() -> int:
             self._mark_stale()
             self._history_push(tr("改时长"))
             self.lbl_status.setText(
-                tr("{n} 张图 · 总长 {total}", n=self.project.image_count(),
+                tr("{n} 段素材 · 总长 {total}", n=self.project.segment_count(),
                    total=human_time(self.project.total())))
 
         def _clip_at(self, t: float, edge: bool = False):
@@ -9943,7 +10042,7 @@ def run_gui() -> int:
                 return
             clip = self.project.clips[i]
             if not clip.is_video:
-                self.lbl_status.setText(tr("图片段没有入点，只有片头片尾能裁"))
+                self.lbl_status.setText(tr("图片没有入点，只有视频段能裁"))
                 return
             self.project.set_src_in(i, clip.src_in + off)
             self._after_trim(tr("设入点"))
@@ -9956,7 +10055,7 @@ def run_gui() -> int:
                 return
             clip = self.project.clips[i]
             if not clip.is_video:
-                self.lbl_status.setText(tr("图片段没有出点，只有片头片尾能裁"))
+                self.lbl_status.setText(tr("图片没有出点，只有视频段能裁"))
                 return
             self.project.set_src_out(i, clip.src_in + off)
             self._after_trim(tr("设出点"))
@@ -9970,7 +10069,7 @@ def run_gui() -> int:
             self._refresh_all()
             self._history_push(tr("切一刀"))
             self.lbl_status.setText(
-                tr("{n} 张图 · 总长 {total}", n=self.project.image_count(),
+                tr("{n} 段素材 · 总长 {total}", n=self.project.segment_count(),
                    total=human_time(self.project.total())))
 
         def _after_trim(self, action: str):
@@ -9979,7 +10078,7 @@ def run_gui() -> int:
             self._mark_stale()
             self._history_push(action)
             self.lbl_status.setText(
-                tr("{n} 张图 · 总长 {total}", n=self.project.image_count(),
+                tr("{n} 段素材 · 总长 {total}", n=self.project.segment_count(),
                    total=human_time(self.project.total())))
 
         def on_timeline_move(self, i, pos):
@@ -10321,9 +10420,10 @@ def run_gui() -> int:
                         lambda _c=False, t=targets, a=arows:
                         self.on_fill_audio(t[0], a[0]))
                 m.addSeparator()
-                dur = m.addAction(tr("这张显示多久…"))
-                dur.setEnabled(len(targets) == 1
-                               and not self.project.clips[targets[0]].is_video)
+                dur = m.addAction(tr("这一段显示多久…"))
+                dur.setEnabled(len(targets) == 1 and (
+                    not self.project.clips[targets[0]].is_video
+                    or self.project.clips[targets[0]].kind == "video"))
                 dur.triggered.connect(
                     lambda _c=False, t=targets:
                     self.on_edit_dur(self.list.item(t[0])))
@@ -10477,8 +10577,8 @@ def run_gui() -> int:
                 return
             cur = self.project.audios[rows[0]].gain_db
             val, ok = NumberDialog.get_double(
-                self, tr("增益"), tr("这条音频的增益（dB，0 就是原样）："),
-                cur, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX, 1, suffix=tr(" dB"))
+                self, tr("增益"), tr("这条音频的增益（分贝，0 就是原样）："),
+                cur, AUDIO_GAIN_MIN, AUDIO_GAIN_MAX, 1, suffix=tr(" 分贝"))
             if not ok:
                 return
             for k in rows:
@@ -10824,7 +10924,7 @@ def run_gui() -> int:
 
         def toggle_play(self):
             if not self.project.clips:
-                self.lbl_status.setText(tr("先加图片"))
+                self.lbl_status.setText(tr("先加素材"))
                 return
             if self.scene is None:
                 self.on_preview()
@@ -10912,7 +11012,7 @@ def run_gui() -> int:
         def on_preview(self):
             """手动「刷新预览」：画面本来就是实时的，这里顺带重混音轨。"""
             if not self.project.clips:
-                self.lbl_status.setText(tr("先加图片"))
+                self.lbl_status.setText(tr("先加素材"))
                 return
             self._follow_audio()
             self._refresh_scene()
@@ -10974,9 +11074,9 @@ def run_gui() -> int:
             self.btn_retry.setEnabled(True)
             self._refresh_all()
             self.lbl_status.setText(
-                tr("BGM 已就绪：{total} · 文件在：{path}",
+                tr("背景音乐已就绪：{total} · 文件在：{path}",
                    total=human_time(dur), path=path))
-            self.edit_bgm.setToolTip(tr("当前 BGM：{path}", path=path))
+            self.edit_bgm.setToolTip(tr("当前背景音乐：{path}", path=path))
             self._history_push(tr("换背景音乐"))
 
         def on_fetch_bad(self, msg):
@@ -11005,7 +11105,7 @@ def run_gui() -> int:
 
         def on_export(self):
             if not self.project.clips:
-                self.lbl_status.setText(tr("先加图片"))
+                self.lbl_status.setText(tr("先加素材"))
                 return
             if self.worker is not None and self.worker.isRunning():
                 return
@@ -11154,26 +11254,23 @@ def run_gui() -> int:
                                   if u.isLocalFile()])
             log("drop n=%d %r" % (len(paths), [os.path.basename(p)
                                                for p in paths[:6]]))
-            imgs = [p for p in paths if os.path.splitext(p)[1].lower() in IMG_EXTS]
+            clips = [p for p in paths
+                     if os.path.splitext(p)[1].lower() in IMG_EXTS
+                     or os.path.splitext(p)[1].lower() in MEDIA_EXTS]
             audio = [p for p in paths
                      if os.path.splitext(p)[1].lower() in AUDIO_EXTS]
-            media = [p for p in paths
-                     if os.path.splitext(p)[1].lower() in MEDIA_EXTS]
-            if imgs:
-                self.add_images(sorted(imgs, key=lambda p: os.path.basename(p).lower()))
-            # 拖进来的音频 / 视频：还没有 BGM 就当 BGM（视频会抽音轨），
-            # 已经有 BGM 就叠一条额外音频
-            if audio or media:
+            if clips:
+                self.add_media(sorted(clips,
+                                      key=lambda p: os.path.basename(p).lower()))
+            # 拖进来的音频：还没有音乐就当背景音乐，已经有了就叠一条额外音频
+            if audio:
                 if self.project.audio_path:
                     for p in audio:
                         self.add_audio_extra(p)
-                    if media:
-                        self.edit_bgm.setText(media[0])
-                        self.start_fetch()
                 else:
-                    self.edit_bgm.setText((audio or media)[0])
+                    self.edit_bgm.setText(audio[0])
                     self.start_fetch()
-            if imgs or audio or media:
+            if clips or audio:
                 ev.acceptProposedAction()
 
         def nativeEvent(self, event_type, message):
@@ -11575,7 +11672,7 @@ def run_gui() -> int:
                     mb.grab().save(os.path.join(outdir,
                                                 "shot_msgbox" + tag + ".png"))
                     mb.close()
-                    nd = NumberDialog(w, tr("这张图显示多久"), tr("秒数"), 3.0,
+                    nd = NumberDialog(w, tr("这一段显示多久"), tr("秒数"), 3.0,
                                      MIN_DUR, 600.0)
 
                     def grab_nd():
