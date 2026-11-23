@@ -879,6 +879,16 @@ class AssetError(Exception):
         super().__init__(message or reason)
 
 
+def persistent_media_dir() -> str:
+    """程序自己取回来、工程会引用的素材（从链接取来的 BGM）放这里。
+
+    不能放 self.tmpdir：那个目录关窗就删，工程下次打开会找不到音乐。
+    """
+    folder = os.path.join(components.data_dir(), "media")
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+
 def assets_root() -> str:
     """资源包装在数据目录的 assets/ 下（跟工程文件无关）。"""
     return os.path.join(components.data_dir(), "assets")
@@ -2922,6 +2932,7 @@ def grab_cover(video_path: str, out_path: str, at: float,
                        creationflags=CREATION_NO_WINDOW)
     if p.returncode != 0 or not os.path.exists(out_path):
         raise RenderError(tr("封面截不出来：{msg}", msg=(p.stderr or "")[-200:]))
+    return out_path
 # ---------------------------------------------------------------- 预览合成
 # 预览不再「渲一条整片再播」，而是按时间直接画出这一帧：
 # 图片解码一次进内存，缩放/铺底/淡入淡出/推近拉远/转场/画中画/字幕
@@ -5150,9 +5161,13 @@ def run_gui() -> int:
             self.out_dir = out_dir
 
         def run(self):
+            # 文件名带链接指纹：换一个链接不会把上一条覆盖掉，
+            # 老工程里登记的音乐也还在。
+            stamp = hashlib.sha1(
+                self.url.encode("utf-8", "replace")).hexdigest()[:10]
             try:
                 path, _kind = fetch_audio(
-                    self.url, os.path.join(self.out_dir, "bgm.m4a"),
+                    self.url, os.path.join(self.out_dir, "bgm_%s.m4a" % stamp),
                     progress=self.note.emit)
             except SourceError as e:
                 self.bad.emit(e.message)
@@ -6728,8 +6743,13 @@ def run_gui() -> int:
             self.btn_asset_add.clicked.connect(self._import_asset)
             self.btn_asset_del = QPushButton(tr("删除所选"))
             self.btn_asset_del.clicked.connect(self._remove_asset)
+            self.btn_asset_open = QPushButton(tr("打开资源文件夹"))
+            self.btn_asset_open.setToolTip(
+                tr("在资源管理器里看这些包装在哪"))
+            self.btn_asset_open.clicked.connect(self._open_assets)
             row_asset.addWidget(self.btn_asset_add)
             row_asset.addWidget(self.btn_asset_del)
+            row_asset.addWidget(self.btn_asset_open)
             row_asset.addStretch(1)
             wrap_asset = QWidget()
             wrap_asset.setLayout(row_asset)
@@ -7129,9 +7149,19 @@ def run_gui() -> int:
             self._refresh_assets()
             self.list_assets.setCurrentRow(self.list_assets.count() - 1)
             MsgBox.info(self, tr("资源包装好了"),
-                        tr("{kind}「{name}」已经装进资源目录。",
+                        tr("{kind}「{name}」已经装进资源目录：\n{path}",
                            kind=tr(ASSET_KIND_LABELS[pkg["kind"]]),
-                           name=pkg["name"]))
+                           name=pkg["name"],
+                           path=asset_dir(pkg["kind"])))
+
+        def _open_assets(self):
+            """资源包装在哪，让用户自己看一眼。"""
+            folder = assets_root()
+            try:
+                os.makedirs(folder, exist_ok=True)
+                subprocess.Popen(["explorer", os.path.normpath(folder)])
+            except OSError:
+                pass
 
         def _remove_asset(self):
             pkg = self._pick_asset()
@@ -7696,6 +7726,8 @@ def run_gui() -> int:
             self.autosaver.clear()
             self.settings.push_recent(path)
             self._refresh_title()
+            if hasattr(self, "lbl_status"):
+                self.lbl_status.setText(tr("工程已保存：{path}", path=path))
             return True
 
         def _maybe_restore_autosave(self):
@@ -10423,7 +10455,7 @@ def run_gui() -> int:
             log("fetch start %s" % url[:120])
             self.btn_retry.setEnabled(False)
             self.lbl_status.setText(tr("正在取音轨…"))
-            self.fetch_worker = FetchWorker(url, self.tmpdir, self)
+            self.fetch_worker = FetchWorker(url, persistent_media_dir(), self)
             self.fetch_worker.note.connect(self.lbl_status.setText)
             self.fetch_worker.ok.connect(self.on_fetch_ok)
             self.fetch_worker.bad.connect(self.on_fetch_bad)
@@ -10459,8 +10491,9 @@ def run_gui() -> int:
             self.btn_retry.setEnabled(True)
             self._refresh_all()
             self.lbl_status.setText(
-                tr("BGM 已就绪：{total} · {name}",
-                   total=human_time(dur), name=os.path.basename(path)))
+                tr("BGM 已就绪：{total} · 文件在：{path}",
+                   total=human_time(dur), path=path))
+            self.edit_bgm.setToolTip(tr("当前 BGM：{path}", path=path))
             self._history_push(tr("换背景音乐"))
 
         def on_fetch_bad(self, msg):
@@ -10593,7 +10626,7 @@ def run_gui() -> int:
             self._rendering(False)
             self.lbl_status.setText(
                 tr("导出完成：{path}", path=path)
-                + (tr("（封面：{name}）", name=os.path.basename(cover))
+                + (tr("（封面：{name}）", name=cover)
                    if cover else ""))
             if os.environ.get("PIC2VIDEO_SHOT"):
                 print("EXPORT_OK:", path, flush=True)
@@ -10607,9 +10640,11 @@ def run_gui() -> int:
                 except OSError:
                     pass
                 return
+            body = tr("视频已生成：\n{path}", path=path)
+            if cover:
+                body += tr("\n\n封面：\n{path}", path=cover)
             picked = MsgBox.choose(
-                self, tr("导出完成"),
-                tr("视频已生成：\n{path}", path=path),
+                self, tr("导出完成"), body,
                 [(tr("打开所在文件夹"), "plain"), (tr("好"), "primary")])
             if picked == 0:
                 subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])

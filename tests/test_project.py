@@ -1966,10 +1966,11 @@ else:
     check("音频码率按预设落进成片", 80000 <= _ab_real <= 120000,
           (_pr.stdout, _pr.stderr[-160:]))
     _cover_out = os.path.join(tmp, "cover.jpg")
-    p.grab_cover(_out_ab, _cover_out, 0.2, 1.0)
+    _cover_ret = p.grab_cover(_out_ab, _cover_out, 0.2, 1.0)
     check("封面图生成了", os.path.exists(_cover_out)
           and os.path.getsize(_cover_out) > 500,
           os.path.getsize(_cover_out) if os.path.exists(_cover_out) else -1)
+    check("封面接口把路径交回来", _cover_ret == _cover_out, _cover_ret)
     _pc = subprocess.run(
         [p.FFPROBE, "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=width,height", "-of", "csv=p=0", _cover_out],
@@ -3980,12 +3981,52 @@ for _needle, _why in (
          "旁白路径能选中复制")):
     check(_why, _needle in _src, _needle)
 _eng_narr = open(p.tts_engine.__file__, encoding="utf-8").read()
-check("旁白固定写在 tts/narration.m4a",
-      'out_path = os.path.join(cache_dir(root), "narration.m4a")' in _eng_narr)
+check("旁白写在 tts/ 根下，文件名带内容指纹",
+      'out_path = os.path.join(cache_dir(root), "narration_%s.m4a" % key[:10])'
+      in _eng_narr and '"narration.m4a"' not in _eng_narr,
+      "narration_%s" in _eng_narr)
 for _key in ("打开旁白文件夹", "旁白另存为…", "把旁白存到你自己选的地方，工程跟着改用这份",
              "旁白没存下去", "旁白已存到：{path}",
              "旁白已生成，已放进时间线「音频」轨：{name}", "音频 (*.m4a)"):
     check("旁白位置词条四语齐 " + _key,
+          all(_i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")),
+          {_l: _i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")})
+
+# ---------------- 83 东西放哪：BGM / 资源包 / 封面都写出完整路径
+_media = p.persistent_media_dir()
+check("程序自己取的素材有固定目录",
+      os.path.isdir(_media) and os.path.abspath(_media).startswith(
+          os.path.abspath(p.components.data_dir())), _media)
+check("不再往临时目录里存 BGM", "FetchWorker(url, self.tmpdir" not in _src)
+check("取音源落在固定目录", "FetchWorker(url, persistent_media_dir()" in _src)
+check("BGM 文件名带链接指纹，不覆盖上一条",
+      'bgm_%s.m4a" % stamp' in _src and 'hashlib.sha1(' in _src)
+check("取完 BGM 写出完整路径",
+      'tr("BGM 已就绪：{total} · 文件在：{path}"' in _src
+      and 'path=path)' in _src)
+check("BGM 路径也挂在输入框 tooltip 上",
+      'self.edit_bgm.setToolTip(tr("当前 BGM：{path}", path=path))' in _src)
+check("资源包装完告诉用户装在哪",
+      'tr("{kind}「{name}」已经装进资源目录：\\n{path}"' in _src
+      and 'path=asset_dir(pkg["kind"])' in _src)
+check("设置页能打开资源文件夹",
+      'self.btn_asset_open.clicked.connect(self._open_assets)' in _src
+      and 'def _open_assets(self):' in _src
+      and 'subprocess.Popen(["explorer", os.path.normpath(folder)])' in _src)
+check("导出后状态栏给出封面完整路径",
+      'tr("（封面：{name}）", name=cover)' in _src
+      and 'name=os.path.basename(cover)' not in _src)
+check("导出完成对话框也写封面路径",
+      'body += tr("\\n\\n封面：\\n{path}", path=cover)' in _src)
+check("封面接口把路径交回来", "    return out_path" in _src)
+check("存完工程状态栏写出完整路径",
+      'tr("工程已保存：{path}", path=path)' in _src)
+check("封面成功时 SHOT 也打印路径", 'print("COVER_OK:", cover' in _src)
+for _key in ("BGM 已就绪：{total} · 文件在：{path}", "当前 BGM：{path}",
+             "打开资源文件夹", "在资源管理器里看这些包装在哪",
+             "{kind}「{name}」已经装进资源目录：\n{path}", "\n\n封面：\n{path}",
+             "工程已保存：{path}"):
+    check("路径提示词条四语齐 " + _key,
           all(_i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")),
           {_l: _i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")})
 

@@ -378,6 +378,23 @@ check("清理后总长变短", done["dur"] < raw["dur"] - 0.2, (raw["dur"], done
 check("清理后字幕提前", done["cues"][0]["start"] < raw["cues"][0]["start"] - 0.2,
       (raw["cues"][0]["start"], done["cues"][0]["start"]))
 
+# 同一个 tts/ 目录下，不同文稿的旁白不能互相覆盖
+_root = os.path.join(tmp, "tts_names")
+_a = T.synth_plan(T.make_plan("甲。", "edge"), provider="edge", voice="v1",
+                  root=_root, synth_fn=_fake_synth, cleanup=False)
+_b = T.synth_plan(T.make_plan("乙。", "edge"), provider="edge", voice="v1",
+                  root=_root, synth_fn=_fake_synth, cleanup=False)
+check("不同文稿的旁白分成两个文件", _a["audio"] != _b["audio"],
+      (_a["audio"], _b["audio"]))
+check("两份旁白都真的在", os.path.exists(_a["audio"]) and os.path.exists(_b["audio"]),
+      (_a["audio"], _b["audio"]))
+check("旁白文件名带内容指纹", os.path.basename(_a["audio"]).startswith("narration_"),
+      os.path.basename(_a["audio"]))
+_same = T.synth_plan(T.make_plan("甲。", "edge"), provider="edge", voice="v1",
+                     root=_root, synth_fn=_fake_synth, cleanup=False)
+check("同文稿再合一次还是同一个文件", _same["audio"] == _a["audio"],
+      (_same["audio"], _a["audio"]))
+
 
 # ---------------------------------------------------------------- 12 Gemini 接入
 body = T.gemini_body("今天聊一聊冬天为什么容易感冒。", "Kore")

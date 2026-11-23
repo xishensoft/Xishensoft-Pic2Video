@@ -839,9 +839,10 @@ def synth_plan(plan, *, provider: str = "edge", voice: str = "", rate: int = 0,
                 on_progress(i + 1, total, cached)
             except Exception:  # noqa: BLE001
                 pass
-    # 合成结果固定放在 tts/ 根下，名字一眼看得懂，别埋进按内容起的哈希目录里
+    # 合成结果固定放在 tts/ 根下，名字一眼看得懂，别埋进按内容起的哈希目录里；
+    # 文件名再带一小段内容指纹：两个工程各自合成旁白时不会互相覆盖。
     os.makedirs(cache_dir(root), exist_ok=True)
-    out_path = os.path.join(cache_dir(root), "narration.m4a")
+    out_path = os.path.join(cache_dir(root), "narration_%s.m4a" % key[:10])
     merge_segments(audio_paths, out_path, gap=gap)
     total_dur = probe_duration(out_path) or max(0.0, offset - gap)
     cues = normalize_cues(cues, total_dur)

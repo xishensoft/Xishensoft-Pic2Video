@@ -3091,3 +3091,64 @@ _TR_EXTRA53 = [
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA53:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA54 = [
+    (r"BGM 已就绪：{total} · 文件在：{path}",
+     "BGM 已就緒：{total} · 檔案在：{path}",
+     "BGM ready: {total} · file at: {path}",
+     "BGM 準備完了：{total} · ファイル：{path}",
+     "BGM 준비됨: {total} · 파일: {path}"),
+    (r"当前 BGM：{path}",
+     "目前 BGM：{path}",
+     "Current BGM: {path}",
+     "現在の BGM：{path}",
+     "현재 BGM: {path}"),
+    (r"打开资源文件夹",
+     "開啟資源資料夾",
+     "Open assets folder",
+     "リソースフォルダーを開く",
+     "리소스 폴더 열기"),
+    (r"在资源管理器里看这些包装在哪",
+     "在檔案總管裡看這些包裝在哪",
+     "Show these packages in Explorer",
+     "エクスプローラーでパッケージの場所を表示",
+     "탐색기에서 패키지 위치 보기"),
+    (r"{kind}「{name}」已经装进资源目录：\n{path}",
+     "{kind}「{name}」已經裝進資源目錄：\n{path}",
+     "{kind} \"{name}\" was installed into the assets folder:\n{path}",
+     "{kind}「{name}」をリソースフォルダーにインストールしました：\n{path}",
+     "{kind} \"{name}\"을(를) 리소스 폴더에 설치했습니다:\n{path}"),
+    (r"\n\n封面：\n{path}",
+     "\n\n封面：\n{path}",
+     "\n\nCover:\n{path}",
+     "\n\nカバー：\n{path}",
+     "\n\n커버:\n{path}"),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA54:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)
+_TR_EXTRA55 = [
+    ("{kind}「{name}」已经装进资源目录：\n{path}",
+     "{kind}「{name}」已經裝進資源目錄：\n{path}",
+     "{kind} \"{name}\" was installed into the assets folder:\n{path}",
+     "{kind}「{name}」をリソースフォルダーにインストールしました：\n{path}",
+     "{kind} \"{name}\"을(를) 리소스 폴더에 설치했습니다:\n{path}"),
+    ("\n\n封面：\n{path}",
+     "\n\n封面：\n{path}",
+     "\n\nCover:\n{path}",
+     "\n\nカバー：\n{path}",
+     "\n\n커버:\n{path}"),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA55:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)
+_TR_EXTRA56 = [
+    ("工程已保存：{path}",
+     "工程已儲存：{path}",
+     "Project saved: {path}",
+     "プロジェクトを保存しました：{path}",
+     "프로젝트 저장됨: {path}"),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA56:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)
