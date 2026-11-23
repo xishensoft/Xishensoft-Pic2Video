@@ -8661,9 +8661,7 @@ def run_gui() -> int:
             """按服务商换音色下拉；wanted 是上次用的，能选回来就选回来。"""
             voices = {
                 "edge": list(tts_engine.EDGE_ZH_VOICES),
-                "gemini": [("Kore", "Kore"), ("Puck", "Puck"),
-                           ("Aoede", "Aoede"), ("Charon", "Charon"),
-                           ("Fenrir", "Fenrir"), ("Leda", "Leda")],
+                "gemini": list(tts_engine.GEMINI_VOICES),
                 "azure": [("zh-CN-XiaoxiaoNeural", "晓晓（女声）"),
                           ("zh-CN-YunxiNeural", "云希（男声）"),
                           ("zh-CN-YunyangNeural", "云扬（男声）"),
@@ -8753,6 +8751,10 @@ def run_gui() -> int:
                     name=tr(spec["label"])))
             else:
                 self.lbl_tts_status.setText(tr("贴好文稿，选个音色，就能合成"))
+            self.spin_tts_rate.setEnabled(provider != "gemini")
+            self.spin_tts_rate.setToolTip(
+                tr("Gemini 没有语速参数：想快就自己改文稿")
+                if provider == "gemini" else tr("语速：只影响合成，不影响画面"))
             self.on_script_changed()
 
         def _tts_kwargs(self) -> dict:

@@ -3845,6 +3845,22 @@ check("清理词条四语齐", all("（已清理，响度 {lu} LUFS）" in _i18n
       {L: _i18n[L].get("（已清理，响度 {lu} LUFS）") for L in ("en", "ja")})
 
 
+
+# ---------------- 78 Gemini 配音接线
+check("Gemini 音色表来自引擎", '"gemini": list(tts_engine.GEMINI_VOICES)' in _src)
+check("Gemini 语速框会禁用",
+      'self.spin_tts_rate.setEnabled(provider != "gemini")' in _src)
+check("Gemini 没语速时给提示", "Gemini 没有语速参数：想快就自己改文稿" in _src)
+check("配音页会提示填 key",
+      "要自己的 key：填在「设置 → 配音」里。" in _src)
+check("引擎有 Gemini 模型名", "gemini-3.8-flash-tts" in
+      open(os.path.join(ROOT, "tts_engine.py"), encoding="utf-8").read())
+check("需要 key 的四家里 Gemini 其一",
+      p.tts_engine.TTS_PROVIDERS["gemini"]["needs_key"] is True)
+check("Gemini 词条四语齐",
+      all("Gemini 没有语速参数：想快就自己改文稿" in _i18n[L]
+          for L in ("zh-TW", "en", "ja", "ko")))
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

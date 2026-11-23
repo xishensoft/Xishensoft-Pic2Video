@@ -2996,3 +2996,20 @@ _TR_EXTRA48 = [
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA48:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+
+
+_TR_EXTRA49 = [
+    ("Gemini 没有语速参数：想快就自己改文稿",
+     "Gemini 沒有語速參數：想快就自己改文稿",
+     "Gemini has no speed setting: shorten the script instead",
+     "Gemini には速度設定がありません：速くしたいなら原稿を短くしてください",
+     "Gemini에는 속도 설정이 없습니다: 빠르게 하려면 원고를 줄이세요"),
+    ("语速：只影响合成，不影响画面",
+     "語速：只影響合成，不影響畫面",
+     "Speed: affects the narration only, not the video",
+     "速度：合成だけに影響し、映像には影響しません",
+     "속도: 합성에만 영향을 주며 영상에는 영향 없음"),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA49:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)

@@ -4,6 +4,7 @@
 不碰界面；只有 Edge 真合成与 ffmpeg 合并会联网/起进程，失败时记 SKIP 不算红。
 """
 import json
+import base64
 import os
 import sys
 import tempfile
@@ -264,7 +265,7 @@ check("摊出来的字幕不重叠",
           zip(T.spread_cues("第一句。第二句。第三句。", 3.0),
               T.spread_cues("第一句。第二句。第三句。", 3.0)[1:])))
 try:
-    T.synth_for("gemini")
+    T.synth_for("azure")
     ok = False
 except T.TtsError as exc:
     ok = exc.reason == "provider"
@@ -376,6 +377,140 @@ check("默认清理是开的", done["cleaned"] is True, done)
 check("清理后总长变短", done["dur"] < raw["dur"] - 0.2, (raw["dur"], done["dur"]))
 check("清理后字幕提前", done["cues"][0]["start"] < raw["cues"][0]["start"] - 0.2,
       (raw["cues"][0]["start"], done["cues"][0]["start"]))
+
+
+# ---------------------------------------------------------------- 12 Gemini 接入
+body = T.gemini_body("今天聊一聊冬天为什么容易感冒。", "Kore")
+check("Gemini 请求体带模型", body.get("model") == T.GEMINI_MODEL, body.get("model"))
+check("Gemini 用 interactions 的 input 结构",
+      body["input"][0]["type"] == "user_input"
+      and isinstance(body["input"][0]["content"], list), body.get("input"))
+gem_part = body["input"][0]["content"][0]
+check("Gemini 单说话人带 speech_metadata",
+      gem_part["annotations"][0]["type"] == "speech_metadata", gem_part)
+check("Gemini 单说话人给了 style", bool(gem_part["annotations"][0].get("style")))
+check("Gemini 单说话人 speech_config 是数组",
+      body["generation_config"]["speech_config"] == [{"voice": "Kore"}],
+      body["generation_config"])
+check("Gemini 要的是音频", body["response_format"] == {"type": "audio"})
+check("Gemini 音色没填就用默认",
+      T.gemini_body("x")["generation_config"]["speech_config"][0]["voice"]
+      == T.GEMINI_DEFAULT_VOICE)
+
+multi = T.gemini_body(
+    "", speakers=[{"speaker": "主讲", "voice": "Puck"},
+                  {"speaker": "听友", "voice": "Kore"}],
+    parts=[{"speaker": "主讲", "text": "今天怎么样？"},
+           {"speaker": "听友", "text": "还不错。"}])
+check("多说话人每段带 speaker",
+      [p["annotations"][0].get("speaker") for p in multi["input"][0]["content"]]
+      == ["主讲", "听友"], multi["input"][0]["content"])
+check("多说话人 speech_config 是对象",
+      multi["generation_config"]["speech_config"]["speakers"][1]["voice"] == "Kore",
+      multi["generation_config"])
+try:
+    T.gemini_body("", speakers=[{"speaker": "主讲", "voice": "Puck"}],
+                  parts=[{"speaker": "路人", "text": "喂"}])
+    bad_role = False
+except T.TtsError as exc:
+    bad_role = exc.reason == "text"
+check("对白里没配音色的角色要报错", bad_role)
+
+try:
+    T.synth_gemini("你好。", "Kore", 0, os.path.join(tmp, "nokey.mp3"))
+    gem_nokey = ""
+except T.TtsError as exc:
+    gem_nokey = exc.reason
+check("没填 key 报 no-key", gem_nokey == "no-key", gem_nokey)
+
+check("裸 PCM 能补出 RIFF 头",
+      T.pcm_wav_bytes(b"\x00\x01" * 10, 24000)[:4] == b"RIFF"
+      and len(T.pcm_wav_bytes(b"\x00\x01" * 10, 24000)) == 44 + 20)
+
+tiny = [{"start": 0.0, "end": 2.0, "text": "第一句"}, {"start": 2.0, "end": 4.0, "text": "第二句"}]
+scaled = T.scale_cues(tiny, 10.0)
+check("模板按实际时长等比缩放",
+      abs(scaled[0]["end"] - 5.0) < 0.01 and abs(scaled[1]["end"] - 10.0) < 0.01, scaled)
+check("模板时长为零就返回空", T.scale_cues(tiny, 0.0) == [])
+
+b64 = base64.b64encode(b"RIFFdata").decode()
+got = []
+T._walk_audio({"steps": [{"content": [{"type": "audio", "data": b64,
+                                      "mime_type": "audio/wav"}]}]}, got)
+check("interactions 的返回能取到音频", len(got) == 1 and got[0][1] == "audio/wav", got)
+got2 = []
+T._walk_audio({"candidates": [{"content": {"parts": [
+    {"inlineData": {"data": b64, "mimeType": "audio/l16;rate=24000"}}]}}]}, got2)
+check("老 generateContent 的返回也能取到音频",
+      len(got2) == 1 and "l16" in got2[0][1], got2)
+try:
+    T._gemini_audio({"steps": [{"content": [{"type": "text", "text": "空"}]}]})
+    no_audio = ""
+except T.TtsError as exc:
+    no_audio = exc.reason
+check("没有音频要报 provider", no_audio == "provider", no_audio)
+
+check("synth_for 认 gemini", T.synth_for("gemini") is T.synth_gemini)
+try:
+    T.synth_for("azure")
+    azure_open = True
+except T.TtsError as exc:
+    azure_open = False
+check("azure 还没接上要明确报错", not azure_open)
+
+# 429 重试：前两次报额度，第三次成功
+real_post = T._post_json
+real_sleep = T._sleep_cancel
+real_tpl = T.template_cues
+
+# 真转码：24k WAV → 单声道 mp3（同一份音频也用来做 429 重试的假返回）
+import wave
+wav_path = os.path.join(tmp, "gem_src.wav")
+with wave.open(wav_path, "wb") as wf:
+    wf.setnchannels(1)
+    wf.setsampwidth(2)
+    wf.setframerate(24000)
+    wf.writeframes(b"\x10\x27" * 12000)
+with open(wav_path, "rb") as fh:
+    wav_bytes = fh.read()
+mp3_path = os.path.join(tmp, "gem.mp3")
+T._audio_to_mp3(wav_bytes, "audio/wav", mp3_path)
+check("Gemini 的 wav 能转成 mp3", os.path.exists(mp3_path)
+      and abs(T.probe_duration(mp3_path) - 0.5) < 0.1,
+      T.probe_duration(mp3_path) if os.path.exists(mp3_path) else "missing")
+
+calls = {"n": 0}
+wav_for_gemini = base64.b64encode(wav_bytes).decode()
+
+
+def fake_post(url, payload, api_key, proxy="", timeout=180.0, headers=None):
+    calls["n"] += 1
+    if calls["n"] < 3:
+        raise T.TtsError("quota", "429")
+    return {"steps": [{"content": [{"type": "audio", "data": wav_for_gemini,
+                                    "mime_type": "audio/wav"}]}]}
+
+
+T._post_json = fake_post
+T._sleep_cancel = lambda sec, cancel=None: None
+T.template_cues = lambda text, dur, proxy="", cancel=None: []
+try:
+    syn = T.synth_gemini("你好，世界。", "Kore", 0, os.path.join(tmp, "retry.mp3"),
+                         api_key="k")
+    retried = calls["n"] == 3 and syn["dur"] > 0
+finally:
+    T._post_json = real_post
+    T._sleep_cancel = real_sleep
+    T.template_cues = real_tpl
+check("429 会退避重试直到成功", retried, calls["n"])
+
+
+check("key 不对会认成 auth",
+      T.classify_http(400, '{"error":{"reason":"API_KEY_INVALID"}}').reason == "auth")
+check("429 认成 quota", T.classify_http(429, "x").reason == "quota")
+check("额度不足的错误体也认 quota",
+      T.classify_http(400, '{"status":"RESOURCE_EXHAUSTED"}').reason == "quota")
+check("500 认成 network", T.classify_http(500, "boom").reason == "network")
 
 print()
 print("RESULT:", "ALL PASS" if not fails else "%d FAIL -> %s" % (len(fails), fails),

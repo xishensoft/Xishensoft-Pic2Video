@@ -30,7 +30,7 @@ TTS_PROVIDERS = {
              "note": "微软 Edge 朗读接口，不用 key，中文音色多、带时间戳"},
     "gemini": {"label": "Gemini", "needs_key": True, "key_name": "gemini_key",
                "timestamps": False, "chunk": 2800,
-               "note": "要自己的 API key；可多说话人；不给时间戳，字幕按字数摊"},
+               "note": "要自己的 API key；可多说话人；不给时间戳，字幕按 Edge 节奏对齐"},
     "azure": {"label": "Azure 语音", "needs_key": True, "key_name": "azure_key",
               "timestamps": False, "chunk": 1500,
               "note": "要 key 和区域；Edge 的正式版；免费层每月 50 万字"},
@@ -98,9 +98,12 @@ def tts_error_text(exc) -> str:
 
 
 def classify_http(code: int, body: str = "") -> "TtsError":
-    if code == 429:
+    low = str(body or "").lower()
+    if code == 429 or "resource_exhausted" in low:
         return TtsError("quota", body or "429")
-    if code in (401, 403):
+    # Gemini 的「key 不对」是 400 + API_KEY_INVALID，不能当成文稿问题
+    if (code in (401, 403) or "api key not valid" in low
+            or "api_key_invalid" in low or "unauthenticated" in low):
         return TtsError("auth", body or str(code))
     if code == 400:
         return TtsError("text", body or "400")
@@ -661,6 +664,7 @@ def synth_for(provider: str):
     """按提供方取合成函数；还没接的给出明确错误。"""
     table = {
         "edge": synth_edge,
+        "gemini": synth_gemini,
     }
     fn = table.get(provider)
     if fn is None:
@@ -843,4 +847,248 @@ def synth_edge(text: str, voice: str = "zh-CN-XiaoxiaoNeural", rate: int = 0,
     if dur <= 0:
         raise TtsError("provider", "生成的音频读不出时长")
     cues = normalize_cues(cues, dur)
+    return {"audio": out_path, "dur": dur, "cues": cues}
+
+
+# ---------------------------------------------------------------- Gemini 合成
+GEMINI_API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
+GEMINI_MODEL = "gemini-3.8-flash-tts"
+GEMINI_DEFAULT_VOICE = "Kore"
+GEMINI_STYLE = "warm and friendly, natural narration"
+GEMINI_RETRY_DELAYS = (2.0, 4.0, 8.0)     # 429 时等这么久再试
+
+GEMINI_VOICES = [
+    ("Kore", "Kore · 女声，温柔"),
+    ("Puck", "Puck · 男声，活泼"),
+    ("Aoede", "Aoede · 女声，轻快"),
+    ("Charon", "Charon · 男声，低沉"),
+    ("Fenrir", "Fenrir · 男声，有力"),
+    ("Leda", "Leda · 女声，年轻"),
+]
+
+
+def gemini_part(text: str, style: str = "", speaker: str = "") -> dict:
+    """一个 part：text + annotations 里的 speech_metadata（字段名是下划线）。"""
+    meta = {"type": "speech_metadata"}
+    if style:
+        meta["style"] = style
+    if speaker:
+        meta["speaker"] = speaker
+    return {"type": "text", "text": str(text or ""), "annotations": [meta]}
+
+
+def gemini_body(text: str, voice: str = "", style: str = GEMINI_STYLE,
+                speakers=None, parts=None) -> dict:
+    """拼 /v1beta/interactions 的请求体。
+
+    speakers 给了就是多说话人：内容用 parts（每段带 speaker），speech_config 变成
+    {"speakers": [...]}；否则单说话人，speech_config 是数组 [{"voice":...}]。
+    """
+    content = []
+    if speakers:
+        by_name = {str(s.get("speaker", "")): str(s.get("voice", "")) for s in speakers}
+        for piece in (parts or [{"text": text, "speaker": speakers[0].get("speaker", "")}]):
+            name = str(piece.get("speaker", ""))
+            if name not in by_name:
+                raise TtsError("text", "有台词的角色没配到音色")
+            content.append(gemini_part(piece.get("text", ""), style, name))
+        speech_config = {"speakers": [{"speaker": s.get("speaker", ""),
+                                       "voice": s.get("voice", "")} for s in speakers]}
+    else:
+        content.append(gemini_part(text, style))
+        speech_config = [{"voice": str(voice or GEMINI_DEFAULT_VOICE)}]
+    return {
+        "model": GEMINI_MODEL,
+        "input": [{"type": "user_input", "content": content}],
+        "response_format": {"type": "audio"},
+        "generation_config": {"speech_config": speech_config},
+    }
+
+
+def pcm_wav_bytes(data, rate: int = 24000, channels: int = 1, width: int = 2) -> bytes:
+    """裸 PCM 补个 RIFF 头（3.1 及更早的 unary 默认给 audio/l16）。"""
+    import struct
+    n = len(data)
+    head = b"RIFF" + struct.pack("<I", 36 + n) + b"WAVEfmt "
+    head += struct.pack("<IHHIIHH", 16, 1, max(1, channels), rate,
+                        rate * max(1, channels) * max(1, width),
+                        max(1, channels) * max(1, width), max(1, width) * 8)
+    head += b"data" + struct.pack("<I", n)
+    return head + bytes(data)
+
+
+def _walk_audio(obj, out: list) -> None:
+    """在返回 JSON 里找 base64 音频：interactions 是 steps[].content[].data，
+    老 generateContent 是 candidates[].content.parts[].inlineData。"""
+    if isinstance(obj, dict):
+        inline = obj.get("inlineData") or obj.get("inline_data")
+        if isinstance(inline, dict) and inline.get("data"):
+            out.append((inline["data"], inline.get("mimeType")
+                        or inline.get("mime_type") or "audio/wav"))
+            return
+        data = obj.get("data")
+        if isinstance(data, str) and data:
+            mime = obj.get("mime_type") or obj.get("mimeType") or ""
+            if "audio" in str(mime):
+                out.append((data, mime))
+                return
+        for v in obj.values():
+            _walk_audio(v, out)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            _walk_audio(v, out)
+
+
+def _gemini_audio(obj) -> tuple:
+    found = []
+    _walk_audio(obj, found)
+    if not found:
+        raise TtsError("provider", "服务商没返回音频")
+    import base64
+    data, mime = found[0]
+    try:
+        raw = base64.b64decode(data)
+    except Exception as exc:  # noqa: BLE001
+        raise TtsError("provider", "返回的音频解不开：%s" % exc) from exc
+    if not raw:
+        raise TtsError("provider", "返回的音频是空的")
+    return raw, str(mime or "")
+
+
+def _post_json(url: str, payload: dict, api_key: str, proxy: str = "",
+               timeout: float = 180.0, headers=None) -> dict:
+    import urllib.error
+    import urllib.request
+    head = {"Content-Type": "application/json"}
+    if api_key:
+        head["x-goog-api-key"] = api_key
+    head.update(headers or {})
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers=head, method="POST")
+    if proxy:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    else:
+        opener = urllib.request.build_opener()
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read()[:600].decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            detail = ""
+        raise classify_http(int(getattr(exc, "code", 0) or 0), detail) from exc
+    except (TimeoutError, OSError) as exc:
+        raise TtsError("network", str(exc) or "连不上") from exc
+    try:
+        return json.loads(raw.decode("utf-8", "replace") or "{}")
+    except ValueError as exc:
+        raise TtsError("provider", "返回的不是 JSON：%s" % exc) from exc
+
+
+def _sleep_cancel(sec: float, cancel=None) -> None:
+    """等一会儿，但每 0.25 秒看一眼有没有被取消。"""
+    end = time.time() + max(0.0, float(sec))
+    while time.time() < end:
+        if cancel is not None and cancel.is_set():
+            raise TtsError("cancelled", "已取消")
+        time.sleep(min(0.25, max(0.0, end - time.time())))
+
+
+def _audio_to_mp3(raw: bytes, mime: str, out_path: str) -> None:
+    """把服务商给的音频（wav / 裸 PCM / mp3）转成统一的单声道 mp3。"""
+    mime = str(mime or "").lower()
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+    if "l16" in mime or "pcm" in mime:
+        raw = pcm_wav_bytes(raw, 24000)
+        ext = ".wav"
+    elif "wav" in mime or raw[:4] == b"RIFF":
+        ext = ".wav"
+    elif "mpeg" in mime or "mp3" in mime or raw[:3] == b"ID3":
+        ext = ".mp3"
+    else:
+        ext = ".wav" if raw[:4] == b"RIFF" else ".mp3"
+    tmp = out_path + ".src" + ext
+    with open(tmp, "wb") as fh:
+        fh.write(raw)
+    try:
+        ok = run_ffmpeg_retry(["-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+                               "-i", tmp, "-vn", "-c:a", "libmp3lame",
+                               "-b:a", TTS_BITRATE, "-ar", "48000", "-ac", "1",
+                               out_path])
+        if not ok:
+            raise TtsError("provider", "音频转码失败")
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def scale_cues(cues, dur: float) -> list:
+    """把一套字幕按比例缩放到实际时长（Edge 当模板时用）。"""
+    cues = normalize_cues(cues, 0.0)
+    span = cues_total(cues)
+    if span <= 0 or dur <= 0:
+        return []
+    k = float(dur) / span
+    return normalize_cues([{"start": c["start"] * k, "end": c["end"] * k,
+                            "text": c["text"]} for c in cues], dur)
+
+
+def template_cues(text: str, dur: float, proxy: str = "", cancel=None) -> list:
+    """没有时间戳的提供方：用同一段文本跑一遍 Edge，拿它的断句节奏当模板。
+
+    失败就返回空（调用方会退回按字数摊），不把配音搞挂。
+    """
+    plain = re.sub(r"<[^>]{1,20}>", "", str(text or ""))
+    if not plain.strip() or dur <= 0:
+        return []
+    tmp = ""
+    try:
+        import tempfile
+        fd, tmp = tempfile.mkstemp(prefix="p2v_tpl_", suffix=".mp3")
+        os.close(fd)
+        got = asyncio.run(_edge_collect(plain, "zh-CN-XiaoxiaoNeural", 0, tmp,
+                                        proxy, cancel))
+        cues = cue_from_words(got.get("words") or [], plain)
+        return scale_cues(cues, dur)
+    except Exception:  # noqa: BLE001
+        return []
+    finally:
+        if tmp:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+def synth_gemini(text: str, voice: str = "", rate: int = 0, out_path: str = "",
+                 api_key: str = "", base_url: str = "", proxy: str = "",
+                 cancel=None, speakers=None, parts=None) -> dict:
+    """Gemini TTS：/v1beta/interactions。rate 不生效（这家没有语速参数）。"""
+    if not str(text or "").strip() and not parts:
+        raise TtsError("text", "文稿是空的")
+    if not api_key:
+        raise TtsError("no-key", "Gemini 要自己的 API key")
+    root = str(base_url or GEMINI_API_ROOT).rstrip("/")
+    body = gemini_body(text, voice, GEMINI_STYLE, speakers, parts)
+    data = None
+    for i, delay in enumerate(GEMINI_RETRY_DELAYS + (0.0,)):
+        try:
+            data = _post_json(root + "/interactions", body, api_key, proxy)
+            break
+        except TtsError as exc:
+            if exc.reason != "quota" or i >= len(GEMINI_RETRY_DELAYS):
+                raise
+            _sleep_cancel(delay, cancel)
+    raw, mime = _gemini_audio(data or {})
+    _audio_to_mp3(raw, mime, out_path)
+    dur = probe_duration(out_path)
+    if dur <= 0:
+        raise TtsError("provider", "生成的音频读不出时长")
+    cues = template_cues(text, dur, proxy, cancel) if not speakers else []
+    if not cues:
+        cues = spread_cues(str(text or ""), dur)
     return {"audio": out_path, "dur": dur, "cues": cues}
