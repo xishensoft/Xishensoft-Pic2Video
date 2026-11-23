@@ -2,6 +2,7 @@ __pycache__/
 peaks/
 _*.log
 _*.txt
+*.baiduyun.uploading.cfg
 *.pyc
 build/
 build2/

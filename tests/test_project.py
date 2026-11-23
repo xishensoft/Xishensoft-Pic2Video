@@ -3329,6 +3329,124 @@ check("撤回后换语言/主题仍然生效", "self.apply_theme()" in _undo_bod
 check("撤回后素材列表跟着刷新（走 retranslate 里的 _refresh_all）",
       "self._refresh_all()" in _func_body("retranslate", "_player_retranslate"))
 
+# ---------------- 71 用起来顺手的修补（多选 / 方向键 / 批量重定位…）
+_sel_body = _func_body("_selected_rows", "_select_rows")
+check("列表多选：SelectionMode 是 ExtendedSelection",
+      "SelectionMode.ExtendedSelection" in _src)
+check("列表选中一改就同步时间线", "itemSelectionChanged.connect(self.on_selection_changed)"
+      in _src)
+check("选中行先看列表选中、再回落到当前行",
+      "self.list.selectedItems()" in _sel_body and "currentRow()" in _sel_body)
+check("没选中时返回空表而不是 [-1]", "if row >= 0" in _sel_body)
+_sync_body = _func_body("_sync_selection", "on_selection_changed")
+check("同步选中走 _selected_rows 并设时间线",
+      "self.timeline.set_selection(self._selected_rows())" in _sync_body)
+_pick_body = _func_body("on_timeline_pick", "on_timeline_resize")
+check("时间线上点选也会回头高亮列表", "self._select_rows(rows)" in _pick_body)
+check("时间线多选时不再被 setCurrentRow 缩成一行",
+      "NoUpdate" in _func_body("_select_rows", "_sync_selection"))
+
+_rm_body = _func_body("on_remove", "on_edit_dur")
+check("删除按选中的那几行走，不再只删当前行",
+      "rows = self._selected_rows()" in _rm_body
+      and "self.project.remove(rows)" in _rm_body
+      and "currentRow" not in _rm_body)
+_mv_body = _func_body("on_move", "on_remove")
+check("上移/下移支持整块挪",
+      "for i in order:" in _mv_body and "reversed(rows)" in _mv_body)
+check("挪完把选中还原到新位置",
+      "self._select_rows(" in _mv_body)
+_ed_body = _func_body("on_edit_dur", "on_rows_moved")
+check("双击改时长支持多选一起改",
+      "for i in rows:" in _ed_body and "选中的 {n} 张一起改（秒）：" in _ed_body)
+check("多选改时长有专门的标题", "改选中图片的时长" in _ed_body)
+
+check("音乐链接输入框回车就取音轨",
+      "self.edit_bgm.returnPressed.connect(self.start_fetch)" in _src)
+
+_ev_body = _func_body("eventFilter", "on_scrub_start")
+check("方向键可步进播放头", "Qt.Key.Key_Left" in _ev_body
+      and "Qt.Key.Key_Right" in _ev_body)
+check("Shift+方向键一秒、否则一帧",
+      "ShiftModifier" in _ev_body and '1.0 / max(1.0, float(self.settings["fps"]))'
+      in _ev_body)
+check("Home / End 跳首尾",
+      "Qt.Key.Key_Home" in _ev_body and "_export_total()" in _ev_body)
+check("输入框/下拉框/列表里不抢方向键",
+      "QLineEdit, QTextEdit, QPlainTextEdit," in _ev_body
+      and "QAbstractSpinBox, QComboBox," in _ev_body)
+check("模态框打开时不插手", "QApplication.activeModalWidget()" in _ev_body)
+check("全应用装了这个过滤器",
+      "QApplication.instance().installEventFilter(self)" in _src)
+
+check("时间线块上带文件名并按宽度截断",
+      'os.path.basename(clip.path or "")' in _src
+      and "elidedText(" in _src)
+
+_rl_body = _func_body("_relink_missing", "on_save_project")
+check("多个素材丢了可以先一起选文件夹",
+      "一起重新定位" in _rl_body and "_relink_from_folder" in _rl_body)
+_fd_body = _func_body("_relink_from_folder", "_relink_missing")
+check("按文件名在文件夹里找替身",
+      "os.path.join(folder, os.path.basename(old))" in _fd_body)
+
+_ux_keys = ["改选中图片的时长", "选中的 {n} 张一起改（秒）：", "一起重新定位",
+            "选文件夹…", "一个个来", "选这些素材现在所在的文件夹"]
+check("新词条四语齐全",
+      all(k in _i18n.get(lang, {}) for k in _ux_keys
+          for lang in ("zh-TW", "en", "ja", "ko")),
+      [k for k in _ux_keys if any(k not in _i18n.get(l, {}) for l in
+                                  ("zh-TW", "en", "ja", "ko"))])
+check("批量重定位的说明句子四语齐全",
+      all("有 {n} 个素材不见了。要是它们还在同一个文件夹里，可以一次选文件夹，按文件名自动对上。"
+          in _i18n.get(l, {}) for l in ("zh-TW", "en", "ja", "ko")))
+
+# ---------------- 72 拖拽重排要保住每段的设置
+_pj = p.Project()
+for _i in range(3):
+    _pj.clips.append(p.Clip(os.path.join(tmp, "r%d.png" % _i), 2.0 + _i))
+_pj.clips[0].fade = True
+_pj.clips[0].xfade = True
+_pj.clips[0].xfade_name = "wipeleft"
+_pj.clips[0].xfade_dur = 0.5
+_pj.clips[0].src_in, _pj.clips[0].src_out = 1.0, 4.0
+_pj.clips[1].kind = "intro"
+_objs = list(_pj.clips)
+check("reorder_clips 接受一个排列", _pj.reorder_clips([2, 0, 1]) is True)
+check("重排后顺序就是给的顺序", _pj.clips == [_objs[2], _objs[0], _objs[1]])
+check("重排后调色/转场/淡入淡出还在",
+      _pj.clips[1].fade and _pj.clips[1].xfade
+      and _pj.clips[1].xfade_name == "wipeleft"
+      and abs(_pj.clips[1].xfade_dur - 0.5) < 1e-9)
+check("重排后入出点还在",
+      abs(_pj.clips[1].src_in - 1.0) < 1e-9
+      and abs(_pj.clips[1].src_out - 4.0) < 1e-9)
+check("重排后片头标记还在", _pj.clips[2].kind == "intro")
+check("重排后时长没被归一化改掉",
+      [round(c.dur, 3) for c in _pj.clips] == [4.0, 2.0, 3.0])
+check("不是排列就拒绝（重复下标）", _pj.reorder_clips([0, 0, 1]) is False)
+check("不是排列就拒绝（长度不对）", _pj.reorder_clips([0, 1]) is False)
+check("不是排列就拒绝（越界）", _pj.reorder_clips([0, 1, 9]) is False)
+_before = list(_pj.clips)
+_pj.reorder_clips([0, 0, 1])
+check("拒绝时一段都不动", _pj.clips == _before)
+_old = p.Project()
+_old.clips = [p.Clip(os.path.join(tmp, "o%d.png" % _i), 1.0) for _i in range(2)]
+_old.reorder([(os.path.join(tmp, "o1.png"), 1.0),
+              (os.path.join(tmp, "o0.png"), 1.0)])
+check("老的 reorder 还留着当兜底",
+      [os.path.basename(c.path) for c in _old.clips] == ["o1.png", "o0.png"])
+
+check("列表项记着原始下标",
+      "it.setData(Qt.ItemDataRole.UserRole + 2, i)" in _src)
+_moved_body = _func_body("on_rows_moved", "on_row_changed")
+check("拖拽重排按原始下标找回 Clip",
+      "UserRole + 2" in _moved_body and "reorder_clips(iids)" in _moved_body)
+check("认不出下标时才退回重建",
+      "self.project.reorder(pairs)" in _moved_body)
+check("重排后把选中还原回新位置",
+      "iids.index(k)" in _moved_body)
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

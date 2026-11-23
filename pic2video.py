@@ -2145,6 +2145,18 @@ class Project:
         self.clips = [Clip(p, d) for p, d in paths_and_durs]
         self.normalize()
 
+    def reorder_clips(self, order) -> bool:
+        """按现有 Clip 对象重排，保住调色/转场/入出点/片头片尾这些字段。
+
+        order 必须是 0..n-1 的一个排列；对不上就不动，交给老办法重建。
+        """
+        n = len(self.clips)
+        if len(order) != n or sorted(order) != list(range(n)):
+            return False
+        self.clips = [self.clips[i] for i in order]
+        self.normalize()
+        return True
+
     def move_to(self, index: int, pos: float):
         """把第 index 个视频元素挪到时间线上的 pos（秒）附近。"""
         if not (0 <= index < len(self.clips)):
@@ -4041,9 +4053,9 @@ def cli_export(argv: list[str]) -> int:
 # ---------------------------------------------------------------- 窗口
 
 def run_gui() -> int:
-    from PyQt6.QtCore import (QEvent, QEventLoop, QLibraryInfo, QPoint, QPointF,
-                              QRect, QSize, Qt, QThread, QTimer, QTranslator,
-                              QUrl, pyqtSignal)
+    from PyQt6.QtCore import (QEvent, QEventLoop, QItemSelectionModel,
+                              QLibraryInfo, QPoint, QPointF, QRect, QSize, Qt,
+                              QThread, QTimer, QTranslator, QUrl, pyqtSignal)
     from PyQt6.QtGui import (QBrush, QColor, QConicalGradient, QFont,
                             QFontDatabase, QIcon,
                             QImageReader, QKeySequence, QLinearGradient,
@@ -4051,7 +4063,8 @@ def run_gui() -> int:
                             QPolygonF, QShortcut)
     from PyQt6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
     from PyQt6.QtWidgets import (
-        QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QColorDialog,
+        QAbstractItemView, QAbstractSpinBox, QApplication, QButtonGroup,
+        QCheckBox, QColorDialog,
         QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
         QFontComboBox,
         QFormLayout, QFrame, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit,
@@ -5307,8 +5320,15 @@ def run_gui() -> int:
                         marks += "◐"
                     if clip.xfade:
                         marks += "⇄"
-                    p.drawText(int(x0) + 6, top + 15,
-                               f"{name} · {d:.1f}s {marks}")
+                    text = f"{name} · {d:.1f}s {marks}"
+                    base = os.path.basename(clip.path or "")
+                    if base and x1 - x0 > 80:
+                        # 块够宽就把文件名也写上，几张相似的图才分得清
+                        text = f"{name} · {base} · {d:.1f}s {marks}"
+                        text = p.fontMetrics().elidedText(
+                            text, Qt.TextElideMode.ElideRight,
+                            int(x1 - x0) - 12)
+                    p.drawText(int(x0) + 6, top + 15, text)
                 if clip.xfade and i < len(spans) - 1:
                     crosses += 1
                     p.setPen(QPen(QColor(self.c["playhead"]), 1,
@@ -6745,6 +6765,8 @@ def run_gui() -> int:
             self._frame_timer.setInterval(16)
             self._frame_timer.timeout.connect(self._tick_frame)
             self._frame_timer.start()
+            # 方向键 / Home / End 全局步进播放头（输入框里不抢）
+            QApplication.instance().installEventFilter(self)
 
             self.player = QMediaPlayer(self)
             self.audio_out = QAudioOutput(self)
@@ -6942,11 +6964,43 @@ def run_gui() -> int:
             if picked == 0:
                 self._relink_missing(missing)
 
+        def _relink_from_folder(self, missing: list[str]) -> set:
+            """整个文件夹搬走了：选一次文件夹，按文件名自动对上。"""
+            if not missing:
+                return set()
+            start = os.path.dirname(missing[0]) or self._project_dir()
+            folder = QFileDialog.getExistingDirectory(
+                self, tr("选这些素材现在所在的文件夹"), start)
+            if not folder:
+                return set()
+            done = set()
+            for old in missing:
+                if os.path.exists(old):
+                    continue
+                cand = os.path.join(folder, os.path.basename(old))
+                if os.path.isfile(cand) and self.project.relink_media(old, cand):
+                    done.add(old)
+                    log("relink %s -> %s" % (old, cand))
+            return done
+
         def _relink_missing(self, missing: list[str]):
             """挨个问新位置；同一条素材被引用几次就一起换掉。"""
             changed = False
-            for old in missing:
-                if os.path.exists(old):
+            todo = [p for p in missing if not os.path.exists(p)]
+            done = set()
+            if len(todo) >= 2:
+                picked = MsgBox.choose(
+                    self, tr("一起重新定位"),
+                    tr("有 {n} 个素材不见了。要是它们还在同一个文件夹里，"
+                       "可以一次选文件夹，按文件名自动对上。", n=len(todo)),
+                    [(tr("选文件夹…"), "primary"), (tr("一个个来"), "plain")],
+                    "ask")
+                if picked == 0:
+                    done = self._relink_from_folder(todo)
+                    if done:
+                        changed = True
+            for old in todo:
+                if old in done or os.path.exists(old):
                     continue
                 ext = os.path.splitext(old)[1].lower()
                 filt = tr("同一类文件 (*%s)") % ext if ext else ""
@@ -7278,13 +7332,15 @@ def run_gui() -> int:
             self.list.setIconSize(QSize(96, 54))
             self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
             self.list.setDefaultDropAction(Qt.DropAction.MoveAction)
-            self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+            self.list.setSelectionMode(
+                QAbstractItemView.SelectionMode.ExtendedSelection)
             self.list.setMinimumWidth(300)
             self.list.setStyleSheet("QListWidget::item{padding:4px 2px;}")
             self.list.order_changed.connect(self.on_rows_moved)
             self.list.drop_files.connect(self.on_drop_into_list)
             self.list.itemDoubleClicked.connect(self.on_edit_dur)
             self.list.currentRowChanged.connect(self.on_row_changed)
+            self.list.itemSelectionChanged.connect(self.on_selection_changed)
             self.list.setContextMenuPolicy(
                 Qt.ContextMenuPolicy.CustomContextMenu)
             self.list.customContextMenuRequested.connect(self.on_list_menu)
@@ -7420,6 +7476,7 @@ def run_gui() -> int:
             self.edit_bgm.setPlaceholderText(
                 tr("B 站 / 抖音 / YouTube / 快手等链接，或把本地音视频拖进来，自动取整条音轨"))
             self.edit_bgm.textEdited.connect(self.on_bgm_typed)
+            self.edit_bgm.returnPressed.connect(self.start_fetch)
             bgm.addWidget(self.edit_bgm, 1)
             self.btn_retry = QPushButton(tr("重试"))
             self.btn_retry.setEnabled(False)
@@ -7744,6 +7801,8 @@ def run_gui() -> int:
                 it = QListWidgetItem(self._thumb(c.path, c.kind), "")
                 it.setData(Qt.ItemDataRole.UserRole, c.path)
                 it.setData(Qt.ItemDataRole.UserRole + 1, c.dur)
+                # 拖拽重排时按这个号找回原来的 Clip（别把调色/转场丢了）
+                it.setData(Qt.ItemDataRole.UserRole + 2, i)
                 self.list.addItem(it)
             self._update_titles()
             if 0 <= cur < self.list.count():
@@ -7925,56 +7984,113 @@ def run_gui() -> int:
             self._refresh_all()
             self._history_push(label)
 
-        def on_move(self, delta):
-            row = self.list.currentRow()
-            if row < 0:
+        def _selected_rows(self):
+            """列表里选中的行；一个都没选就用当前行。"""
+            rows = [self.list.row(it) for it in self.list.selectedItems()]
+            if not rows:
+                row = self.list.currentRow()
+                rows = [row] if row >= 0 else []
+            return sorted(set(rows))
+
+        def _select_rows(self, rows):
+            """按行号重设列表选中（刷新后把选中还原回去）。"""
+            self.list.blockSignals(True)
+            self.list.clearSelection()
+            keep = []
+            for r in rows:
+                it = self.list.item(r) if 0 <= r < self.list.count() else None
+                if it is not None:
+                    it.setSelected(True)
+                    keep.append(r)
+            if keep:
+                self.list.setCurrentItem(
+                    self.list.item(keep[0]),
+                    QItemSelectionModel.SelectionFlag.NoUpdate)
+            self.list.blockSignals(False)
+            self._sync_selection()
+
+        def _sync_selection(self):
+            """列表选中 → 时间线高亮，两边始终指同一批段。"""
+            if self._rebuilding:
                 return
-            self.project.move(row, delta)
+            self.timeline.set_selection(self._selected_rows())
+
+        def on_selection_changed(self):
+            self._sync_selection()
+
+        def on_move(self, delta):
+            rows = self._selected_rows()
+            if not rows:
+                return
+            order = rows if delta < 0 else list(reversed(rows))
+            for i in order:
+                self.project.move(i, delta)
             self._refresh_all()
+            self._select_rows([max(0, min(i + delta, self.list.count() - 1))
+                               for i in rows])
             self._history_push(tr("调整顺序"))
-            self.list.setCurrentRow(max(0, min(row + delta, self.list.count() - 1)))
 
         def on_remove(self):
-            row = self.list.currentRow()
-            if row < 0:
+            rows = self._selected_rows()
+            if not rows:
                 return
-            log("remove image row=%d" % row)
-            self.project.remove([row])
+            log("remove image rows=%s" % rows)
+            self.project.remove(rows)
+            self.timeline.set_selection([])
             self._refresh_all()
+            self.list.clearSelection()
             self._history_push(tr("删除素材"))
 
         def on_edit_dur(self, item):
             row = self.list.row(item)
-            if not (0 <= row < len(self.project.clips)):
+            rows = self._selected_rows()
+            if row not in rows:
+                rows = [row] if row >= 0 else []
+            rows = [r for r in rows if 0 <= r < len(self.project.clips)]
+            if not rows:
                 return
-            cur = self.project.clips[row].dur
+            cur = self.project.clips[rows[0]].dur
+            many = len(rows) > 1
             val, ok = NumberDialog.get_double(
-                self, tr("这张图显示多久"),
-                tr("第 {row} 张（秒）：", row=row + 1), cur, MIN_DUR, 3600, 1)
-            if ok:
-                log("duration row=%d %.2f -> %.2f" % (row, cur, val))
-                self.project.set_duration(row, val)
-                self._refresh_all()
-                self._history_push(tr("改时长"))
+                self,
+                tr("改选中图片的时长") if many else tr("这张图显示多久"),
+                tr("选中的 {n} 张一起改（秒）：", n=len(rows)) if many
+                else tr("第 {row} 张（秒）：", row=rows[0] + 1),
+                cur, MIN_DUR, 3600, 1)
+            if not ok:
+                return
+            log("duration rows=%s %.2f -> %.2f" % (rows, cur, val))
+            for i in rows:
+                self.project.set_duration(i, val)
+            self._refresh_all()
+            self._select_rows(rows)
+            self._history_push(tr("改时长"))
 
         def on_rows_moved(self, *_a):
             if self._rebuilding:
                 return
-            pairs = []
+            order = []
             for i in range(self.list.count()):
                 it = self.list.item(i)
-                pairs.append((it.data(Qt.ItemDataRole.UserRole),
-                              float(it.data(Qt.ItemDataRole.UserRole + 1))))
-            self.project.reorder(pairs)
+                order.append(it.data(Qt.ItemDataRole.UserRole + 2))
+            keep = [order[r] for r in self._selected_rows()
+                    if r < len(order) and isinstance(order[r], int)]
+            iids = [k for k in order if isinstance(k, int)]
+            ok = len(iids) == len(order) and self.project.reorder_clips(iids)
+            if not ok:      # 拿不到原对象（老数据/外部改动）才退回重建
+                pairs = []
+                for i in range(self.list.count()):
+                    it = self.list.item(i)
+                    pairs.append((it.data(Qt.ItemDataRole.UserRole),
+                                  float(it.data(Qt.ItemDataRole.UserRole + 1))))
+                self.project.reorder(pairs)
             self._refresh_all()
+            if ok and keep:
+                self._select_rows([iids.index(k) for k in keep if k in iids])
             self._history_push(tr("调整顺序"))
 
         def on_row_changed(self, row):
-            if row < 0:
-                self.timeline.set_selection([])
-            else:
-                rows = [self.list.row(it) for it in self.list.selectedItems()]
-                self.timeline.set_selection(rows or [row])
+            self._sync_selection()
 
         def on_mode(self, mode):
             set_mode(self.project, mode)
@@ -7990,11 +8106,12 @@ def run_gui() -> int:
             self._history_push(tr("改节奏"))
 
         def on_timeline_pick(self, i):
-            if 0 <= i < self.list.count():
-                self.list.blockSignals(True)
-                self.list.setCurrentRow(i)
-                self.list.blockSignals(False)
-            self.timeline.set_selection(self.timeline.selected or [i])
+            """时间线上点了/框了几段 → 列表也跟着高亮同一批。"""
+            rows = [r for r in (self.timeline.selected or [i])
+                    if 0 <= r < self.list.count()]
+            if rows:
+                self._select_rows(rows)
+            self.timeline.set_selection(rows or [i])
 
         def on_timeline_resize(self, i, value):
             log("timeline resize i=%d -> %.2f" % (i, value))
@@ -8700,6 +8817,34 @@ def run_gui() -> int:
         def on_skip(self, delta: float):
             t = self._playhead() + delta
             self.seek(max(0.0, t))
+
+        def eventFilter(self, obj, ev):
+            """←/→ 一帧，Shift+←/→ 一秒，Home/End 跳首尾。
+
+            装在 QApplication 上，所以要绕开输入框、下拉框、列表这些
+            自己要用方向键的控件。
+            """
+            if (ev.type() != QEvent.Type.KeyPress
+                    or QApplication.activeModalWidget() is not None
+                    or not self.isActiveWindow()):
+                return super().eventFilter(obj, ev)
+            focus = QApplication.focusWidget()
+            if isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit,
+                                  QAbstractSpinBox, QComboBox,
+                                  QAbstractItemView, QSlider)):
+                return super().eventFilter(obj, ev)
+            key = ev.key()
+            if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+                step = 1.0
+                if not (ev.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                    step = 1.0 / max(1.0, float(self.settings["fps"]))
+                self.on_skip(-step if key == Qt.Key.Key_Left else step)
+                return True
+            if key in (Qt.Key.Key_Home, Qt.Key.Key_End):
+                self.seek(0.0 if key == Qt.Key.Key_Home
+                          else self._export_total())
+                return True
+            return super().eventFilter(obj, ev)
 
         def on_scrub_start(self):
             self._scrubbing = True

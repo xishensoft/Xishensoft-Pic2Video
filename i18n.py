@@ -2755,3 +2755,31 @@ _TR_EXTRA39 = {
 for _k, _trs in _TR_EXTRA39.items():
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
         TR[_lang].setdefault(_k, _v)
+
+# 多选 / 批量重定位（UX 打磨）
+_TR_EXTRA40 = {
+    "改选中图片的时长": ("改選中圖片的時長", "Change duration of selection",
+                 "選択した画像の長さを変更",
+                 "선택한 이미지의 길이 변경"),
+    "选中的 {n} 张一起改（秒）：": ("選中的 {n} 張一起改（秒）：",
+                          "Change all {n} selected clips to (seconds): ",
+                          "選択した {n} 枚をまとめて変更（秒）：",
+                          "선택한 {n} 장을 한꺼번에 변경(초): "),
+    "一起重新定位": ("一起重新定位", "Relink them together",
+               "まとめて再指定", "한꺼번에 다시 지정"),
+    "有 {n} 个素材不见了。要是它们还在同一个文件夹里，可以一次选文件夹，按文件名自动对上。": (
+        "有 {n} 個素材不見了。要是它們還在同一個資料夾裡，可以一次選資料夾，按檔名自動對上。",
+        "Missing {n} clips. If they are still in one folder, pick that folder once and the files will be matched by name.",
+        "{n} 個の素材が見つかりません。同じフォルダーにあるなら、フォルダーを一度選ぶだけでファイル名から自動で対応づけます。",
+        "素材 {n} 개를 찾을 수 없습니다. 같은 폴더에 있다면 폴더를 한 번 고르면 파일 이름으로 자동 연결합니다."),
+    "选文件夹…": ("選資料夾…", "Pick folder…", "フォルダーを選ぶ…",
+              "폴더 선택…"),
+    "一个个来": ("一個個來", "One by one", "1 つずつ", "하나씩"),
+    "选这些素材现在所在的文件夹": ("選這些素材現在所在的資料夾",
+                       "Pick the folder these clips are in now",
+                       "これらの素材が今あるフォルダーを選ぶ",
+                       "이素材들이 지금 있는 폴더 선택"),
+}
+for _k, _trs in _TR_EXTRA40.items():
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), _trs):
+        TR[_lang].setdefault(_k, _v)
