@@ -3013,3 +3013,16 @@ _TR_EXTRA49 = [
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA49:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+
+
+_TR_EXTRA50 = [
+    ("对话稿里「听友」用这个音色", "對話稿裡「聽友」用這個音色", "The guest voice for dialogue scripts", "対話原稿の「聞き手」に使う声", "대화 원고의 '청취자' 목소리"),
+    ("音色 B", "音色 B", "Voice B", "声 B", "목소리 B"),
+    ("字幕带「主讲：」这样的前缀", "字幕帶「主講：」這樣的前綴", "Prefix captions with the speaker name", "字幕に話者名の接頭辞を付ける", "자막에 화자 이름 접두어 붙이기"),
+    ("勾上以后字幕会写成「主讲：……」，不勾只写台词", "勾上以後字幕會寫成「主講：……」，不勾只寫台詞", "Captions read 'Host: ...' when on; just the line when off", "オンのとき字幕は「ホスト：……」、オフなら台詞のみ", "켜면 자막이 '진행자: …'로 표시되고, 끄면 대사만 표시됩니다"),
+    ("字幕前缀", "字幕前綴", "Caption prefix", "字幕の接頭辞", "자막 접두어"),
+    ("对话稿：主讲 {a} 轮、听友 {b} 轮，会切成 {n} 段", "對話稿：主講 {a} 輪、聽友 {b} 輪，會切成 {n} 段", "Dialogue: {a} host / {b} guest turns, {n} chunks", "対話原稿：ホスト {a} 回・聞き手 {b} 回、{n} 分割", "대화 원고: 진행자 {a}턴 / 청취자 {b}턴, {n}개 구간"),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA50:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)

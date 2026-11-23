@@ -512,6 +512,56 @@ check("额度不足的错误体也认 quota",
       T.classify_http(400, '{"status":"RESOURCE_EXHAUSTED"}').reason == "quota")
 check("500 认成 network", T.classify_http(500, "boom").reason == "network")
 
+
+
+# ---------------- 13 对话模式（主讲 / 听友）
+script = "开场白不算。\n主讲：第一句台词。\n接着说完。\n听友: 我插一句。\n主讲：收个尾。"
+turns = T.parse_dialogue(script)
+check("认出三轮对话", len(turns) == 3, turns)
+check("轮次角色对",
+      [t["speaker"] for t in turns] == ["主讲", "听友", "主讲"], turns)
+check("续行接在上一轮", turns[0]["text"].startswith("第一句台词") and "接着说完" in turns[0]["text"], turns[0])
+check("半角冒号也认", turns[1]["text"] == "我插一句。", turns[1])
+check("没有标记就不是对话稿", T.parse_dialogue("普通的一段话。") == [])
+check("空文稿没有轮次", T.parse_dialogue("  ") == [])
+check("只有标记没文字就跳过",
+      [t["text"] for t in T.parse_dialogue("主讲：\n听友：有词。")] == ["有词。"])
+
+dplan = T.dialogue_plan(script, "edge", limit=8)
+check("对话计划带 speaker", all(p.get("speaker") in ("主讲", "听友") for p in dplan), dplan)
+check("对话计划段数够", len(dplan) >= 3, len(dplan))
+check("单人稿没有对话计划", T.dialogue_plan("普通文稿。") == [])
+
+seen_voices = []
+
+
+def talk_synth(text, voice, rate, out, api_key="", base_url="", proxy=""):
+    seen_voices.append(voice)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    T.run_ffmpeg(["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                  "-c:a", "libmp3lame", "-q:a", "7", out])
+    return {"audio": out, "dur": 1.0,
+            "cues": [{"start": 0.0, "end": 1.0, "text": text}]}
+
+
+dres = T.synth_plan(
+    [{"index": 0, "text": "甲。", "chars": 2, "speaker": "主讲"},
+     {"index": 1, "text": "乙。", "chars": 2, "speaker": "听友"}],
+    provider="edge", voice="A", rate=0, root=os.path.join(tmp, "dlg"),
+    synth_fn=talk_synth, cleanup=False, gap=T.DIALOGUE_GAP,
+    voices={"主讲": "A", "听友": "B"}, cue_prefix=True)
+check("两个角色各用自己的音色", seen_voices == ["A", "B"], seen_voices)
+check("轮间用 0.35 秒", abs(dres["dur"] - 2.35) < 0.15, round(dres["dur"], 2))
+check("字幕带角色前缀",
+      [c["text"] for c in dres["cues"]] == ["主讲：甲。", "听友：乙。"], dres["cues"])
+check("第二轮字幕推后", abs(dres["cues"][1]["start"] - 1.35) < 0.1, dres["cues"][1])
+
+plain = T.synth_plan([{"index": 0, "text": "甲。", "chars": 2}],
+                     provider="edge", voice="A", rate=0,
+                     root=os.path.join(tmp, "dlg2"), synth_fn=talk_synth,
+                     cleanup=False, gap=0.6, cue_prefix=True)
+check("单人不用前缀", [c["text"] for c in plain["cues"]] == ["甲。"], plain["cues"])
+
 print()
 print("RESULT:", "ALL PASS" if not fails else "%d FAIL -> %s" % (len(fails), fails),
       ("（%d skip）" % len(skips)) if skips else "")

@@ -3861,6 +3861,45 @@ check("Gemini 词条四语齐",
       all("Gemini 没有语速参数：想快就自己改文稿" in _i18n[L]
           for L in ("zh-TW", "en", "ja", "ko")))
 
+
+
+# ---------------- 79 对话模式（主讲 / 听友）
+_s79 = p.Settings(os.path.join(tmp, "settings_dlg.json"))
+check("对话音色 B 有默认值", _s79["tts_voice_b"] == "zh-CN-YunjianNeural", _s79["tts_voice_b"])
+check("字幕前缀默认关", _s79["tts_prefix"] is False)
+_s79["tts_voice_b"] = "   "
+_s79["tts_prefix"] = "yes"
+_s79 = p.Settings(os.path.join(tmp, "settings_dlg.json"))
+_s79.update(tts_voice_b="   ", tts_prefix="yes")
+_s79.save()
+_s79 = p.Settings(os.path.join(tmp, "settings_dlg.json"))
+check("空音色 B 回落默认", _s79["tts_voice_b"] == "zh-CN-YunjianNeural", _s79["tts_voice_b"])
+check("前缀非布尔回落关", _s79["tts_prefix"] is False)
+check("对话轮次解析在引擎里", callable(getattr(p.tts_engine, "parse_dialogue", None)))
+check("对话计划在引擎里", callable(getattr(p.tts_engine, "dialogue_plan", None)))
+check("轮间停顿是 0.35", abs(float(p.tts_engine.DIALOGUE_GAP) - 0.35) < 1e-6)
+for _needle, _why in (
+        ('self.cmb_tts_voice_b = QComboBox()', "配音页有音色 B 下拉"),
+        ('vform.addRow(tr("音色 B"), self.cmb_tts_voice_b)', "音色 B 进表单"),
+        ('self.chk_tts_prefix = QCheckBox(tr("字幕带「主讲：」这样的前缀"))', "有字幕前缀开关"),
+        ('def _dialogue_turns(self) -> list:', "有对话检测"),
+        ('tts_engine.parse_dialogue(self._script_text())', "检测走引擎解析"),
+        ('def _show_dialogue(self, on: bool):', "没对话稿就藏起 B 音色"),
+        ('tts_engine.dialogue_plan(text, provider)', "合成用对话计划"),
+        ('kw["voices"] = {"主讲": self._tts_voice(),', "按角色分音色"),
+        ('kw["gap"] = float(tts_engine.DIALOGUE_GAP)', "对话用 0.35 秒间隔"),
+        ('kw["cue_prefix"] = bool(self.chk_tts_prefix.isChecked())', "前缀跟随开关"),
+        ('tts_voice_b=self._tts_voice_b(),', "记住音色 B"),
+        ('tts_prefix=bool(self.chk_tts_prefix.isChecked()),', "记住前缀开关")):
+    check(_why, _needle in _src, _needle)
+for _key, _tr in (("音色 B", "Voice B"),
+                  ("字幕前缀", "Caption prefix"),
+                  ("对话稿里「听友」用这个音色", "guest voice"),
+                  ("字幕带「主讲：」这样的前缀", "Prefix captions")):
+    _row = _i18n["en"].get(_key)
+    check("对话词条四语齐 " + _key,
+          bool(_row) and _tr.lower() in _row.lower(), _row)
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

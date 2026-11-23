@@ -227,6 +227,58 @@ def make_plan(text: str, provider: str = "edge") -> list:
     return [{"index": i, "text": c, "chars": len(c)} for i, c in enumerate(chunks)]
 
 
+# ---------------------------------------------------------------- 对话模式
+DIALOGUE_SPEAKERS = ("主讲", "听友")
+DIALOGUE_GAP = 0.35        # 轮与轮之间的停顿（比普通段间 0.6 秒短）
+_SPEAKER_RE = re.compile(r"^\s*(主讲|听友)\s*[：:]\s*(.*)$")
+
+
+def parse_dialogue(text: str) -> list:
+    """把「主讲：…」「听友：…」逐轮的文稿拆成 [{"speaker","text"}]。
+
+    没有轮次标记就返回空列表（调用方按单人处理）。第一句标记之前的文字
+    当作旁白忽略掉，避免把标题、说明也念出来。
+    """
+    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    if not text.strip():
+        return []
+    turns = []
+    speaker = ""
+    buf = []
+    for raw in text.split("\n"):
+        line = raw.strip()
+        hit = _SPEAKER_RE.match(line)
+        if hit:
+            if speaker and "".join(buf).strip():
+                turns.append({"speaker": speaker, "text": " ".join(
+                    x for x in buf if x).strip()})
+            speaker = hit.group(1)
+            buf = [hit.group(2).strip()]
+            continue
+        if speaker:
+            buf.append(line)
+    if speaker and "".join(buf).strip():
+        turns.append({"speaker": speaker, "text": " ".join(
+            x for x in buf if x).strip()})
+    return [t for t in turns if t["text"]]
+
+
+def dialogue_plan(text: str, provider: str = "edge", limit: int = 0) -> list:
+    """对话稿的合成计划：一轮一条（太长再按句子拆），带 speaker。"""
+    turns = parse_dialogue(text)
+    if not turns:
+        return []
+    prov = TTS_PROVIDERS.get(provider) or TTS_PROVIDERS["edge"]
+    cap = int(limit or prov["chunk"])
+    plan = []
+    for turn in turns:
+        for piece in split_script(turn["text"], limit=cap):
+            plan.append({"index": len(plan), "text": piece,
+                         "chars": len(piece), "speaker": turn["speaker"]})
+    return plan
+
+
+
 # ---------------------------------------------------------------- 折行 / 长句拆字幕
 def fold_lines(text: str, max_chars: int = CUE_MAX_CHARS,
                max_lines: int = CUE_MAX_LINES) -> list:
@@ -728,8 +780,13 @@ def synth_plan(plan, *, provider: str = "edge", voice: str = "", rate: int = 0,
                root: str = "", api_key: str = "", base_url: str = "",
                proxy: str = "", cancel=None, synth_fn=None,
                on_progress=None, gap: float = TTS_GAP,
-               cleanup: bool = True, loudness: float = LOUDNESS_TARGET) -> dict:
-    """按计划逐段合成（有缓存就用缓存），再拼成一条旁白 + 句级字幕。"""
+               cleanup: bool = True, loudness: float = LOUDNESS_TARGET,
+               voices=None, cue_prefix: bool = False) -> dict:
+    """按计划逐段合成（有缓存就用缓存），再拼成一条旁白 + 句级字幕。
+
+    voices 是 {角色: 音色}，对话稿每段按 seg["speaker"] 挑音色；cue_prefix
+    为真时给字幕加「主讲：」这样的前缀。
+    """
     plan = list(plan or [])
     if not plan:
         raise TtsError("text", "文稿是空的")
@@ -738,7 +795,9 @@ def synth_plan(plan, *, provider: str = "edge", voice: str = "", rate: int = 0,
     fn = synth_fn
     if fn is None:
         fn = synth_for(provider)
-    key = segment_key("||".join(s["text"] for s in plan), provider, voice, rate)
+    voice_tag = voice if not voices else (voice + "|" + "|".join(
+        "%s=%s" % (k, v) for k, v in sorted((voices or {}).items())))
+    key = segment_key("||".join(s["text"] for s in plan), provider, voice_tag, rate)
     work_dir = os.path.join(cache_dir(root), key)
     audio_paths = []
     cues = []
@@ -749,12 +808,14 @@ def synth_plan(plan, *, provider: str = "edge", voice: str = "", rate: int = 0,
         if cancel is not None and cancel.is_set():
             raise TtsError("cancelled", "已取消")
         text = seg["text"]
-        seg_key = segment_key(text, provider, voice, rate)
+        seg_voice = (voices or {}).get(seg.get("speaker") or "", voice)
+        seg_key = segment_key(text, provider, seg_voice, rate)
         got = load_segment(root, seg_key, 0, text) if root else None
         if got is None:
             out = os.path.join(work_dir, "seg_%04d.mp3" % i)
             os.makedirs(os.path.dirname(out), exist_ok=True)
-            got = fn(text, voice, rate, out, api_key=api_key, base_url=base_url, proxy=proxy)
+            got = fn(text, seg_voice, rate, out, api_key=api_key,
+                     base_url=base_url, proxy=proxy)
             got = {"audio": got["audio"], "dur": float(got["dur"]),
                    "cues": list(got.get("cues") or [])}
             if root:
@@ -763,6 +824,9 @@ def synth_plan(plan, *, provider: str = "edge", voice: str = "", rate: int = 0,
             cached += 1
         seg_cues = got["cues"] or spread_cues(text, got["dur"])
         seg_cues = normalize_cues(seg_cues, got["dur"])
+        if cue_prefix and seg.get("speaker"):
+            seg_cues = [dict(c, text="%s：%s" % (seg["speaker"], c["text"]))
+                        for c in seg_cues]
         for c in seg_cues:
             cues.append({"start": c["start"] + offset, "end": c["end"] + offset, "text": c["text"]})
         audio_paths.append(got["audio"])

@@ -547,6 +547,8 @@ class Settings:
         "tts_proxy": "",          # 合成时走这个代理，空 = 直连
         "tts_gap": 0.6,           # 段与段之间的停顿（秒）
         "tts_cleanup": True,      # 合成完顺手清一下（去咔哒、去噗声）
+        "tts_voice_b": "zh-CN-YunjianNeural",   # 对话稿里「听友」的音色
+        "tts_prefix": False,      # 字幕带「主讲：」这种前缀
         "tts_script": "",         # 上次的文稿，重开还在
         "preview_quality": "normal",   # 样片清晰度：fast/normal/sharp/full
         "preview_speed": 1.0,          # 上次用的预览倍速（0.5..2.0）
@@ -741,6 +743,11 @@ class Settings:
             d["tts_gap"] = 0.6
         if not isinstance(d.get("tts_cleanup"), bool):
             d["tts_cleanup"] = True
+        vb = d.get("tts_voice_b")
+        d["tts_voice_b"] = (vb.strip() if isinstance(vb, str) else "") \
+            or "zh-CN-YunjianNeural"
+        if not isinstance(d.get("tts_prefix"), bool):
+            d["tts_prefix"] = False
         if d.get("preview_quality") not in PREVIEW_QUALITY:
             d["preview_quality"] = "normal"
         try:
@@ -8090,6 +8097,14 @@ def run_gui() -> int:
             self._fill_voices(str(self.settings["tts_provider"]),
                               str(self.settings["tts_voice"]))
             vform.addRow(tr("音色"), self.cmb_tts_voice)
+            self.cmb_tts_voice_b = QComboBox()
+            self.cmb_tts_voice_b.setEditable(True)
+            self.cmb_tts_voice_b.setToolTip(
+                tr("对话稿里「听友」用这个音色"))
+            self._fill_voices(str(self.settings["tts_provider"]),
+                              str(self.settings["tts_voice_b"]),
+                              self.cmb_tts_voice_b)
+            vform.addRow(tr("音色 B"), self.cmb_tts_voice_b)
             self.spin_tts_rate = QSpinBox()
             self.spin_tts_rate.setRange(tts_engine.TTS_MIN_RATE,
                                         tts_engine.TTS_MAX_RATE)
@@ -8121,6 +8136,12 @@ def run_gui() -> int:
             trow.addWidget(self.btn_tts_audition)
             trow.addStretch(1)
             vvp.addLayout(trow)
+            self.chk_tts_prefix = QCheckBox(tr("字幕带「主讲：」这样的前缀"))
+            self.chk_tts_prefix.setChecked(bool(self.settings["tts_prefix"]))
+            self.chk_tts_prefix.setToolTip(
+                tr("勾上以后字幕会写成「主讲：……」，不勾只写台词"))
+            vform.addRow(tr("字幕前缀"), self.chk_tts_prefix)
+            self._show_dialogue(False)
             self.lbl_narration = QLabel(tr("还没有旁白"))
             self.lbl_narration.setWordWrap(True)
             vvp.addWidget(self.lbl_narration)
@@ -8332,6 +8353,11 @@ def run_gui() -> int:
             self.btn_script_clear.setText(tr("清空"))
             self.cmb_tts_voice.setToolTip(
                 tr("下拉里是常用音色，也能直接敲服务商的音色名"))
+            self.cmb_tts_voice_b.setToolTip(
+                tr("对话稿里「听友」用这个音色"))
+            self.chk_tts_prefix.setText(tr("字幕带「主讲：」这样的前缀"))
+            self.chk_tts_prefix.setToolTip(
+                tr("勾上以后字幕会写成「主讲：……」，不勾只写台词"))
             self.spin_tts_rate.setToolTip(tr("0 是原速；正数更快，负数更慢"))
             self.progress_tts.setFormat(tr("正在合成 %v/%m 段"))
             self.btn_tts_start.setText(tr("开始合成"))
@@ -8346,11 +8372,13 @@ def run_gui() -> int:
                         _i, tr(tts_engine.TTS_PROVIDERS[_k]["label"]))
             for _fld, _txt in ((self.cmb_tts_provider, tr("配音服务")),
                                (self.cmb_tts_voice, tr("音色")),
-                               (self.spin_tts_rate, tr("语速"))):
+                               (self.cmb_tts_voice_b, tr("音色 B")),
+                               (self.spin_tts_rate, tr("语速")),
+                               (self.chk_tts_prefix, tr("字幕前缀"))):
                 _lab = self._tts_form.labelForField(_fld)
                 if _lab is not None:
                     _lab.setText(_txt)
-            self._refresh_voice_page()
+            self.on_script_changed()
             self.btn_settings.setText(tr("设置"))
             self.btn_settings.setToolTip(
                 tr("导出目录、画幅比例、分辨率、帧率、画质、铺底、转场、默认节奏"))
@@ -8657,8 +8685,37 @@ def run_gui() -> int:
                 return str(data)
             return text
 
-        def _fill_voices(self, provider: str, wanted: str = ""):
+        def _tts_voice_b(self) -> str:
+            """「听友」的音色；空着就跟着主音色。"""
+            cmb = self.cmb_tts_voice_b
+            idx = cmb.currentIndex()
+            data = cmb.itemData(idx)
+            text = cmb.currentText().strip()
+            if data and text == cmb.itemText(idx):
+                return str(data)
+            return text or self._tts_voice()
+
+        def _dialogue_turns(self) -> list:
+            """文稿里有没有「主讲：」「听友：」轮次。"""
+            try:
+                return tts_engine.parse_dialogue(self._script_text())
+            except Exception:
+                return []
+
+        def _show_dialogue(self, on: bool):
+            """没检测到对话稿时把 B 音色与字幕前缀藏起来。"""
+            for fld in (self.cmb_tts_voice_b, self.chk_tts_prefix):
+                if not hasattr(self, "_tts_form"):
+                    continue
+                lab = self._tts_form.labelForField(fld)
+                if lab is not None:
+                    lab.setVisible(bool(on))
+                fld.setVisible(bool(on))
+
+        def _fill_voices(self, provider: str, wanted: str = "",
+                         combo=None):
             """按服务商换音色下拉；wanted 是上次用的，能选回来就选回来。"""
+            cmb = combo if combo is not None else self.cmb_tts_voice
             voices = {
                 "edge": list(tts_engine.EDGE_ZH_VOICES),
                 "gemini": list(tts_engine.GEMINI_VOICES),
@@ -8670,18 +8727,18 @@ def run_gui() -> int:
                            ("shimmer", "shimmer"), ("echo", "echo"),
                            ("onyx", "onyx"), ("fable", "fable")],
             }.get(provider) or []
-            self.cmb_tts_voice.blockSignals(True)
-            self.cmb_tts_voice.clear()
+            cmb.blockSignals(True)
+            cmb.clear()
             for vid, name in voices:
-                self.cmb_tts_voice.addItem(name, vid)
-            self.cmb_tts_voice.blockSignals(False)
-            hit = self.cmb_tts_voice.findData(wanted)
+                cmb.addItem(name, vid)
+            cmb.blockSignals(False)
+            hit = cmb.findData(wanted)
             if hit >= 0:
-                self.cmb_tts_voice.setCurrentIndex(hit)
+                cmb.setCurrentIndex(hit)
             elif wanted:
-                self.cmb_tts_voice.setEditText(wanted)
+                cmb.setEditText(wanted)
             elif voices:
-                self.cmb_tts_voice.setCurrentIndex(0)
+                cmb.setCurrentIndex(0)
 
         def _tts_running(self) -> bool:
             return (self._tts_worker is not None
@@ -8708,11 +8765,22 @@ def run_gui() -> int:
             text = self._script_text()
             if not text:
                 self.lbl_plan.setText(tr("还没有文稿"))
+                self._show_dialogue(False)
             else:
-                plan = tts_engine.make_plan(text, self._tts_provider())
-                self.lbl_plan.setText(tr(
-                    "会切成 {n} 段，共 {chars} 字",
-                    n=len(plan), chars=sum(p["chars"] for p in plan)))
+                turns = self._dialogue_turns()
+                if turns:
+                    plan = tts_engine.dialogue_plan(text, self._tts_provider())
+                    a = len([t for t in turns if t["speaker"] == "主讲"])
+                    b = len(turns) - a
+                    self.lbl_plan.setText(tr(
+                        "对话稿：主讲 {a} 轮、听友 {b} 轮，会切成 {n} 段",
+                        a=a, b=b, n=len(plan)))
+                else:
+                    plan = tts_engine.make_plan(text, self._tts_provider())
+                    self.lbl_plan.setText(tr(
+                        "会切成 {n} 段，共 {chars} 字",
+                        n=len(plan), chars=sum(p["chars"] for p in plan)))
+                self._show_dialogue(bool(turns))
             self._refresh_voice_page()
 
         def on_open_script(self):
@@ -8744,6 +8812,8 @@ def run_gui() -> int:
         def on_tts_provider_changed(self):
             provider = self._tts_provider()
             self._fill_voices(provider, str(self.cmb_tts_voice.currentText()))
+            self._fill_voices(provider, str(self.cmb_tts_voice_b.currentText()),
+                              self.cmb_tts_voice_b)
             spec = tts_engine.TTS_PROVIDERS[provider]
             if spec.get("needs_key"):
                 self.lbl_tts_status.setText(tr(
@@ -8760,15 +8830,21 @@ def run_gui() -> int:
         def _tts_kwargs(self) -> dict:
             s = self.settings
             provider = self._tts_provider()
-            return dict(provider=provider,
-                        root=components.data_dir(),
-                        voice=self._tts_voice(),
-                        rate=int(self.spin_tts_rate.value()),
-                        api_key=(s["tts_keys"] or {}).get(provider, ""),
-                        base_url=s["tts_base_url"],
-                        proxy=s["tts_proxy"],
-                        gap=float(s["tts_gap"]),
-                        cleanup=bool(s["tts_cleanup"]))
+            kw = dict(provider=provider,
+                      root=components.data_dir(),
+                      voice=self._tts_voice(),
+                      rate=int(self.spin_tts_rate.value()),
+                      api_key=(s["tts_keys"] or {}).get(provider, ""),
+                      base_url=s["tts_base_url"],
+                      proxy=s["tts_proxy"],
+                      gap=float(s["tts_gap"]),
+                      cleanup=bool(s["tts_cleanup"]))
+            if self._dialogue_turns():
+                kw["voices"] = {"主讲": self._tts_voice(),
+                                "听友": self._tts_voice_b()}
+                kw["gap"] = float(tts_engine.DIALOGUE_GAP)
+                kw["cue_prefix"] = bool(self.chk_tts_prefix.isChecked())
+            return kw
 
         def on_tts_start(self):
             if self._tts_running():
@@ -8785,7 +8861,9 @@ def run_gui() -> int:
                     "{name} 得先在「设置 → 配音」里填自己的 key。",
                     name=tr(spec["label"])))
                 return
-            plan = tts_engine.make_plan(text, provider)
+            plan = (tts_engine.dialogue_plan(text, provider)
+                    if self._dialogue_turns()
+                    else tts_engine.make_plan(text, provider))
             self._tts_audition = False
             self._tts_begin(plan, self._tts_kwargs())
 
@@ -8795,7 +8873,10 @@ def run_gui() -> int:
             text = self._script_text()
             if not text:
                 return
-            plan = tts_engine.make_plan(text, self._tts_provider())[:1]
+            provider = self._tts_provider()
+            plan = (tts_engine.dialogue_plan(text, provider)
+                    if self._dialogue_turns()
+                    else tts_engine.make_plan(text, provider))[:1]
             self._tts_audition = True
             self._tts_begin(plan, self._tts_kwargs())
 
@@ -8848,6 +8929,8 @@ def run_gui() -> int:
                 tts_script=self._script_text(),
                 tts_provider=self._tts_provider(),
                 tts_voice=self._tts_voice(),
+                tts_voice_b=self._tts_voice_b(),
+                tts_prefix=bool(self.chk_tts_prefix.isChecked()),
                 tts_rate=int(self.spin_tts_rate.value()))
             self.settings.save()
             self._refresh_all()
