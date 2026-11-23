@@ -3957,6 +3957,38 @@ check("引擎音色表 OpenAI 6 个", len(p.tts_engine.TTS_VOICES["openai"]) == 
 check("界面音色表就是引擎那份",
       p.TTS_VOICES is p.tts_engine.TTS_VOICES)
 
+
+
+# ---------------- 82 旁白位置：写清楚 + 能打开 / 另存
+for _needle, _why in (
+        ('self.btn_narr_open = QPushButton(tr("打开旁白文件夹"))',
+         "配音页有打开文件夹按钮"),
+        ('self.btn_narr_save = QPushButton(tr("旁白另存为…"))',
+         "配音页有另存按钮"),
+        ('self.btn_narr_open.clicked.connect(self.on_open_narration)',
+         "打开按钮接线"),
+        ('self.btn_narr_save.clicked.connect(self.on_save_narration_as)',
+         "另存按钮接线"),
+        ('subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])',
+         "打开时定位到文件"),
+        ('set_narration(self.project, picked, float(p.narration_dur),',
+         "另存后工程改用新文件"),
+        ('path=p.narration_path))', "界面写出完整文件路径"),
+        ('"旁白已生成，已放进时间线「音频」轨：{name}"',
+         "状态栏说清旁白进了音频轨"),
+        ('self.lbl_narration.setTextInteractionFlags(',
+         "旁白路径能选中复制")):
+    check(_why, _needle in _src, _needle)
+_eng_narr = open(p.tts_engine.__file__, encoding="utf-8").read()
+check("旁白固定写在 tts/narration.m4a",
+      'out_path = os.path.join(cache_dir(root), "narration.m4a")' in _eng_narr)
+for _key in ("打开旁白文件夹", "旁白另存为…", "把旁白存到你自己选的地方，工程跟着改用这份",
+             "旁白没存下去", "旁白已存到：{path}",
+             "旁白已生成，已放进时间线「音频」轨：{name}", "音频 (*.m4a)"):
+    check("旁白位置词条四语齐 " + _key,
+          all(_i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")),
+          {_l: _i18n[_l].get(_key) for _l in ("zh-TW", "en", "ja", "ko")})
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)

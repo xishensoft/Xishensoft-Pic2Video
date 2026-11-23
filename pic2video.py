@@ -8152,9 +8152,26 @@ def run_gui() -> int:
                 tr("勾上以后字幕会写成「主讲：……」，不勾只写台词"))
             vform.addRow(tr("字幕前缀"), self.chk_tts_prefix)
             self._show_dialogue(False)
+            vvp.addSpacing(4)
             self.lbl_narration = QLabel(tr("还没有旁白"))
             self.lbl_narration.setWordWrap(True)
+            self.lbl_narration.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse)
             vvp.addWidget(self.lbl_narration)
+            nrow = QHBoxLayout()
+            self.btn_narr_open = QPushButton(tr("打开旁白文件夹"))
+            self.btn_narr_open.setEnabled(False)
+            self.btn_narr_open.setToolTip(tr("在资源管理器里定位这个旁白文件"))
+            self.btn_narr_open.clicked.connect(self.on_open_narration)
+            self.btn_narr_save = QPushButton(tr("旁白另存为…"))
+            self.btn_narr_save.setEnabled(False)
+            self.btn_narr_save.setToolTip(
+                tr("把旁白存到你自己选的地方，工程跟着改用这份"))
+            self.btn_narr_save.clicked.connect(self.on_save_narration_as)
+            nrow.addWidget(self.btn_narr_open)
+            nrow.addWidget(self.btn_narr_save)
+            nrow.addStretch(1)
+            vvp.addLayout(nrow)
             self.left_tabs.addTab(voice_page, tr("配音"))
             split.addWidget(self.left_tabs)
 
@@ -8758,15 +8775,55 @@ def run_gui() -> int:
             p = self.project
             if p.narration_path:
                 self.lbl_narration.setText(tr(
-                    "旁白：{name} · {dur} · {n} 条字幕",
+                    "旁白：{name} · {dur} · {n} 条字幕　—　文件位置：{path}（它同时占着时间线下面的「音频」轨）",
                     name=os.path.basename(p.narration_path),
-                    dur=human_time(p.narration_dur), n=len(p.cues)))
+                    dur=human_time(p.narration_dur), n=len(p.cues),
+                    path=p.narration_path))
             else:
-                self.lbl_narration.setText(tr("还没有旁白"))
+                self.lbl_narration.setText(tr(
+                    "还没有旁白。合成完它会自动放进时间线的「音频」轨，画面上也会盖字幕。"))
+            self.btn_narr_open.setEnabled(bool(p.narration_path))
+            self.btn_narr_save.setEnabled(bool(p.narration_path))
             busy = self._tts_running()
             self.btn_tts_start.setEnabled(bool(self._script_text()) and not busy)
             self.btn_tts_cancel.setEnabled(busy)
             self.btn_tts_audition.setEnabled(bool(self._script_text()) and not busy)
+
+        def on_open_narration(self):
+            path = str(self.project.narration_path or "")
+            if not path:
+                return
+            try:
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+            except OSError:
+                pass
+
+        def on_save_narration_as(self):
+            p = self.project
+            src = str(p.narration_path or "")
+            if not src or not os.path.exists(src):
+                MsgBox.warn(self, tr("还没有旁白"),
+                            tr("先在上面合成一段旁白，再来另存。"))
+                return
+            stem = os.path.splitext(os.path.basename(self._project_name()))[0]
+            default = os.path.join(self._project_dir() or "",
+                                   (stem or "旁白") + "-旁白.m4a")
+            picked = FileDialog.get_save_file(
+                self, tr("旁白另存为…"), default,
+                tr("音频 (*.m4a)"), suffix="m4a")
+            if not picked:
+                return
+            try:
+                shutil.copy2(src, picked)
+            except OSError as exc:
+                MsgBox.warn(self, tr("旁白没存下去"), str(exc))
+                return
+            set_narration(self.project, picked, float(p.narration_dur),
+                          [dict(c) for c in p.cues])
+            self._refresh_all()
+            self._mark_dirty()
+            self._history_push(tr("旁白另存"))
+            self.lbl_status.setText(tr("旁白已存到：{path}", path=picked))
 
         def on_script_changed(self):
             text = self._script_text()
@@ -8950,9 +9007,12 @@ def run_gui() -> int:
                 note = tr("（已清理，响度 {lu} LUFS）",
                           lu="%.1f" % float(res.get("loudness") or 0.0))
             self.lbl_tts_status.setText(tr(
-                "旁白好了：{dur}，{n} 条字幕。总长已改成「跟旁白」。",
-                dur=human_time(dur), n=len(self.project.cues)) + note)
-            self.lbl_status.setText(tr("旁白好了：{dur}", dur=human_time(dur)))
+                "旁白好了：{dur}，{n} 条字幕。总长已改成「跟旁白」。文件在：{path}",
+                dur=human_time(dur), n=len(self.project.cues),
+                path=path) + note)
+            self.lbl_status.setText(tr(
+                "旁白已生成，已放进时间线「音频」轨：{name}",
+                name=os.path.basename(path)))
 
         def _play_audition(self, path):
             if not path or not os.path.exists(path):

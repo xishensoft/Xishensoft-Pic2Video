@@ -3035,3 +3035,59 @@ _TR_EXTRA51 = [
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA51:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA52 = [
+    ("打开旁白文件夹", "開啟旁白資料夾", "Open narration folder",
+     "ナレーションのフォルダーを開く", "나레이션 폴더 열기"),
+    ("在资源管理器里定位这个旁白文件", "在檔案總管裡定位這個旁白檔",
+     "Show this narration file in Explorer",
+     "エクスプローラーでこのナレーションを表示", "탐색기에서 이 나레이션 파일 보기"),
+    ("旁白另存为…", "旁白另存新檔…", "Save narration as…",
+     "ナレーションを別名で保存…", "나레이션 다른 이름으로 저장…"),
+    ("把旁白存到你自己选的地方，工程跟着改用这份",
+     "把旁白存到你選的地方，專案跟著改用這份",
+     "Save the narration where you like; the project switches to that copy",
+     "ナレーションを好きな場所に保存し、プロジェクトもそのファイルを使います",
+     "나레이션을 원하는 곳에 저장하고 프로젝트도 그 파일을 씁니다"),
+    ("旁白：{name} · {dur} · {n} 条字幕　—　文件位置：{path}（它同时占着时间线下面的「音频」轨）",
+     "旁白：{name} · {dur} · {n} 條字幕　—　檔案位置：{path}（它同時佔著時間軸下方的「音訊」軌）",
+     "Narration: {name} · {dur} · {n} cues — file: {path} (it also sits on the audio track below the timeline)",
+     "ナレーション：{name} · {dur} · {n} 字幕　—　ファイル：{path}（タイムライン下の「音声」トラックにも入っています）",
+     "나레이션: {name} · {dur} · {n}개 자막 — 파일: {path} (타임라인 아래 「오디오」 트랙에도 있습니다)"),
+    ("还没有旁白。合成完它会自动放进时间线的「音频」轨，画面上也会盖字幕。",
+     "還沒有旁白。合成完會自動放進時間軸的「音訊」軌，畫面上也會疊字幕。",
+     "No narration yet. After synthesis it lands on the audio track below the timeline, with cues burned over the picture.",
+     "ナレーションはまだありません。合成するとタイムライン下の「音声」トラックに入り、画面にも字幕が乗ります。",
+     "나레이션이 아직 없습니다. 합성하면 타임라인 아래 「오디오」 트랙에 들어가고 화면에도 자막이 표시됩니다."),
+    ("音频 (*.m4a)", "音訊 (*.m4a)", "Audio (*.m4a)", "音声 (*.m4a)", "오디오 (*.m4a)"),
+    ("先在上面合成一段旁白，再来另存。",
+     "先在上面合成一段旁白，再來另存。",
+     "Synthesize a narration first, then save a copy.",
+     "先にナレーションを合成してから別名保存してください。",
+     "먼저 나레이션을 합성한 뒤 다른 이름으로 저장하세요."),
+    ("旁白没存下去", "旁白沒有存成功", "Could not save the narration",
+     "ナレーションを保存できませんでした", "나레이션을 저장하지 못했습니다"),
+    ("旁白另存", "旁白另存", "Save narration copy",
+     "ナレーションを別名保存", "나레이션 다른 이름으로 저장"),
+    ("旁白已存到：{path}", "旁白已存到：{path}", "Narration saved to: {path}",
+     "ナレーションを保存しました：{path}", "나레이션 저장 위치: {path}"),
+    ("旁白已生成，已放进时间线「音频」轨：{name}",
+     "旁白已生成，已放進時間軸「音訊」軌：{name}",
+     "Narration ready on the audio track: {name}",
+     "ナレーション完成、タイムラインの「音声」トラックに入れました：{name}",
+     "나레이션 생성 완료, 타임라인 「오디오」 트랙에 넣었습니다: {name}"),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA52:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA53 = [
+    ("旁白好了：{dur}，{n} 条字幕。总长已改成「跟旁白」。文件在：{path}",
+     "旁白好了：{dur}，{n} 條字幕。總長已改成「跟旁白」。檔案在：{path}",
+     "Narration ready: {dur}, {n} cues. Length is now 'follow narration'. File: {path}",
+     "ナレーション完成：{dur}、{n} 字幕。「ナレーションに合わせる」に変更しました。ファイル：{path}",
+     "나레이션 완료: {dur}, 자막 {n}개. 길이를 「나레이션 따라가기」로 바꿨습니다. 파일: {path}"),
+]
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA53:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)
