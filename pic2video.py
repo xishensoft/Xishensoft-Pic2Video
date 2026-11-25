@@ -12157,11 +12157,46 @@ def _start_log() -> None:
         pass
 
 
+def tts_selftest(out_path: str) -> int:
+    """打包后的配音自检：不打开窗口，真合成一句，把结果写进 JSON。
+
+    用法：Pic2Video.exe --tts-selftest 结果.json
+    这是给打包检查用的：安装包里如果漏了 edge_tts 或它的依赖，
+    这里会写出 ok=false 和具体异常，不用等用户点「开始合成」才发现。
+    """
+    import json
+    import tempfile
+    payload = {"ok": False, "error": "没跑起来"}
+    try:
+        import tts_engine
+        root = os.path.join(tempfile.gettempdir(), "p2v_tts_selftest")
+        plan = tts_engine.make_plan("这是安装包的配音自检。")
+        got = tts_engine.synth_plan(
+            plan, provider="edge", voice="zh-CN-XiaoxiaoNeural",
+            root=root, gap=0.0, cleanup=False)
+        payload = {"ok": True, "audio": got.get("audio", ""),
+                   "dur": round(float(got.get("dur") or 0.0), 3),
+                   "cues": len(got.get("cues") or [])}
+    except Exception as exc:                      # noqa: BLE001
+        payload = {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+    try:
+        with open(out_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+    return 0 if payload.get("ok") else 1
+
+
 def main() -> int:
     _start_log()                       # 源码运行也记日志，出问题才有据可查
     argv = sys.argv[1:]
     if "--export" in argv:
         return cli_export(argv)
+    if "--tts-selftest" in argv:
+        i = argv.index("--tts-selftest")
+        out = (argv[i + 1] if i + 1 < len(argv) else
+               os.path.join(tempfile.gettempdir(), "p2v_tts_selftest.json"))
+        return tts_selftest(out)
     return run_gui()
 
 

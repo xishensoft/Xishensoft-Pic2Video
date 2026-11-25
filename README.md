@@ -369,7 +369,7 @@ theme.py         主题、主色/对撞色、QSS
 i18n.py          五种语言的词条
 tts_engine.py    配音：分段、Edge 合成、句级时间戳、缓存与拼接
 启动.bat          双击开窗口
-tests/           单元检查（1400 条）
+tests/           单元检查（1410 条）
 docs/            研究笔记、设计记录（wayfinder 票）与原始探针脚本
 screenshots/     README 里的截图
 ```
@@ -391,6 +391,9 @@ _internal\       运行时文件，和 exe 放在一起
 ```
 
 整个 `dist\Pic2Video\` 文件夹拷给别人就能跑，不用安装（约 115 MB）。
+
+打包后想确认配音真的能出声，可以跑 `Pic2Video.exe --tts-selftest 结果.json`：
+它不开窗口，真合成一句，把成功与否写进那个 JSON 文件。
 
 发布包里**不带** ffmpeg 和 yt-dlp：第一次打开时如果系统里没有 ffmpeg，会问一句然后自己下到
 `tools\`（约 120 MB，只下一次）；哪天想省地方，在 设置 → 其它 里能删掉，下次需要还会自己下。

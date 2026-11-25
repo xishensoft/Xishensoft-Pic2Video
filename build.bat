@@ -23,6 +23,10 @@ python -m PyInstaller --noconfirm --clean --windowed --onedir --name Pic2Video ^
     --icon assets\icon.ico ^
     --add-data "assets\icon.ico;assets" ^
     --add-data "assets\icon.png;assets" ^
+    --collect-submodules edge_tts ^
+    --hidden-import edge_tts ^
+    --hidden-import tabulate ^
+    --hidden-import typing_extensions ^
     pic2video.py
 if errorlevel 1 ( pause & exit /b 1 )
 

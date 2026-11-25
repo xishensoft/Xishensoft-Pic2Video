@@ -4354,6 +4354,33 @@ check("被挤到屏幕外的窗口位置也会拉回来",
       == (336, 64, 1200, 800))
 
 
+# ---------------- 88 安装包：配音依赖要打进包
+_spec_path = os.path.join(ROOT, "Pic2Video.spec")
+_spec = (open(_spec_path, encoding="utf-8").read()
+         if os.path.exists(_spec_path) else "")
+_bat = open(os.path.join(ROOT, "build.bat"), encoding="utf-8").read()
+check("打包脚本会收集 edge_tts 的全部子模块",
+      (not _spec) or "collect_submodules('edge_tts')" in _spec)
+check("打包脚本显式带上 edge_tts",
+      (not _spec) or "'edge_tts'" in _spec)
+check("打包脚本带上 edge_tts 的依赖 tabulate",
+      (not _spec) or "'tabulate'" in _spec)
+check("打包脚本带上 typing_extensions",
+      (not _spec) or "'typing_extensions'" in _spec)
+check("build.bat 也会收集 edge_tts 子模块",
+      "--collect-submodules edge_tts" in _bat)
+check("build.bat 显式带上 edge_tts",
+      "--hidden-import edge_tts" in _bat)
+check("build.bat 带上 tabulate",
+      "--hidden-import tabulate" in _bat)
+check("build.bat 带上 typing_extensions",
+      "--hidden-import typing_extensions" in _bat)
+check("打包后的配音自检入口在",
+      "def tts_selftest(" in _src and '"--tts-selftest"' in _src)
+check("edge_tts 仍是运行时才 import（打包缺了不影响开窗）",
+      "def synth_edge" in open(os.path.join(ROOT, "tts_engine.py"),
+                              encoding="utf-8").read())
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAIL -> {fails}")
 sys.exit(1 if fails else 0)
