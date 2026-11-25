@@ -3527,3 +3527,61 @@ _TR_EXTRA63 = (
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA63:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+
+_TR_EXTRA64 = (
+    ("多人对话：{n} 个角色（{names}），会切成 {m} 段",
+     "多人對話：{n} 個角色（{names}），會切成 {m} 段",
+     "Multi-speaker: {n} roles ({names}), split into {m} parts",
+     "複数話者：{n} 人（{names}）、{m} 個に分割",
+     "다중 화자: {n}개 역할({names}), {m}개로 분할"),
+    ("「{name}」的音色",
+     "「{name}」的音色",
+     "Voice for \"{name}\"",
+     "「{name}」の声",
+     "\"{name}\"의 음성"),
+    ("这个角色的音色；也能直接敲服务商的音色名",
+     "這個角色的音色；也能直接敲服務商的音色名",
+     "Voice for this role; you can also type a provider voice name",
+     "この役の声。サービス側の音声名を直接入力しても可",
+     "이 역할의 음성. 서비스 음성 이름을 직접 입력해도 됩니다"),
+    ("文稿里用「名字：」开头，就能分角色；每个角色在这儿配一个音色。",
+     "文稿裡用「名字：」開頭，就能分角色；每個角色在這兒配一個音色。",
+     "Start a line with \"Name:\" to assign a role; pick a voice for each role here.",
+     "行頭を「名前：」にすると役割を分けられます。役ごとにここで声を選びます。",
+     "줄머리를 \"이름:\"으로 쓰면 역할을 나눌 수 있습니다. 역할마다 여기서 음성을 고르세요."),
+    ("字幕带角色名前缀",
+     "字幕帶角色名前綴",
+     "Prefix captions with the role name",
+     "字幕に役名を付ける",
+     "자막에 역할 이름 붙이기"),
+    ("勾上以后字幕会写成「小明：……」，不勾只写台词",
+     "勾上以後字幕會寫成「小明：……」，不勾只寫台詞",
+     "When checked, captions read \"Xiaoming: ...\"; otherwise just the line",
+     "チェックすると字幕は「小明：……」になります。外すとセリフだけ",
+     "선택하면 자막이 \"小明: ...\"처럼 나옵니다. 해제하면 대사만"),
+)
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA64:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)
+
+# ---- _TR_EXTRA65：多人对话角色表提示（短句 + 长解释）
+_TR_EXTRA65 = (
+    ("「名字：」开头就能分角色",
+     "「名字：」開頭就能分角色",
+     "Start a line with a name and a colon to add a role",
+     "「名前：」で始めると役ごとに分けられます",
+     "「이름:」으로 시작하면 역할이 나뉩니다"),
+    ("文稿里每行写「小明：……」，这一页就会多出小明这一行，"
+     "给他挑一个音色即可。",
+     "文稿裡每行寫「小明：……」，這一頁就會多出小明這一行，"
+     "幫他挑一個音色就好。",
+     "Write a line like Xiaoming: ... and a Xiaoming row appears "
+     "here; just pick a voice for it.",
+     "原稿で「小明：……」の行を書くと、ここに小明の行が増えるので、"
+     "その役の声を選ぶだけです。",
+     "원고에 「小明: ...」 줄을 쓰면 여기에 小明 줄이 생기니, "
+     "그 역할의 목소리를 고르면 됩니다."),
+)
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA65:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)

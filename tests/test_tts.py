@@ -530,25 +530,38 @@ check("500 认成 network", T.classify_http(500, "boom").reason == "network")
 
 
 
-# ---------------- 13 双人对话（角色 A / 角色 B）
-script = "开场白不算。\n角色 A：第一句台词。\n接着说完。\n角色 B: 我插一句。\nA：换个写法。\n主讲：旧写法也认。"
+# ---------------- 13 多人对话（任意角色名）
+script = ("开场白不算。\n小明：第一句台词。\n接着说完。\n妈妈: 我插一句。\n"
+          "角色A：沿用旧写法。\nA：短名。\n主讲：旧主讲也认。\n听友：旧听友也认。\n"
+          "旁白：最后一句。")
 turns = T.parse_dialogue(script)
-check("认出四轮对话", len(turns) == 4, turns)
+check("认出七轮对话", len(turns) == 7, turns)
 check("轮次角色对",
-      [t["speaker"] for t in turns] == ["角色 A", "角色 B", "角色 A", "角色 A"], turns)
+      [t["speaker"] for t in turns] == ["小明", "妈妈", "角色 A", "角色 A",
+                                        "角色 A", "角色 B", "旁白"], turns)
 check("续行接在上一轮", turns[0]["text"].startswith("第一句台词") and "接着说完" in turns[0]["text"], turns[0])
 check("半角冒号也认", turns[1]["text"] == "我插一句。", turns[1])
-check("A/B 简写也认", turns[2]["text"] == "换个写法。", turns[2])
-check("旧写法主讲兼容", turns[3]["text"] == "旧写法也认。", turns[3])
-check("角色名归一", T._speaker_name("角色B") == "角色 B" and T._speaker_name("听友") == "角色 B", T.DIALOGUE_SPEAKERS)
+check("A/B 简写也认得", turns[3]["text"] == "短名。", turns[3])
+check("旧写法主讲兼容", turns[4]["text"] == "旧主讲也认。", turns[4])
+check("旧写法听友兼容", turns[5]["text"] == "旧听友也认。", turns[5])
+check("任意名字都认", turns[6]["speaker"] == "旁白" and turns[6]["text"] == "最后一句。", turns[6])
+check("角色名归一",
+      T.speaker_name("角色B") == "角色 B" and T.speaker_name("听友") == "角色 B"
+      and T.speaker_name("a") == "角色 A" and T.speaker_name("角色 小明") == "小明"
+      and T.speaker_name("角色 3") == "角色 3", T.DIALOGUE_SPEAKERS)
+check("扫角色按出场顺序去重",
+      T.scan_speakers(script) == ["小明", "妈妈", "角色 A", "角色 B", "旁白"],
+      T.scan_speakers(script))
 check("没有标记就不是对话稿", T.parse_dialogue("普通的一段话。") == [])
 check("空文稿没有轮次", T.parse_dialogue("  ") == [])
 check("只有标记没文字就跳过",
-      [t["text"] for t in T.parse_dialogue("角色 A：\n角色 B：有词。")] == ["有词。"])
+      [t["text"] for t in T.parse_dialogue("小明：\n妈妈：有词。")] == ["有词。"])
 
 dplan = T.dialogue_plan(script, "edge", limit=8)
-check("对话计划带 speaker", all(p.get("speaker") in ("角色 A", "角色 B") for p in dplan), dplan)
-check("对话计划段数够", len(dplan) >= 4, len(dplan))
+check("对话计划带 speaker",
+      all(p.get("speaker") in ("小明", "妈妈", "角色 A", "角色 B", "旁白")
+          for p in dplan), dplan)
+check("对话计划段数够", len(dplan) >= 7, len(dplan))
 check("单人稿没有对话计划", T.dialogue_plan("普通文稿。") == [])
 
 seen_voices = []
@@ -564,16 +577,18 @@ def talk_synth(text, voice, rate, out, api_key="", base_url="", proxy=""):
 
 
 dres = T.synth_plan(
-    [{"index": 0, "text": "甲。", "chars": 2, "speaker": "角色 A"},
-     {"index": 1, "text": "乙。", "chars": 2, "speaker": "角色 B"}],
+    [{"index": 0, "text": "甲。", "chars": 2, "speaker": "小明"},
+     {"index": 1, "text": "乙。", "chars": 2, "speaker": "妈妈"},
+     {"index": 2, "text": "丙。", "chars": 2, "speaker": "旁白"}],
     provider="edge", voice="A", rate=0, root=os.path.join(tmp, "dlg"),
     synth_fn=talk_synth, cleanup=False, gap=T.DIALOGUE_GAP,
-    voices={"角色 A": "A", "角色 B": "B"}, cue_prefix=True)
-check("两个角色各用自己的音色", seen_voices == ["A", "B"], seen_voices)
-check("轮间用 0.35 秒", abs(dres["dur"] - 2.35) < 0.15, round(dres["dur"], 2))
+    voices={"小明": "A", "妈妈": "B", "旁白": "C"}, cue_prefix=True)
+check("三个角色各用自己的音色", seen_voices == ["A", "B", "C"], seen_voices)
+check("轮间用 0.35 秒", abs(dres["dur"] - 3.7) < 0.15, round(dres["dur"], 2))
 check("字幕带角色前缀",
-      [c["text"] for c in dres["cues"]] == ["角色 A：甲。", "角色 B：乙。"], dres["cues"])
-check("第二轮字幕推后", abs(dres["cues"][1]["start"] - 1.35) < 0.1, dres["cues"][1])
+      [c["text"] for c in dres["cues"]] == ["小明：甲。", "妈妈：乙。", "旁白：丙。"],
+      dres["cues"])
+check("第三轮字幕推后", abs(dres["cues"][2]["start"] - 2.7) < 0.1, dres["cues"][2])
 
 plain = T.synth_plan([{"index": 0, "text": "甲。", "chars": 2}],
                      provider="edge", voice="A", rate=0,

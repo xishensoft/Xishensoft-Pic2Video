@@ -575,7 +575,8 @@ class Settings:
         "tts_proxy": "",          # 合成时走这个代理，空 = 直连
         "tts_gap": 0.6,           # 段与段之间的停顿（秒）
         "tts_cleanup": True,      # 合成完顺手清一下（去咔哒、去噗声）
-        "tts_voice_b": "zh-CN-YunjianNeural",   # 双人对话里角色 B 的音色
+        "tts_voice_b": "zh-CN-YunjianNeural",   # 角色 B 的默认音色（旧双人稿兼容）
+        "tts_voices": {},         # 多人对话：角色名 -> 音色
         "tts_prefix": False,      # 字幕带「角色 A：」这种前缀
         "tts_script": "",         # 上次的文稿，重开还在
         "preview_quality": "normal",   # 样片清晰度：fast/normal/sharp/full
@@ -775,6 +776,17 @@ class Settings:
         vb = d.get("tts_voice_b")
         d["tts_voice_b"] = (vb.strip() if isinstance(vb, str) else "") \
             or "zh-CN-YunjianNeural"
+        raw_voices = d.get("tts_voices")
+        voices = {}
+        if isinstance(raw_voices, dict):
+            for k, v in raw_voices.items():
+                if not isinstance(k, str) or not isinstance(v, str):
+                    continue
+                name = tts_engine.speaker_name(k)
+                voice = v.strip()
+                if name and voice and name not in voices and len(voices) < 50:
+                    voices[name] = voice
+        d["tts_voices"] = voices
         if not isinstance(d.get("tts_prefix"), bool):
             d["tts_prefix"] = False
         if d.get("preview_quality") not in PREVIEW_QUALITY:
@@ -4520,7 +4532,8 @@ def run_gui() -> int:
         QFormLayout, QFrame, QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit,
         QListWidget,
         QListWidgetItem, QMainWindow, QMenu, QProgressBar,
-        QPlainTextEdit, QPushButton, QRadioButton, QScrollBar, QSizePolicy,
+        QPlainTextEdit, QPushButton, QRadioButton, QScrollArea, QScrollBar,
+        QSizePolicy,
         QSlider,
         QSpinBox, QStyle, QStyleOptionSlider,
         QTextEdit,
@@ -7921,11 +7934,14 @@ def run_gui() -> int:
             self._audio_seq = 0
             self._audio_pending = False
             self._play_after_mix = False
-            # 配音页：后台合成线程、试听用的第二个播放器
+            # 配音页：后台合成线程、试听用的第二个播放器、多人对话的角色音色
             self._tts_worker = None
             self._tts_audition = False
             self._audition_player = None
             self._audition_audio = None
+            self._role_map = dict(self.settings["tts_voices"] or {})
+            self._role_names = []
+            self._role_combos = {}
             self._mix_timer = QTimer(self)
             self._mix_timer.setSingleShot(True)
             self._mix_timer.setInterval(250)
@@ -8641,6 +8657,7 @@ def run_gui() -> int:
             self.edit_script.setPlainText(str(self.settings["tts_script"] or ""))
             self.edit_script.textChanged.connect(self.on_script_changed)
             vvp.addWidget(self.edit_script, 1)
+            self.edit_script.setMaximumHeight(90)
             srow = QHBoxLayout()
             self.btn_script_open = QPushButton(tr("打开文稿…"))
             self.btn_script_open.clicked.connect(self.on_open_script)
@@ -8653,6 +8670,7 @@ def run_gui() -> int:
             self.lbl_plan = QLabel(tr("还没有文稿"))
             self.lbl_plan.setWordWrap(True)
             vvp.addWidget(self.lbl_plan)
+            self._voice_vbox = vvp
             vform = QFormLayout()
             vform.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
             vform.setFieldGrowthPolicy(
@@ -8674,14 +8692,26 @@ def run_gui() -> int:
             self._fill_voices(str(self.settings["tts_provider"]),
                               str(self.settings["tts_voice"]))
             vform.addRow(tr("音色"), self.cmb_tts_voice)
-            self.cmb_tts_voice_b = QComboBox()
-            self.cmb_tts_voice_b.setEditable(True)
-            self.cmb_tts_voice_b.setToolTip(
-                tr("双人对话里「角色 B」用这个音色"))
-            self._fill_voices(str(self.settings["tts_provider"]),
-                              str(self.settings["tts_voice_b"]),
-                              self.cmb_tts_voice_b)
-            vform.addRow(tr("音色 B"), self.cmb_tts_voice_b)
+            # 多人对话：文稿里出现几个「名字：」，这里就列几行音色
+            self.role_box = QWidget()
+            _rv = QVBoxLayout(self.role_box)
+            _rv.setContentsMargins(0, 0, 0, 0)
+            _rv.setSpacing(4)
+            self._role_form = QFormLayout()
+            self._role_form.setContentsMargins(0, 0, 0, 0)
+            self._role_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+            self._role_form.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            self._role_form.setVerticalSpacing(2)
+            self.role_hint = QLabel(tr("「名字：」开头就能分角色"))
+            self.role_hint.setObjectName("hint")
+            self.role_hint.setToolTip(tr(
+                "文稿里每行写「小明：……」，这一页就会多出小明这一行，"
+                "给他挑一个音色即可。"))
+            self.role_hint.setWordWrap(False)
+            _rv.addWidget(self.role_hint)
+            _rv.addLayout(self._role_form)
+            self.role_box.setVisible(False)
             self.spin_tts_rate = QSpinBox()
             self.spin_tts_rate.setRange(tts_engine.TTS_MIN_RATE,
                                         tts_engine.TTS_MAX_RATE)
@@ -8690,6 +8720,11 @@ def run_gui() -> int:
             self.spin_tts_rate.setValue(int(self.settings["tts_rate"]))
             self.spin_tts_rate.setToolTip(tr("0 是原速；正数更快，负数更慢"))
             vform.addRow(tr("语速"), self.spin_tts_rate)
+            self.chk_tts_prefix = QCheckBox(tr("字幕带角色名前缀"))
+            self.chk_tts_prefix.setChecked(bool(self.settings["tts_prefix"]))
+            self.chk_tts_prefix.setToolTip(
+                tr("勾上以后字幕会写成「小明：……」，不勾只写台词"))
+            vform.addRow(tr("字幕前缀"), self.chk_tts_prefix)
             self._tts_form = vform
             vvp.addLayout(vform)
             self.progress_tts = QProgressBar()
@@ -8713,11 +8748,7 @@ def run_gui() -> int:
             trow.addWidget(self.btn_tts_audition)
             trow.addStretch(1)
             vvp.addLayout(trow)
-            self.chk_tts_prefix = QCheckBox(tr("字幕带「角色 A：」这样的前缀"))
-            self.chk_tts_prefix.setChecked(bool(self.settings["tts_prefix"]))
-            self.chk_tts_prefix.setToolTip(
-                tr("勾上以后字幕会写成「角色 A：……」，不勾只写台词"))
-            vform.addRow(tr("字幕前缀"), self.chk_tts_prefix)
+            vvp.addWidget(self.role_box)
             self._show_dialogue(False)
             vvp.addSpacing(4)
             self.lbl_narration = QLabel(tr("还没有旁白"))
@@ -8739,7 +8770,14 @@ def run_gui() -> int:
             nrow.addWidget(self.btn_narr_save)
             nrow.addStretch(1)
             vvp.addLayout(nrow)
-            self.left_tabs.addTab(voice_page, tr("配音"))
+            voice_scroll = QScrollArea()
+            voice_scroll.setWidgetResizable(True)
+            voice_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            voice_scroll.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            voice_scroll.setWidget(voice_page)
+            self._voice_scroll = voice_scroll
+            self.left_tabs.addTab(voice_scroll, tr("配音"))
             split.addWidget(self.left_tabs)
 
             right = QWidget()
@@ -8956,11 +8994,13 @@ def run_gui() -> int:
             self.btn_script_clear.setText(tr("清空"))
             self.cmb_tts_voice.setToolTip(
                 tr("下拉里是常用音色，也能直接敲服务商的音色名"))
-            self.cmb_tts_voice_b.setToolTip(
-                tr("双人对话里「角色 B」用这个音色"))
-            self.chk_tts_prefix.setText(tr("字幕带「角色 A：」这样的前缀"))
+            self.role_hint.setText(tr("「名字：」开头就能分角色"))
+            self.role_hint.setToolTip(tr(
+                "文稿里每行写「小明：……」，这一页就会多出小明这一行，"
+                "给他挑一个音色即可。"))
+            self.chk_tts_prefix.setText(tr("字幕带角色名前缀"))
             self.chk_tts_prefix.setToolTip(
-                tr("勾上以后字幕会写成「角色 A：……」，不勾只写台词"))
+                tr("勾上以后字幕会写成「小明：……」，不勾只写台词"))
             self.spin_tts_rate.setToolTip(tr("0 是原速；正数更快，负数更慢"))
             self.progress_tts.setFormat(tr("正在合成 %v/%m 段"))
             self.btn_tts_start.setText(tr("开始合成"))
@@ -8975,12 +9015,12 @@ def run_gui() -> int:
                         _i, tr(tts_engine.TTS_PROVIDERS[_k]["label"]))
             for _fld, _txt in ((self.cmb_tts_provider, tr("配音服务")),
                                (self.cmb_tts_voice, tr("音色")),
-                               (self.cmb_tts_voice_b, tr("音色 B")),
                                (self.spin_tts_rate, tr("语速")),
                                (self.chk_tts_prefix, tr("字幕前缀"))):
                 _lab = self._tts_form.labelForField(_fld)
                 if _lab is not None:
                     _lab.setText(_txt)
+            self._sync_role_rows(force=True)
             self.on_script_changed()
             self.btn_settings.setText(tr("设置"))
             self.btn_settings.setToolTip(
@@ -9312,32 +9352,128 @@ def run_gui() -> int:
                 return str(data)
             return text
 
-        def _tts_voice_b(self) -> str:
-            """角色 B 的音色；空着就跟着角色 A。"""
-            cmb = self.cmb_tts_voice_b
+        def _combo_voice(self, cmb) -> str:
+            """下拉里选中的音色；自己敲的（下拉里没有）直接拿文本。"""
             idx = cmb.currentIndex()
             data = cmb.itemData(idx)
             text = cmb.currentText().strip()
             if data and text == cmb.itemText(idx):
                 return str(data)
-            return text or self._tts_voice()
+            return text
+
+        def _voice_items(self, provider: str) -> list:
+            return list(TTS_VOICES.get(provider) or [])
+
+        def _role_voice(self, name: str) -> str:
+            """某个角色当前选中的音色；缺省时给出兜底。"""
+            cmb = self._role_combos.get(name)
+            if cmb is not None:
+                got = self._combo_voice(cmb)
+                if got:
+                    return got
+            known = self._role_map.get(name)
+            if known:
+                return str(known)
+            if name == "角色 B":
+                return str(self.settings["tts_voice_b"]) or self._tts_voice()
+            if name == "角色 A":
+                return self._tts_voice()
+            used = set(self._role_map.values()) | {self._tts_voice()}
+            for vid, _label in self._voice_items(self._tts_provider()):
+                if vid not in used:
+                    return vid
+            return self._tts_voice()
 
         def _dialogue_turns(self) -> list:
-            """文稿里有没有「角色 A：」「角色 B：」轮次。"""
+            """文稿里有没有「名字：」这样的轮次。"""
             try:
                 return tts_engine.parse_dialogue(self._script_text())
             except Exception:
                 return []
 
         def _show_dialogue(self, on: bool):
-            """没检测到双人对话时把 B 音色与字幕前缀藏起来。"""
-            for fld in (self.cmb_tts_voice_b, self.chk_tts_prefix):
-                if not hasattr(self, "_tts_form"):
-                    continue
-                lab = self._tts_form.labelForField(fld)
+            """没检测到对话时把角色表与字幕前缀藏起来。"""
+            if hasattr(self, "role_box"):
+                self.role_box.setVisible(bool(on))
+            # 有角色时「音色」这一行由角色表接管，避免同一个设置出现两遍
+            if hasattr(self, "cmb_tts_voice"):
+                self.cmb_tts_voice.setVisible(not bool(on))
+                _lab = self._tts_form.labelForField(self.cmb_tts_voice) \
+                    if hasattr(self, "_tts_form") else None
+                if _lab is not None:
+                    _lab.setVisible(not bool(on))
+            if hasattr(self, "chk_tts_prefix"):
+                lab = self._tts_form.labelForField(self.chk_tts_prefix) \
+                    if hasattr(self, "_tts_form") else None
                 if lab is not None:
                     lab.setVisible(bool(on))
-                fld.setVisible(bool(on))
+                self.chk_tts_prefix.setVisible(bool(on))
+
+        def _sync_role_rows(self, force: bool = False):
+            """按文稿里出现的角色，增量维护配音页的角色音色表。"""
+            if not hasattr(self, "_role_form"):
+                return
+            names = tts_engine.scan_speakers(self._script_text())
+            if not force and names == self._role_names:
+                return
+            while self._role_form.rowCount():
+                self._role_form.removeRow(0)
+            self._role_combos = {}
+            provider = self._tts_provider()
+            used = set()
+            for i, name in enumerate(names):
+                cmb = QComboBox()
+                cmb.setEditable(True)
+                cmb.setToolTip(tr("这个角色的音色；也能直接敲服务商的音色名"))
+                wanted = str(self._role_map.get(name) or "")
+                if not wanted:
+                    if name == "角色 A":
+                        wanted = self._tts_voice()
+                    elif name == "角色 B":
+                        wanted = str(self.settings["tts_voice_b"]) \
+                            or self._tts_voice()
+                    else:
+                        items = self._voice_items(provider)
+                        wanted = next((vid for vid, _l in items
+                                       if vid not in used), self._tts_voice())
+                self._fill_voices(provider, wanted, cmb)
+                if not cmb.currentText().strip():
+                    cmb.setEditText(wanted or self._tts_voice())
+                got = self._combo_voice(cmb)
+                used.add(got)
+                if got:
+                    self._role_map[name] = got
+                cmb.currentTextChanged.connect(
+                    lambda _t, who=name: self.on_role_voice_changed(who))
+                self._role_form.addRow(
+                    tr("「{name}」的音色", name=name), cmb)
+                self._role_combos[name] = cmb
+            self._role_names = names
+            self.role_box.setVisible(bool(names))
+            box_w = max(220, self.role_box.width())
+            hint_h = self.role_hint.sizeHint().height() if names else 0
+            self.role_hint.setFixedHeight(hint_h)
+            self.role_box.setMinimumHeight(0)
+            self.role_box.setMaximumHeight(16777215)
+            self.role_box.layout().invalidate()
+            self.role_box.layout().activate()
+            self.role_box.setMinimumHeight(
+                self.role_box.sizeHint().height() if names else 0)
+            self.role_box.updateGeometry()
+            if hasattr(self, "_voice_scroll"):
+                self._voice_scroll.widget().updateGeometry()
+            self._tts_form.invalidate()
+            self._tts_form.activate()
+            self._voice_vbox.invalidate()
+            self._voice_vbox.activate()
+
+        def on_role_voice_changed(self, name: str):
+            cmb = self._role_combos.get(name)
+            if cmb is None:
+                return
+            got = self._combo_voice(cmb)
+            if got:
+                self._role_map[name] = got
 
         def _fill_voices(self, provider: str, wanted: str = "",
                          combo=None):
@@ -9382,6 +9518,14 @@ def run_gui() -> int:
             else:
                 self.lbl_narration.setText(tr(
                     "还没有旁白。合成完它会自动放进时间线的「音频」轨，画面上也会盖字幕。"))
+            st_w = max(220, self.lbl_tts_status.width())
+            self.lbl_tts_status.setMinimumHeight(
+                max(self.lbl_tts_status.sizeHint().height(),
+                    self.lbl_tts_status.heightForWidth(st_w)))
+            n_w = max(220, self.lbl_narration.width())
+            self.lbl_narration.setMinimumHeight(
+                max(self.lbl_narration.sizeHint().height(),
+                    self.lbl_narration.heightForWidth(n_w)))
             self.btn_narr_open.setEnabled(bool(p.narration_path))
             self.btn_narr_save.setEnabled(bool(p.narration_path))
             busy = self._tts_running()
@@ -9427,24 +9571,32 @@ def run_gui() -> int:
 
         def on_script_changed(self):
             text = self._script_text()
+            turns = self._dialogue_turns() if text else []
             if not text:
                 self.lbl_plan.setText(tr("还没有文稿"))
                 self._show_dialogue(False)
             else:
-                turns = self._dialogue_turns()
                 if turns:
                     plan = tts_engine.dialogue_plan(text, self._tts_provider())
-                    a = len([t for t in turns if t["speaker"] == "角色 A"])
-                    b = len(turns) - a
+                    names = []
+                    for t in turns:
+                        if t["speaker"] not in names:
+                            names.append(t["speaker"])
                     self.lbl_plan.setText(tr(
-                        "双人对话：角色 A {a} 轮、角色 B {b} 轮，会切成 {n} 段",
-                        a=a, b=b, n=len(plan)))
+                        "多人对话：{n} 个角色（{names}），会切成 {m} 段",
+                        n=len(names), names="、".join(names),
+                        m=len(plan)))
                 else:
                     plan = tts_engine.make_plan(text, self._tts_provider())
                     self.lbl_plan.setText(tr(
                         "会切成 {n} 段，共 {chars} 字",
                         n=len(plan), chars=sum(p["chars"] for p in plan)))
                 self._show_dialogue(bool(turns))
+            plan_w = max(220, self.lbl_plan.width())
+            self.lbl_plan.setMinimumHeight(
+                max(self.lbl_plan.sizeHint().height(),
+                    self.lbl_plan.heightForWidth(plan_w)))
+            self._sync_role_rows()
             self._refresh_voice_page()
 
         def on_open_script(self):
@@ -9476,8 +9628,7 @@ def run_gui() -> int:
         def on_tts_provider_changed(self):
             provider = self._tts_provider()
             self._fill_voices(provider, str(self.cmb_tts_voice.currentText()))
-            self._fill_voices(provider, str(self.cmb_tts_voice_b.currentText()),
-                              self.cmb_tts_voice_b)
+            self._sync_role_rows(force=True)
             spec = tts_engine.TTS_PROVIDERS[provider]
             if spec.get("needs_key"):
                 self.lbl_tts_status.setText(tr(
@@ -9505,9 +9656,13 @@ def run_gui() -> int:
                       cleanup=bool(s["tts_cleanup"]),
                       extra={"model": str(s["tts_model"]),
                              "region": str(s["tts_azure_region"])})
-            if self._dialogue_turns():
-                kw["voices"] = {"角色 A": self._tts_voice(),
-                                "角色 B": self._tts_voice_b()}
+            turns = self._dialogue_turns()
+            if turns:
+                names = []
+                for t in turns:
+                    if t["speaker"] not in names:
+                        names.append(t["speaker"])
+                kw["voices"] = {name: self._role_voice(name) for name in names}
                 kw["gap"] = float(tts_engine.DIALOGUE_GAP)
                 kw["cue_prefix"] = bool(self.chk_tts_prefix.isChecked())
             return kw
@@ -9595,7 +9750,10 @@ def run_gui() -> int:
                 tts_script=self._script_text(),
                 tts_provider=self._tts_provider(),
                 tts_voice=self._tts_voice(),
-                tts_voice_b=self._tts_voice_b(),
+                tts_voice_b=self._role_map.get("角色 B",
+                                               self.settings["tts_voice_b"]),
+                tts_voices={n: v for n, v in self._role_map.items()
+                            if n in self._role_names},
                 tts_prefix=bool(self.chk_tts_prefix.isChecked()),
                 tts_rate=int(self.spin_tts_rate.value()))
             self.settings.save()
@@ -11507,7 +11665,7 @@ def run_gui() -> int:
 
     if shot:
         for p in [x for x in os.environ.get("PIC2VIDEO_SHOT_IMAGES", "").split(";") if x]:
-            w.add_images([p])
+            w.add_media([p])
         audio = os.environ.get("PIC2VIDEO_SHOT_AUDIO")
         if audio:
             w.project.audio_path = audio

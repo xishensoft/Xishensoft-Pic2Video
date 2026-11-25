@@ -227,24 +227,62 @@ def make_plan(text: str, provider: str = "edge") -> list:
     return [{"index": i, "text": c, "chars": len(c)} for i, c in enumerate(chunks)]
 
 
-# ---------------------------------------------------------------- 对话模式
-DIALOGUE_SPEAKERS = ("角色 A", "角色 B")
+# ---------------------------------------------------------------- 多人对话
+DIALOGUE_SPEAKERS = ("角色 A", "角色 B")   # 旧的两人写法，现在人数不限
 DIALOGUE_GAP = 0.35        # 轮与轮之间的停顿（比普通段间 0.6 秒短）
-_SPEAKER_RE = re.compile(r"^\s*(角色\s*[ABab]|主讲|听友|[ABab])\s*[：:]\s*(.*)$")
+# 行首「名字：」就是一句台词。名字 1–12 个字，不能带空白和标点；
+# 「角色 A：」这种写法单独放行（中间可以有空格）。
+_SPEAKER_TOKEN = r"[^\s：:，。！？；、,.!?;（）()\[\]【】{}<>《》\"'“”‘’]{1,12}"
+_SPEAKER_RE = re.compile(
+    r"^\s*((?:角色\s*)?" + _SPEAKER_TOKEN + r")\s*[：:]\s*(.*)$")
+# 「http://」这种行首不是角色；明显是网址就不当台词。
+_SPEAKER_NOT = {"http", "https", "ftp", "mailto"}
 
 
-def _speaker_name(raw: str) -> str:
-    """把各种写法归一成「角色 A」/「角色 B」（旧的「主讲 / 听友」也认）。"""
-    key = re.sub(r"\s+", "", str(raw or "")).upper()
-    if key in ("角色A", "A", "主讲"):
+def speaker_name(raw: str) -> str:
+    """把角色标记归一成一个名字。
+
+    「角色A」「A」「a」都变成「角色 A」；「角色 B」同理；
+    「主讲」「听友」是旧写法，映射到角色 A / 角色 B；其它名字原样保留。
+    """
+    s = re.sub(r"\s+", " ", str(raw or "")).strip()
+    if not s:
+        return ""
+    compact = s.replace(" ", "")
+    if compact == "主讲":
         return "角色 A"
-    if key in ("角色B", "B", "听友"):
+    if compact == "听友":
         return "角色 B"
-    return "角色 A"
+    if re.fullmatch(r"[A-Za-z]", compact):
+        return "角色 " + compact.upper()
+    if compact.startswith("角色"):
+        rest = compact[2:]
+        if re.fullmatch(r"[A-Za-z]", rest):
+            return "角色 " + rest.upper()
+        if rest.isdigit():
+            return "角色 " + rest
+        return rest
+    return s
+
+
+def scan_speakers(text: str) -> list:
+    """按出场顺序列出文稿里的角色名（去重，不要求这句有台词）。"""
+    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    out = []
+    for raw in text.split("\n"):
+        hit = _SPEAKER_RE.match(raw.strip())
+        if not hit:
+            continue
+        if hit.group(1).strip().lower() in _SPEAKER_NOT:
+            continue
+        name = speaker_name(hit.group(1))
+        if name and name not in out:
+            out.append(name)
+    return out
 
 
 def parse_dialogue(text: str) -> list:
-    """把「角色 A：…」「角色 B：…」逐轮的文稿拆成 [{"speaker","text"}]。
+    """把「名字：…」逐轮的文稿拆成 [{"speaker","text"}]，角色数量不限。
 
     没有轮次标记就返回空列表（调用方按单人处理）。第一句标记之前的文字
     当作旁白忽略掉，避免把标题、说明也念出来。
@@ -258,11 +296,11 @@ def parse_dialogue(text: str) -> list:
     for raw in text.split("\n"):
         line = raw.strip()
         hit = _SPEAKER_RE.match(line)
-        if hit:
+        if hit and hit.group(1).strip().lower() not in _SPEAKER_NOT:
             if speaker and "".join(buf).strip():
                 turns.append({"speaker": speaker, "text": " ".join(
                     x for x in buf if x).strip()})
-            speaker = _speaker_name(hit.group(1))
+            speaker = speaker_name(hit.group(1))
             buf = [hit.group(2).strip()]
             continue
         if speaker:
@@ -274,7 +312,7 @@ def parse_dialogue(text: str) -> list:
 
 
 def dialogue_plan(text: str, provider: str = "edge", limit: int = 0) -> list:
-    """双人对话的合成计划：一轮一条（太长再按句子拆），带 speaker。"""
+    """多人对话的合成计划：一轮一条（太长再按句子拆），带 speaker。"""
     turns = parse_dialogue(text)
     if not turns:
         return []

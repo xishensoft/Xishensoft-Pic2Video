@@ -3812,7 +3812,7 @@ check("key 只收认识的、去空白",
 check("配音工作线程在", "class TtsWorker(QThread)" in _src)
 check("工作线程把 Event 交给引擎", "cancel=self._stop, **self.kwargs)" in _src)
 check("工作线程调 synth_plan", "tts_engine.synth_plan(" in _src)
-check("左栏有配音页", 'addTab(voice_page, tr("配音"))' in _src)
+check("左栏有配音页", 'addTab(voice_scroll, tr("配音"))' in _src)
 check("配音页只在标准以上出现",
       "self.left_tabs.setTabVisible(3, advanced)" in _src)
 check("配音页有开始/取消/试听", all(x in _src for x in (
@@ -3868,41 +3868,55 @@ check("Gemini 词条四语齐",
 
 
 
-# ---------------- 79 双人对话（角色 A / 角色 B）
+# ---------------- 79 多人对话（任意角色名 + 动态音色表）
 _s79 = p.Settings(os.path.join(tmp, "settings_dlg.json"))
-check("对话音色 B 有默认值", _s79["tts_voice_b"] == "zh-CN-YunjianNeural", _s79["tts_voice_b"])
+check("角色音色表默认空", _s79["tts_voices"] == {}, _s79["tts_voices"])
+check("旧对话音色 B 仍保留", _s79["tts_voice_b"] == "zh-CN-YunjianNeural")
 check("字幕前缀默认关", _s79["tts_prefix"] is False)
-_s79["tts_voice_b"] = "   "
-_s79["tts_prefix"] = "yes"
-_s79 = p.Settings(os.path.join(tmp, "settings_dlg.json"))
-_s79.update(tts_voice_b="   ", tts_prefix="yes")
+_s79.update(tts_voice_b="   ", tts_prefix="yes",
+            tts_voices={"角色A": "v1", " 小明 ": "v2", "": "x"})
 _s79.save()
 _s79 = p.Settings(os.path.join(tmp, "settings_dlg.json"))
 check("空音色 B 回落默认", _s79["tts_voice_b"] == "zh-CN-YunjianNeural", _s79["tts_voice_b"])
 check("前缀非布尔回落关", _s79["tts_prefix"] is False)
-check("对话轮次解析在引擎里", callable(getattr(p.tts_engine, "parse_dialogue", None)))
+check("角色音色表清洗角色名",
+      _s79["tts_voices"] == {"角色 A": "v1", "小明": "v2"}, _s79["tts_voices"])
+check("多人解析在引擎里", callable(getattr(p.tts_engine, "parse_dialogue", None)))
+check("角色扫描在引擎里", callable(getattr(p.tts_engine, "scan_speakers", None)))
+check("角色归一在引擎里", callable(getattr(p.tts_engine, "speaker_name", None)))
 check("对话计划在引擎里", callable(getattr(p.tts_engine, "dialogue_plan", None)))
 check("轮间停顿是 0.35", abs(float(p.tts_engine.DIALOGUE_GAP) - 0.35) < 1e-6)
 for _needle, _why in (
-        ('self.cmb_tts_voice_b = QComboBox()', "配音页有音色 B 下拉"),
-        ('vform.addRow(tr("音色 B"), self.cmb_tts_voice_b)', "音色 B 进表单"),
-        ('self.chk_tts_prefix = QCheckBox(tr("字幕带「角色 A：」这样的前缀"))', "有字幕前缀开关"),
-        ('def _dialogue_turns(self) -> list:', "有对话检测"),
-        ('tts_engine.parse_dialogue(self._script_text())', "检测走引擎解析"),
-        ('def _show_dialogue(self, on: bool):', "没对话稿就藏起 B 音色"),
-        ('tts_engine.dialogue_plan(text, provider)', "合成用对话计划"),
-        ('kw["voices"] = {"角色 A": self._tts_voice(),', "按角色分音色"),
+        ('"tts_voices": {},', "设置里有角色音色表"),
+        ('raw_voices = d.get("tts_voices")', "设置清洗读角色音色表"),
+        ('name = tts_engine.speaker_name(k)', "音色表键按角色名归一"),
+        ('self.role_box = QWidget()', "配音页有角色表容器"),
+        ('self._role_form = QFormLayout()', "角色表是表单"),
+        ('tr("「{name}」的音色", name=name)', "每个角色一行音色"),
+        ('self.role_hint = QLabel(', "角色表有提示"),
+        ('def _sync_role_rows(self, force: bool = False):', "角色表按文稿同步"),
+        ('tts_engine.scan_speakers(self._script_text())', "同步时扫角色"),
+        ('self.role_box.setVisible(bool(names))', "没角色就藏起角色表"),
+        ('self._voice_scroll = voice_scroll', "配音页可上下滚"),
+        ('self.role_box.setMinimumHeight(', "角色表撑开自己的高度"),
+        ('def on_role_voice_changed(self, name: str):', "改音色有回调"),
+        ('def _role_voice(self, name: str) -> str:', "有按角色取音色的方法"),
+        ('kw["voices"] = {name: self._role_voice(name) for name in names}', "按角色分音色"),
         ('kw["gap"] = float(tts_engine.DIALOGUE_GAP)', "对话用 0.35 秒间隔"),
         ('kw["cue_prefix"] = bool(self.chk_tts_prefix.isChecked())', "前缀跟随开关"),
-        ('tts_voice_b=self._tts_voice_b(),', "记住音色 B"),
+        ('tts_voices={n: v for n, v in self._role_map.items()', "记住角色音色"),
         ('tts_prefix=bool(self.chk_tts_prefix.isChecked()),', "记住前缀开关")):
     check(_why, _needle in _src, _needle)
-for _key, _tr in (("音色 B", "Voice B"),
-                  ("字幕前缀", "Caption prefix"),
-                  ("双人对话里「角色 B」用这个音色", "character b"),
-                  ("字幕带「角色 A：」这样的前缀", "Prefix captions")):
+check("旧的音色 B 下拉已删掉", "cmb_tts_voice_b" not in _src)
+for _key, _tr in (("多人对话：{n} 个角色（{names}），会切成 {m} 段", "multi-speaker"),
+                  ("「{name}」的音色", "voice for"),
+                  ("这个角色的音色；也能直接敲服务商的音色名", "provider voice"),
+                  ("「名字：」开头就能分角色", "start a line"),
+                  ("文稿里每行写「小明：……」，这一页就会多出小明这一行，给他挑一个音色即可。", "row appears"),
+                  ("字幕带角色名前缀", "prefix captions"),
+                  ("勾上以后字幕会写成「小明：……」，不勾只写台词", "xiaoming")):
     _row = _i18n["en"].get(_key)
-    check("对话词条四语齐 " + _key,
+    check("多人对话词条四语齐 " + _key,
           bool(_row) and _tr.lower() in _row.lower(), _row)
 
 
