@@ -1,5 +1,7 @@
 # Xishensoft's Pic2Video
 
+简体中文 · [繁體中文](README.zh-TW.md) · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+
 给几张图片或视频、粘一个视频链接，一键出一条带背景音乐的成片。做视频时最省事的那一步：**图片 / 视频 + B站 / 抖音 / YouTube 的音乐 → mp4**。
 
 ![演示：排好素材 → 粘音乐链接 → 导出](screenshots/demo.gif)
