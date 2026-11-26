@@ -2796,8 +2796,10 @@ def snap_candidates(project, playhead: float = 0.0, extra=()) -> list:
 
 TIMELINE_ZOOM_MIN = 1.0    # 1.0 = 整条片子铺满时间线
 TIMELINE_ZOOM_MAX = 64.0
-TIMELINE_RULER_H = 18      # 顶部时间刻度条的高度
-TIMELINE_HEADER_W = 112    # 左侧轨头宽度：画面 / 画中画 / 字幕 / 音频
+TIMELINE_RULER_H = 28      # 顶部时间刻度条的高度
+TIMELINE_HEADER_W = 120    # 左侧轨头宽度：画面 / 画中画 / 字幕 / 音频
+TIMELINE_LANE_H = 64       # 每条轨道的高度：28 + 64×4 = 284
+TIMELINE_LANES_H = TIMELINE_RULER_H + TIMELINE_LANE_H * 4
 
 
 def timeline_span(total: float, zoom: float) -> float:
@@ -4540,6 +4542,7 @@ def run_gui() -> int:
         QTextEdit,
         QSplitter, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget)
     from bili_audio import BiliError, bili_audio
+    from ui_icons import icon as lucide_icon
 
     # ------------------------------------------------------------ 自绘边框
     # Windows 默认那圈蓝边框 + 白色标题栏跟软件配色对不上，所以全部窗口
@@ -4560,113 +4563,8 @@ def run_gui() -> int:
         return QIcon(path) if path else QIcon()
 
     def ui_icon(kind: str, color: str, size: int = 16) -> QIcon:
-        """命令栏 / 轨头用的细线条图标：统一线宽、圆头、跟着主题色变。"""
-        pm = QPixmap(size, size)
-        pm.fill(Qt.GlobalColor.transparent)
-        p = QPainter(pm)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        pen = QPen(QColor(color), 1.6)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        s = float(size)
-        m = 2.0
-        mid = s / 2.0
-
-        def line(x1, y1, x2, y2):
-            p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
-
-        if kind == "plus":
-            line(mid, m, mid, s - m)
-            line(m, mid, s - m, mid)
-        elif kind == "overlay":
-            p.drawRoundedRect(QRectF(1.5, 3.0, s * 0.55, s * 0.46), 1.5, 1.5)
-            p.drawRoundedRect(QRectF(s * 0.28, s * 0.36, s * 0.55,
-                                     s * 0.46), 1.5, 1.5)
-        elif kind == "magnet":
-            p.drawArc(QRectF(3.0, 4.0, s - 6.0, s - 4.0), 180 * 16, 180 * 16)
-            line(3.0, s - 5.0, 3.0, 4.5)
-            line(s - 3.0, s - 5.0, s - 3.0, 4.5)
-            line(3.0, s - 5.0, 3.0, s - 2.5)
-            line(s - 3.0, s - 5.0, s - 3.0, s - 2.5)
-        elif kind == "scissors":
-            p.drawEllipse(QPointF(4.2, s - 3.7), 2.0, 2.0)
-            p.drawEllipse(QPointF(4.2, 3.7), 2.0, 2.0)
-            line(5.9, s - 5.2, s - 2.0, 3.0)
-            line(5.9, 5.2, s - 2.0, s - 3.0)
-        elif kind in ("undo", "redo"):
-            flip = kind == "redo"
-            path = QPainterPath()
-            if not flip:
-                path.moveTo(3.0, 6.0)
-                path.cubicTo(6.0, 2.0, 12.5, 2.0, 13.0, 8.0)
-                path.cubicTo(13.2, 11.0, 11.2, 13.0, 8.0, 13.0)
-            else:
-                path.moveTo(s - 3.0, 6.0)
-                path.cubicTo(s - 6.0, 2.0, s - 12.5, 2.0, s - 13.0, 8.0)
-                path.cubicTo(s - 13.2, 11.0, s - 11.2, 13.0, s - 8.0, 13.0)
-            p.drawPath(path)
-            if not flip:
-                line(3.0, 6.0, 3.0, 2.5)
-                line(3.0, 6.0, 6.5, 6.0)
-            else:
-                line(s - 3.0, 6.0, s - 3.0, 2.5)
-                line(s - 3.0, 6.0, s - 6.5, 6.0)
-        elif kind == "gear":
-            # 齿轮：外圈 + 内孔 + 八颗连着的齿（早期版本只画短线，看着像太阳）
-            p.drawEllipse(QPointF(mid, mid), 4.3, 4.3)
-            p.drawEllipse(QPointF(mid, mid), 1.7, 1.7)
-            teeth = QPen(QColor(color), 2.1)
-            teeth.setCapStyle(Qt.PenCapStyle.FlatCap)
-            p.setPen(teeth)
-            for k in range(8):
-                a = math.radians(k * 45.0)
-                line(mid + math.cos(a) * 4.2, mid + math.sin(a) * 4.2,
-                     mid + math.cos(a) * 6.6, mid + math.sin(a) * 6.6)
-            p.setPen(pen)
-        elif kind == "refresh":
-            p.drawArc(QRectF(2.5, 2.5, s - 5.0, s - 5.0), 35 * 16, 285 * 16)
-            line(s - 2.7, 3.0, s - 2.7, 6.2)
-            line(s - 2.7, 3.0, s - 5.9, 3.0)
-        elif kind == "export":
-            line(mid, s - 4.0, mid, 3.0)
-            line(mid - 3.2, 6.0, mid, 3.0)
-            line(mid + 3.2, 6.0, mid, 3.0)
-            p.drawRoundedRect(QRectF(3.0, s - 3.2, s - 6.0, 2.2), 1.0, 1.0)
-        elif kind == "up":
-            line(mid, s - 3.0, mid, 3.0)
-            line(mid - 3.0, 6.0, mid, 3.0)
-            line(mid + 3.0, 6.0, mid, 3.0)
-        elif kind == "down":
-            line(mid, 3.0, mid, s - 3.0)
-            line(mid - 3.0, s - 6.0, mid, s - 3.0)
-            line(mid + 3.0, s - 6.0, mid, s - 3.0)
-        elif kind == "remove":
-            line(3.2, 3.2, s - 3.2, s - 3.2)
-            line(s - 3.2, 3.2, 3.2, s - 3.2)
-        elif kind == "video":
-            p.drawRoundedRect(QRectF(1.5, 4.0, s - 3.0, s - 8.0), 1.5, 1.5)
-            line(s * 0.36, 4.0, s * 0.36, s - 4.0)
-            line(s * 0.64, 4.0, s * 0.64, s - 4.0)
-        elif kind == "subtitle":
-            p.drawRoundedRect(QRectF(1.5, 3.5, s - 3.0, s - 8.0), 2.0, 2.0)
-            line(4.0, 7.0, s - 4.0, 7.0)
-            line(4.0, 10.0, s - 6.0, 10.0)
-        elif kind == "audio":
-            for h, x in ((4.0, 4.2), (8.0, 8.0), (6.0, 11.8)):
-                line(x, mid - h / 2.0, x, mid + h / 2.0)
-        elif kind == "pip":
-            p.drawRoundedRect(QRectF(1.8, 2.8, s - 3.6, s - 5.6), 2.0, 2.0)
-            p.drawRoundedRect(QRectF(s * 0.46, s * 0.45, s * 0.42,
-                                     s * 0.34), 1.0, 1.0)
-        elif kind == "play":
-            p.setBrush(QColor(color))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawPolygon(QPolygonF([QPointF(5.0, 3.0), QPointF(13.0, 8.0),
-                                     QPointF(5.0, 13.0)]))
-        p.end()
-        return QIcon(pm)
+        """界面统一使用 Lucide 线性图标，颜色随主题。"""
+        return lucide_icon(kind, color, size)
 
     def _screen_point(lparam: int) -> tuple[int, int]:
         x = ctypes.c_short(lparam & 0xFFFF).value
@@ -5660,7 +5558,7 @@ def run_gui() -> int:
             self.pal = {}
 
         def sizeHint(self, option, index):
-            return QSize(240, 68)
+            return QSize(276, 78)
 
         def paint(self, p, option, index):
             pal = self.pal or {}
@@ -5683,7 +5581,7 @@ def run_gui() -> int:
                 p.setBrush(QColor(pal.get("accent", "#3b82f6")))
                 p.drawRoundedRect(QRectF(r.x() + 1, r.y() + 9, 3,
                                          r.height() - 18), 1.5, 1.5)
-            thumb = QRect(r.x() + 6, r.y() + 6, 78, 44)
+            thumb = QRect(r.x() + 6, r.y() + 6, 96, 54)
             thumb_pm = index.data(self.THUMB_ROLE)
             icon = index.data(Qt.ItemDataRole.DecorationRole)
             p.save()
@@ -5729,7 +5627,7 @@ def run_gui() -> int:
             f.setPointSize(max(8, f.pointSize()))
             f.setBold(True)
             p.setFont(f)
-            p.drawText(QRect(x, r.y() + 11, r.right() - x - 10, 20),
+            p.drawText(QRect(x, r.y() + 15, r.right() - x - 10, 20),
                        Qt.AlignmentFlag.AlignVCenter
                        | Qt.AlignmentFlag.AlignLeft,
                        p.fontMetrics().elidedText(
@@ -5741,7 +5639,7 @@ def run_gui() -> int:
                 f2.setPointSize(max(7, f2.pointSize() - 1))
                 f2.setBold(False)
                 p.setFont(f2)
-                p.drawText(QRect(x, r.y() + 33, r.right() - x - 10, 18),
+                p.drawText(QRect(x, r.y() + 39, r.right() - x - 10, 18),
                            Qt.AlignmentFlag.AlignVCenter
                            | Qt.AlignmentFlag.AlignLeft,
                            p.fontMetrics().elidedText(
@@ -5914,6 +5812,8 @@ def run_gui() -> int:
         subtitleMoved = pyqtSignal(int, float)       # 字幕整条挪（序号, 新起点）
 
         DEFAULT_COLORS = {"bg": "#1f2329", "empty": "#9ca3af",
+                          "raised": "#171b22", "field": "#0b0d10",
+                          "text": "#f1f4f8", "theme": "dark",
                           "piece_a": "#b86b6b", "piece_b": "#b8a05f",
                           "piece_text": "#111827", "playhead": "#f59e0b",
                           "selected_edge": "#3b82f6", "audio": "#2f6f5e",
@@ -5952,34 +5852,38 @@ def run_gui() -> int:
             self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         # -- 几何 ------------------------------------------------------
+        def _lane_rect(self, index):
+            top = TIMELINE_RULER_H + int(index) * TIMELINE_LANE_H
+            return top, top + TIMELINE_LANE_H
+
         def _video_rect(self):
-            h = self.height()
-            # 顶部留一条时间刻度，画面块从它下面开始
-            return TIMELINE_RULER_H, max(TIMELINE_RULER_H + 26, int(h * 0.46))
+            # 画面轨永远在第一轨；块上下各留 8px，正好 48px 高
+            return self._lane_rect(0)
 
         def _overlay_rect(self):
-            """画中画轨：夹在画面块和音频块中间；不需要时高度为零。"""
+            """画中画轨：显示时是第二轨，隐藏时高度为零。"""
             if not self.show_overlay:
                 edge = self._video_rect()[1]
                 return edge, edge
-            top = self._video_rect()[1] + 12
-            return top, top + max(14, int(self.height() * 0.14))
+            return self._lane_rect(1)
 
         def _subs_rect(self):
-            """字幕轨：夹在画中画和音频中间；没有字幕时高度为零。"""
+            """字幕轨：跟在画中画后面；没有字幕时高度为零。"""
             if not self.show_subs:
                 edge = self._overlay_rect()[1]
                 return edge, edge
-            top = self._overlay_rect()[1] + (8 if self.show_overlay else 4)
-            return top, top + max(12, int(self.height() * 0.09))
+            index = 2 if self.show_overlay else 1
+            return self._lane_rect(index)
 
         def _audio_rect(self):
-            top = self._subs_rect()[1]
-            top += 6 if self.show_subs else (
-                8 if self.show_overlay else 6)
             if not self.show_audio:
-                return top, top
-            return top, max(top + 16, self.height() - 4)
+                edge = self._subs_rect()[1]
+                return edge, edge
+            index = 1 + int(self.show_overlay) + int(self.show_subs)
+            return self._lane_rect(index)
+
+        def _visible_lanes(self):
+            return 1 + int(self.show_overlay) + int(self.show_subs) + int(self.show_audio)
 
         def set_rows(self, show_overlay: bool = True,
                      show_audio: bool = True, show_subs: bool = True):
@@ -5998,6 +5902,7 @@ def run_gui() -> int:
                 self.sel_audio = []
             if not show_subs:
                 self.sel_subs = []
+            self.setFixedHeight(TIMELINE_RULER_H + TIMELINE_LANE_H * self._visible_lanes())
             self.update()
 
         def _total(self) -> float:
@@ -6157,6 +6062,8 @@ def run_gui() -> int:
         def _audio_rows(self, count: int):
             """多条音频各自一行，能并排看到叠在一起的效果。"""
             top, bottom = self._audio_rect()
+            top += 8
+            bottom -= 8
             n = max(1, count)
             row = max(10.0, (bottom - top) / n)
             return [(top + i * row, top + (i + 1) * row - 2) for i in range(n)]
@@ -6228,177 +6135,181 @@ def run_gui() -> int:
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
             p.fillRect(self.rect(), QColor(self.c["bg"]))
             spans, total = self._spans()
-            if not spans:
-                p.setPen(QColor(self.c["empty"]))
-                p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                           tr("把图片或视频拖进来，或点「加素材」"))
-                return
-            font = QFont(self.font())
-            font.setPointSize(9)
-            p.setFont(font)
-            top, vh = self._video_rect()
-            # 顶部时间刻度：每格至少 64px，缩放/滚动都跟着重算
-            ticks = timeline_ticks(self.view_start, self._view_span(),
-                                   self._lane_w())
-            p.setPen(QPen(QColor(self.c["border"]), 1))
+            dark = self.c.get("theme") == "dark"
+            panel = QColor(self.c["raised"])
+            border = QColor(self.c["border"])
+            muted = QColor(self.c["empty"])
+            accent = QColor(self.c["selected_edge"])
+            field = QColor(self.c.get("field", self.c["bg"]))
+            # 顶部刻度条：28px，和设计稿一样用浅一档的面板色
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(panel)
+            p.drawRect(QRect(0, 0, self.width(), TIMELINE_RULER_H))
+            p.setPen(QPen(border, 1))
             p.drawLine(0, TIMELINE_RULER_H - 1, self.width(),
                        TIMELINE_RULER_H - 1)
-            for _t, _x, _label in ticks:
+            tick_font = QFont(self.font())
+            tick_font.setFamilies(["Cascadia Mono", "Consolas", "monospace"])
+            tick_font.setPixelSize(10)
+            p.setFont(tick_font)
+            for _t, _x, _label in timeline_ticks(self.view_start,
+                                                self._view_span(),
+                                                self._lane_w()):
                 xi = int(_x) + TIMELINE_HEADER_W
                 if xi < -2 or xi > self.width() + 2:
                     continue
-                p.setPen(QPen(QColor(self.c["empty"]), 1))
-                p.drawLine(xi, TIMELINE_RULER_H - 6, xi, TIMELINE_RULER_H - 1)
-                p.setPen(QColor(self.c["empty"]))
-                p.drawText(xi + 4, TIMELINE_RULER_H - 5, _label)
-                # 一条很淡的竖线，方便把块和刻度对上
-                p.setPen(QPen(QColor(self.c["border"]), 1,
-                              Qt.PenStyle.DotLine))
-                p.drawLine(xi, TIMELINE_RULER_H, xi, self.height() - 2)
-            base = QColor(self.c["piece_a"])
-            dark_bg = self.c.get("theme") == "dark"
-            crosses = 0.0
+                p.setPen(QPen(border, 1))
+                p.drawLine(xi, TIMELINE_RULER_H - 7, xi, TIMELINE_RULER_H - 1)
+                p.setPen(muted)
+                p.drawText(xi + 5, TIMELINE_RULER_H - 9, _label)
+                p.setPen(QPen(border, 1, Qt.PenStyle.DotLine))
+                p.drawLine(xi, TIMELINE_RULER_H, xi, self.height())
+
+            # 轨道底：四条 64px 的横条，分隔线压在最上面
+            for idx in range(self._visible_lanes()):
+                top, bot = self._lane_rect(idx)
+                p.fillRect(0, top, self.width(), bot - top, field)
+                p.setPen(QPen(border, 1))
+                p.drawLine(TIMELINE_HEADER_W, top, self.width(), top)
+
+            if not spans:
+                p.setPen(muted)
+                p.drawText(QRect(TIMELINE_HEADER_W, TIMELINE_RULER_H,
+                                  self.width() - TIMELINE_HEADER_W,
+                                  self.height() - TIMELINE_RULER_H),
+                           Qt.AlignmentFlag.AlignCenter,
+                           tr("把图片或视频拖进来，或点「加素材」"))
+            clip_font = QFont(self.font())
+            clip_font.setPixelSize(11)
+            clip_font.setBold(True)
+            sub_font = QFont(self.font())
+            sub_font.setFamilies(["Cascadia Mono", "Consolas", "monospace"])
+            sub_font.setPixelSize(10)
+
+            # 画面轨：块高 48，上下各留 8，和设计稿的 64px 轨道对上
+            top, bot = self._video_rect()
             for i, (x0, x1, d) in enumerate(spans):
                 clip = self.project.clips[i]
-                col = QColor(base)
-                if i % 2:
-                    col = col.lighter(116) if dark_bg else col.darker(108)
-                if i in self.selected:
-                    col = col.lighter(128)
-                p.fillRect(int(x0) + 1, top, max(1, int(x1 - x0) - 2),
-                           vh - top - 2, col)
-                if i in self.selected:
-                    p.setPen(QPen(QColor(self.c["selected_edge"]), 2))
-                    p.drawRect(int(x0) + 1, top, max(1, int(x1 - x0) - 2),
-                               vh - top - 3)
-                if x1 - x0 > 26 and x1 > 0 and x0 < self.width():
-                    p.setPen(QColor(theme.contrast_text(col.name())))
-                    name = {"intro": tr("片头"), "outro": tr("片尾")}.get(
-                        clip.kind, f"{i + 1}")
+                selected = i in self.selected
+                w = max(2, int(x1 - x0) - 2)
+                cr = QRectF(int(x0) + 1, top + 8, w, 48)
+                bg = QColor("#1B335C" if selected else "#171B22") if dark \
+                    else QColor("#DBEAFE" if selected else "#FFFFFF")
+                edge = accent if selected else border
+                p.setPen(QPen(edge, 1.4 if selected else 1.0))
+                p.setBrush(bg)
+                p.drawRoundedRect(cr, 6, 6)
+                if x1 - x0 > 22 and x1 > TIMELINE_HEADER_W and x0 < self.width():
+                    p.setFont(clip_font)
+                    p.setPen(QColor(self.c["text"]))
                     marks = ""
                     if clip.fade:
                         marks += "◐"
                     if clip.xfade:
                         marks += "⇄"
                     base = os.path.basename(clip.path or "")
-                    text = f"{name} · {d:.1f}s {marks}"
-                    if base and x1 - x0 > 80:
-                        # 块够宽就写「序号 · 文件名 · 时长」，跟素材卡片对得上
-                        text = f"{name} · {base} · {d:.1f}s {marks}"
-                    # 放大后块的左端可能跑到窗口外，文字贴到可见区左边
-                    tx = max(int(x0) + 6, 6)
-                    avail = int(min(x1, self.width() - 4)) - tx
-                    if avail > 24:
-                        text = p.fontMetrics().elidedText(
-                            text, Qt.TextElideMode.ElideRight, avail)
-                        p.drawText(tx, top + 14, text)
-                        # 第二行给时长：块够高才写，免得挤到下一轨
-                        if vh - top >= 34 and avail > 30:
-                            f2 = QFont(p.font())
-                            f2.setPointSizeF(max(6.5, f2.pointSizeF() - 1.5))
-                            p.setFont(f2)
-                            sec = tr("{dur} 秒", dur=f"{d:.1f}")
-                            sec = p.fontMetrics().elidedText(
-                                sec, Qt.TextElideMode.ElideRight, avail)
-                            p.setPen(QColor(theme.contrast_text(col.name())))
-                            p.drawText(tx, top + 28, sec)
-                            p.setFont(QFont(self.font()))
-                if clip.xfade and i < len(spans) - 1:
-                    crosses += 1
-                    p.setPen(QPen(QColor(self.c["playhead"]), 1,
-                                  Qt.PenStyle.DotLine))
-                    p.drawLine(int(x1), top, int(x1), top + vh - top)
-
-            # 画中画轨（这一档/这段没有画中画就不出现）
-            otop, obottom = self._overlay_rect()
-            if self.show_overlay:
-                p.setPen(QColor(self.c["empty"]))
-                p.drawText(4, otop - 4, tr("画中画"))
-            for k, (x0, x1, ov) in enumerate(
-                    self._overlay_spans() if self.show_overlay else []):
-                col = QColor(self.c["overlay_sel"] if k in self.sel_overlay
-                             else self.c["overlay"])
-                p.fillRect(int(x0), otop, max(2, int(x1 - x0)),
-                           max(4, obottom - otop - 1), col)
-                if k in self.sel_overlay:
-                    p.setPen(QPen(QColor(self.c["selected_edge"]), 2))
-                    p.drawRect(int(x0), otop, max(2, int(x1 - x0)),
-                               max(4, obottom - otop - 1))
-                if x1 - x0 > 34 and x1 > 0 and x0 < self.width():
-                    p.setPen(QColor(theme.contrast_text(col.name())))
-                    tx = max(int(x0) + 5, 5)
-                    avail = int(min(x1, self.width() - 4)) - tx
-                    if avail > 24:
-                        p.drawText(tx, otop + 12, p.fontMetrics().elidedText(
-                            f"{os.path.basename(ov.path)[:16]}  "
-                            f"{int(round(ov.scale))}%",
-                            Qt.TextElideMode.ElideRight, avail))
-
-            # 字幕轨（一条字幕一个块，宽度就是它显示的那一段）
-            stop, sbot = self._subs_rect()
-            if self.show_subs:
-                p.setPen(QColor(self.c["empty"]))
-                p.drawText(4, stop - 4, tr("字幕"))
-            for k, (x0, x1, cue) in enumerate(
-                    self._sub_spans() if self.show_subs else []):
-                col = QColor(self.c["sub_sel"] if k in self.sel_subs
-                             else self.c["sub"])
-                p.fillRect(int(x0) + 1, stop + 1, max(2, int(x1 - x0) - 2),
-                           max(4, sbot - stop - 2), col)
-                if k in self.sel_subs:
-                    p.setPen(QPen(QColor(self.c["selected_edge"]), 2))
-                    p.drawRect(int(x0) + 1, stop + 1,
-                               max(2, int(x1 - x0) - 2),
-                               max(4, sbot - stop - 3))
-                if x1 - x0 > 26 and x1 > 0 and x0 < self.width():
-                    p.setPen(QColor(theme.contrast_text(col.name())))
-                    tx = max(int(x0) + 5, 5)
+                    text = f"{base} · {d:.1f}s {marks}".strip()
+                    tx = max(int(x0) + 8, TIMELINE_HEADER_W + 4)
                     avail = int(min(x1, self.width() - 4)) - tx
                     if avail > 20:
-                        p.drawText(tx, stop + 12,
+                        p.setPen(QColor("#EAF2FF" if selected and dark
+                                        else self.c["text"]))
+                        p.drawText(tx, int(top) + 23,
+                                   p.fontMetrics().elidedText(
+                                       text, Qt.TextElideMode.ElideRight, avail))
+                        p.setFont(sub_font)
+                        p.setPen(QColor("#A9C4EA" if selected and dark
+                                        else self.c["empty"]))
+                        sec = tr("{dur} 秒", dur=f"{d:.1f}")
+                        p.drawText(tx, int(top) + 39,
+                                   p.fontMetrics().elidedText(
+                                       sec, Qt.TextElideMode.ElideRight, avail))
+                if clip.xfade and i < len(spans) - 1:
+                    p.setPen(QPen(QColor(self.c["playhead"]), 1,
+                                  Qt.PenStyle.DotLine))
+                    p.drawLine(int(x1), int(top) + 8, int(x1), int(top) + 56)
+
+            # 画中画轨：块高 32，上下各留 16
+            otop, obot = self._overlay_rect()
+            if self.show_overlay:
+                for k, (x0, x1, ov) in enumerate(self._overlay_spans()):
+                    selected = k in self.sel_overlay
+                    w = max(2, int(x1 - x0))
+                    cr = QRectF(int(x0), otop + 16, w, 32)
+                    p.setPen(QPen(QColor("#A87BD8" if selected else "#7C5AA8"),
+                                 1.4 if selected else 1.0))
+                    p.setBrush(QColor("#5B3F7C" if selected else "#4C3666"))
+                    p.drawRoundedRect(cr, 5, 5)
+                    if x1 - x0 > 30:
+                        p.setFont(clip_font)
+                        p.setPen(QColor("#F3E8FF"))
+                        tx = max(int(x0) + 7, TIMELINE_HEADER_W + 4)
+                        avail = int(min(x1, self.width() - 4)) - tx
+                        p.drawText(tx, int(otop) + 37,
+                                   p.fontMetrics().elidedText(
+                                       f"{os.path.basename(ov.path)[:16]}  "
+                                       f"{int(round(ov.scale))}%",
+                                       Qt.TextElideMode.ElideRight, avail))
+
+            # 字幕轨：块高 32
+            stop, sbot = self._subs_rect()
+            if self.show_subs:
+                for k, (x0, x1, cue) in enumerate(self._sub_spans()):
+                    selected = k in self.sel_subs
+                    w = max(2, int(x1 - x0) - 2)
+                    cr = QRectF(int(x0) + 1, stop + 16, w, 32)
+                    p.setPen(QPen(QColor("#A78BFA" if selected else "#6D5F8F"),
+                                 1.4 if selected else 1.0))
+                    p.setBrush(QColor("#5B4A80" if selected else "#6D5F8F"))
+                    p.drawRoundedRect(cr, 5, 5)
+                    if x1 - x0 > 26:
+                        p.setFont(clip_font)
+                        p.setPen(QColor("#F5F0FF"))
+                        tx = max(int(x0) + 7, TIMELINE_HEADER_W + 4)
+                        avail = int(min(x1, self.width() - 4)) - tx
+                        p.drawText(tx, int(stop) + 37,
                                    p.fontMetrics().elidedText(
                                        str(cue.get("text") or "").replace(
                                            "\n", " "),
                                        Qt.TextElideMode.ElideRight, avail))
 
-            # 音频轨
+            # 音频轨：块高 48，多条音频在轨内平分，上下各留 8
             aspans = self._audio_spans()
             rows = self._audio_rows(len(aspans))
             atrack_top, atrack_bottom = self._audio_rect()
-            if self.show_audio:
-                p.setPen(QColor(self.c["empty"]))
-                p.drawText(4, atrack_top - 4, tr("音频"))
-            for k, (x0, x1, a) in enumerate(
-                    aspans if self.show_audio else []):
+            for k, (x0, x1, a) in enumerate(aspans if self.show_audio else []):
                 ry0, ry1 = rows[k]
                 col = QColor(self.c["audio_sel"] if k in self.sel_audio
                              else self.c["audio"])
                 if a.gap:
                     col = QColor(self.c.get("audio_gap", self.c["piece_b"]))
-                p.fillRect(int(x0), int(ry0) + 1, max(2, int(x1 - x0)),
-                           max(4, int(ry1 - ry0) - 1), col)
-                # 波形：每个像素列画一根竖线，高度取最近 20 ms 的峰
+                w = max(2, int(x1 - x0))
+                cr = QRectF(int(x0), int(ry0) + 1, w, max(24, int(ry1 - ry0) - 2))
+                p.setPen(QPen(QColor("#D6AE5E" if k in self.sel_audio else "#B18E44"),
+                             1.4 if k in self.sel_audio else 1.0))
+                p.setBrush(col)
+                p.drawRoundedRect(cr, 5, 5)
                 peaks = self._wave(a.path) if a.path else []
                 if peaks and x1 - x0 > 4:
-                    # 按这一条自己的最大峰归一化：安静的素材也看得出起伏
                     wmax = max(peaks) or 1.0
-                    mid = (ry0 + ry1) / 2.0
-                    half = max(2.0, (ry1 - ry0) / 2.0 - 3)
-                    p.setPen(QPen(QColor(255, 255, 255, 120), 1))
-                    for xi in range(int(x0), int(x1)):
+                    mid = (cr.top() + cr.bottom()) / 2.0
+                    half = max(2.0, cr.height() / 2.0 - 5)
+                    p.setPen(QPen(QColor(255, 240, 205, 135), 1))
+                    for xi in range(int(x0) + 1, int(x1) - 1):
                         t = self._time_at(xi) - a.start
                         idx = int(t * WAVE_RATE)
                         if 0 <= idx < len(peaks):
                             v = peaks[idx] / wmax * half
                             p.drawLine(xi, int(mid - v), xi, int(mid + v))
-                if x1 - x0 > 34 and x1 > 0 and x0 < self.width():
-                    p.setPen(QColor(theme.contrast_text(col.name())))
+                if x1 - x0 > 34 and x1 > self.width() * 0 + TIMELINE_HEADER_W:
+                    p.setFont(clip_font)
+                    p.setPen(QColor("#FFE8B6" if dark else self.c["text"]))
                     gain = (f"  {a.gain_db:+.1f} dB"
                             if abs(a.gain_db) > 0.04 else "")
-                    tx = max(int(x0) + 5, 5)
+                    tx = max(int(x0) + 7, TIMELINE_HEADER_W + 4)
                     avail = int(min(x1, self.width() - 4)) - tx
                     if avail > 24:
-                        p.drawText(tx, int(ry0) + 12,
+                        p.drawText(tx, int(ry0) + 24,
                                    p.fontMetrics().elidedText(
                                        f"{os.path.basename(a.path)[:18]}  "
                                        f"{int(round(a.volume * 100))}%{gain}",
@@ -6416,58 +6327,61 @@ def run_gui() -> int:
                         p.drawEllipse(QPointF(ex, ey), rad, rad)
                     p.setBrush(Qt.BrushStyle.NoBrush)
 
-            # 左侧轨头：先把内容盖掉，再画标题，时间条永远从轨头右边开始
-            p.fillRect(0, 0, TIMELINE_HEADER_W, self.height(),
-                       QColor(self.c["bg"]).lighter(108))
-            p.setPen(QPen(QColor(self.c["border"]), 1))
-            p.drawLine(TIMELINE_HEADER_W - 1, TIMELINE_RULER_H - 1,
+            # 左侧轨头：最后盖上去，保证刻度/块不会越过 120px
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(self.c["bg"]).lighter(108) if dark
+                       else panel)
+            p.drawRect(QRect(0, 0, TIMELINE_HEADER_W, self.height()))
+            p.setPen(QPen(border, 1))
+            p.drawLine(TIMELINE_HEADER_W - 1, 0,
                        TIMELINE_HEADER_W - 1, self.height())
-            for _y in (top, otop, stop, atrack_top):
-                if _y > TIMELINE_RULER_H:
-                    p.drawLine(TIMELINE_HEADER_W, _y, self.width(), _y)
             head_font = QFont(self.font())
-            head_font.setPointSize(9)
+            head_font.setPixelSize(11)
             p.setFont(head_font)
-            p.setPen(QColor(self.c["empty"]))
-            lane_head = QColor(self.c["empty"])
 
-            def lane_label(kind, text, baseline):
-                ui_icon(kind, lane_head.name(), 14).paint(
-                    p, QRect(11, baseline - 11, 14, 14))
-                p.drawText(31, baseline, text)
+            def lane_label(kind, text, top, color):
+                colour = QColor(color)
+                ui_icon(kind, colour.name(), 14).paint(
+                    p, QRect(12, int(top) + 25, 14, 14))
+                p.setPen(muted)
+                p.drawText(32, int(top) + 37, text)
 
-            lane_label("video", tr("画面"), top + 15)
+            lane_label("video", tr("画面"), top, "#60A5FA")
             if self.show_overlay:
-                lane_label("pip", tr("画中画"), otop + 13)
+                lane_label("pip", tr("画中画"), otop, "#C084FC")
             if self.show_subs:
-                lane_label("subtitle", tr("字幕"), stop + 13)
+                lane_label("subtitle", tr("字幕"), stop, "#FB923C")
             if self.show_audio:
-                lane_label("audio", tr("音频"), atrack_top + 13)
+                lane_label("audio", tr("音频"), atrack_top, "#22C55E")
 
             px = int(self._x_at(self.play_pos))
             if TIMELINE_HEADER_W <= px <= self.width():
                 p.setPen(QPen(QColor(self.c["playhead"]), 2))
-                p.drawLine(px, 0, px, self.height())
+                p.drawLine(px, TIMELINE_RULER_H - 8, px, self.height())
+                p.setBrush(QColor(self.c["playhead"]))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.drawPolygon(QPolygonF([
+                    QPointF(px - 6, TIMELINE_RULER_H - 9),
+                    QPointF(px + 6, TIMELINE_RULER_H - 9),
+                    QPointF(px, TIMELINE_RULER_H + 1)]))
 
             if self.drop_guide is not None:
                 gx = int(self._x_at(self.drop_guide))
                 if TIMELINE_HEADER_W <= gx <= self.width():
-                    p.setPen(QPen(QColor(self.c["selected_edge"]), 2,
-                                  Qt.PenStyle.DashLine))
+                    p.setPen(QPen(accent, 2, Qt.PenStyle.DashLine))
                     p.drawLine(gx, TIMELINE_RULER_H, gx, self.height())
 
             if self.snap_guide is not None:
                 gx = int(self._x_at(self.snap_guide))
                 if TIMELINE_HEADER_W <= gx <= self.width():
-                    p.setPen(QPen(QColor(self.c["selected_edge"]), 1,
-                                  Qt.PenStyle.DashLine))
+                    p.setPen(QPen(accent, 1, Qt.PenStyle.DashLine))
                     p.drawLine(gx, 0, gx, self.height())
 
             if self._marquee is not None:
-                fill = QColor(self.c["selected_edge"])
+                fill = QColor(accent)
                 fill.setAlpha(40)
                 p.fillRect(self._marquee, fill)
-                pen = QColor(self.c["selected_edge"])
+                pen = QColor(accent)
                 pen.setAlpha(180)
                 p.setPen(QPen(pen, 1, Qt.PenStyle.DashLine))
                 p.drawRect(self._marquee)
@@ -8918,7 +8832,8 @@ def run_gui() -> int:
             tbar.setContentsMargins(10, 4, 10, 4)
             tbar.setSpacing(10)
             self.cmb_rhythm = QComboBox()
-            self.cmb_rhythm.addItem(tr(MODE_LABELS["bgm"]), "bgm")
+            self.cmb_rhythm.addItem(ui_icon("music", "#a4adbb", 14),
+                                    tr(MODE_LABELS["bgm"]), "bgm")
             self.cmb_rhythm.addItem(tr(MODE_LABELS["material"]), "material")
             self.cmb_rhythm.activated.connect(
                 lambda _i: self.on_mode(self.cmb_rhythm.currentData()))
@@ -9159,13 +9074,14 @@ def run_gui() -> int:
             self._voice_scroll = voice_scroll
             self.left_tabs.addTab(voice_scroll, tr("配音"))
             left_dock = QWidget()
+            left_dock.setObjectName("leftRail")
             lv = QVBoxLayout(left_dock)
             lv.setContentsMargins(0, 0, 0, 0)
-            lv.setSpacing(4)
+            lv.setSpacing(0)
             lv.addWidget(self.left_tabs, 1)
             self.lbl_left_hint = QLabel(tr("支持拖入图片、视频和音频"))
             self.lbl_left_hint.setObjectName("hint")
-            self.lbl_left_hint.setContentsMargins(6, 0, 6, 2)
+            self.lbl_left_hint.setContentsMargins(12, 6, 12, 10)
             lv.addWidget(self.lbl_left_hint)
             split.addWidget(left_dock)
 
@@ -9254,11 +9170,6 @@ def run_gui() -> int:
             self.lbl_preview = QLabel(tr("预览：实时合成"))
             self.lbl_preview.setEnabled(False)
             rv.addWidget(self.lbl_preview)
-            split.addWidget(right)
-            split.setStretchFactor(0, 0)
-            split.setStretchFactor(1, 1)
-            v.addWidget(split, 1)
-
             bgm = QHBoxLayout()
             self.lbl_bgm = QLabel(tr("音乐链接"))
             bgm.addWidget(self.lbl_bgm)
@@ -9272,9 +9183,10 @@ def run_gui() -> int:
             self.btn_retry.setEnabled(False)
             self.btn_retry.clicked.connect(self.start_fetch)
             bgm.addWidget(self.btn_retry)
-            v.addLayout(bgm)
+            rv.addLayout(bgm)
 
             self.timeline = Timeline(self.project)
+            self.timeline.setFixedHeight(TIMELINE_LANES_H)
             self.timeline.seeked.connect(self.seek)
             self.timeline.picked.connect(self.on_timeline_pick)
             self.timeline.resized.connect(self.on_timeline_resize)
@@ -9293,7 +9205,7 @@ def run_gui() -> int:
             self.timeline.menu.connect(self.on_timeline_menu)
             self.timeline.set_snap(bool(self.settings["snap_on"]))
             self.timeline.viewChanged.connect(self._on_tl_view)
-            v.addWidget(self.timeline)
+            rv.addWidget(self.timeline)
 
             tlbar = QHBoxLayout()
             tlbar.setContentsMargins(0, 0, 0, 0)
@@ -9312,7 +9224,14 @@ def run_gui() -> int:
             self.btn_fit.setToolTip(tr("时间线缩回全片（Ctrl+0）"))
             self.btn_fit.clicked.connect(self.on_tl_fit)
             tlbar.addWidget(self.btn_fit)
-            v.addLayout(tlbar)
+            rv.addLayout(tlbar)
+
+            split.addWidget(right)
+            split.setStretchFactor(0, 0)
+            split.setStretchFactor(1, 1)
+            split.setSizes([300, 1300])
+            v.addWidget(split, 1)
+
 
             foot = QHBoxLayout()
             self.lbl_status = QLabel(tr("拖图片或视频进来开始"))
@@ -9654,7 +9573,7 @@ def run_gui() -> int:
             # 简洁模式没画中画时，别空占一条「画中画」轨
             self.timeline.set_rows(
                 advanced or bool(self.project.overlays), True,
-                bool(self.project.cues))
+                advanced or bool(self.project.cues))
 
         def _sync_tl_bar(self):
             """时间线底下的缩放条：标准以上常驻，简洁模式放大过才露。"""

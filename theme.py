@@ -220,6 +220,8 @@ def timeline_colors(pal: dict) -> dict:
         "selected_edge": pal["accent"],
         "border": pal["border"],
         "raised": pal.get("raised", pal["panel"]),
+        "field": pal["field"],
+        "text": pal["text"],
         "audio_gap": mix(pal["panel"], pal["accent2"], 0.55),
     }
 
@@ -252,7 +254,7 @@ QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
 * {{ outline: none; }}
 QWidget {{ background: {p['window']}; color: {p['text']};
            font-size: 12px;
-           font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei"; }}
+           font-family: "Segoe UI Variable", "Segoe UI", "Inter", "Microsoft YaHei"; }}
 QMainWindow, QDialog {{ background: {p['window']}; }}
 QLabel {{ background: transparent; }}
 QLabel:disabled {{ color: {p['muted']}; }}
@@ -293,10 +295,15 @@ QWidget#panelCard {{
     background: {p['panel']}; border: 1px solid {p['border']};
     border-radius: 10px;
 }}
-QTabWidget#leftDock::pane {{
+QWidget#leftRail {{
     background: {p['panel']}; border: 1px solid {p['border']};
-    border-radius: 10px; top: 0px;
+    border-radius: 10px;
 }}
+QTabWidget#leftDock::pane {{
+    background: transparent; border: none;
+    border-radius: 0px; top: 0px;
+}}
+QTabWidget#leftDock {{ background: transparent; border: none; }}
 QTabWidget#leftDock QTabBar::tab {{
     padding: 9px 16px;
 }}

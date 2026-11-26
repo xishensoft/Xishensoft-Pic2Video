@@ -978,8 +978,8 @@ check("铺满音频：编辑记一步",
 check("视频要放长时加 stream_loop",
       'cmd += ["-stream_loop", "-1"]   # 要放得比原片长就循环' in src)
 check("节奏改成下拉：跟音乐 / 跟素材总长",
-      'self.cmb_rhythm.addItem(tr(MODE_LABELS["bgm"]), "bgm")' in src
-      and 'self.cmb_rhythm.addItem(tr(MODE_LABELS["material"]), "material")' in src)
+      'self.cmb_rhythm.addItem(ui_icon("music"' in src
+      and '"bgm"' in src and '"material"' in src)
 check("节奏下拉带 mode 数据", "self.on_mode(self.cmb_rhythm.currentData())" in src)
 check("跟素材总长在 MODE_LABELS 里", "material" in p.MODE_LABELS)
 _long = p.Project()
@@ -2553,8 +2553,9 @@ check("三个音频处理器都在",
       all(("def " + _n + "(self") in _src60
           for _n in ("on_ask_gain", "on_clear_envelope",
                      "on_envelope_changed")))
-check("音频轨的底边不低于顶边+16",
-      "return top, max(top + 16, self.height() - 4)" in _src60)
+check("音频轨按 64px 轨道分",
+      "index = 1 + int(self.show_overlay) + int(self.show_subs)" in _src60
+      and "return self._lane_rect(index)" in _src60)
 check("音频行按轨道高度分",
       "row = max(10.0, (bottom - top) / n)" in _src60)
 check("增益对话框带分贝后缀", 'suffix=tr(" 分贝")' in _src60)
@@ -3692,9 +3693,8 @@ check("滚动条/缩放按钮都在界面上",
       and "self.btn_fit = QPushButton(tr(\"适应窗口\"))" in _src)
 
 check("放大后块上的文字贴到可见区左边、按可见宽度截断",
-      "tx = max(int(x0) + 6, 6)" in _tl_src
-      and "tx = max(int(x0) + 5, 5)" in _tl_src
-      and "if x1 - x0 > 26 and x1 > 0 and x0 < self.width():" in _tl_src)
+      "tx = max(int(x0) + 8, TIMELINE_HEADER_W + 4)" in _tl_src
+      and "if x1 - x0 > 22 and x1 > TIMELINE_HEADER_W" in _tl_src)
 
 _zoom_keys = ["全片", "适应窗口",
               "时间线横向滚动：拖这里看后半段；Ctrl+滚轮缩放",
@@ -4067,12 +4067,12 @@ check("窗口不在 0 时第一个刻度不早于起点", _t and _t[0][0] >= 7.3
 check("刻度 x 跟时间对得上",
       abs(p.timeline_x(_t[1][0], 7.3, 10.0, 1000.0) - _t[1][1]) < 1e-6)
 
-check("时间刻度条高度常量", "TIMELINE_RULER_H = 18" in _src)
+check("时间刻度条高度常量", "TIMELINE_RULER_H = 28" in _src)
 check("画面轨从刻度条下面开始",
-      "return TIMELINE_RULER_H, max(TIMELINE_RULER_H + 26" in _src)
+      "top = TIMELINE_RULER_H + int(index) * TIMELINE_LANE_H" in _src
+      and "return self._lane_rect(0)" in _src)
 check("时间线真的画刻度",
-      "ticks = timeline_ticks(self.view_start" in _src
-      and "for _t, _x, _label in ticks:" in _src)
+      "for _t, _x, _label in timeline_ticks(self.view_start" in _src)
 _qss = TH.build_qss(TH.palette("dark", TH.DEFAULT_ACCENT))
 check("按下去的按钮会点亮",
       "QPushButton:checked" in _qss and "QPushButton:checked:hover" in _qss)
@@ -4361,7 +4361,7 @@ check("标准档也露时长行", '"rhythm", "total", "export", "mode"' in _src
       and "self.timing_bar.setVisible(total)" in _src)
 check("简洁档藏分组竖线", "for line in self._cmd_seps:" in _src
       and 'line.setVisible(tier != "simple")' in _src)
-check("时间线有四轨轨头", "TIMELINE_HEADER_W = 112" in _src
+check("时间线有四轨轨头", "TIMELINE_HEADER_W = 120" in _src
       and 'tr("画面")' in _src and 'tr("画中画")' in _src
       and 'tr("字幕")' in _src and 'tr("音频")' in _src)
 check("时间线用 lane 宽度算 x", "def _lane_w(self)" in _src
