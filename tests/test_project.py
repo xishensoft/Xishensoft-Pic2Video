@@ -4388,6 +4388,9 @@ check("时间线轨头有图标", 'lane_label("video", tr("画面")' in _src
       and 'lane_label("subtitle", tr("字幕")' in _src)
 check("预览有实时合成角标", 'self.live_badge = QLabel(tr("实时合成")' in _src
       and 'setObjectName("liveBadge")' in _src)
+check("左栏外框闭合", "class RailBorder(QWidget)" in _src
+      and "self._left_border.raise_()" in _src
+      and "lv.setContentsMargins(1, 1, 1, 1)" in _src)
 
 check("最大化时切档不拉宽", "if not self.is_maxed() and target > self.width():" in _src)
 check("不再无条件按最小宽度拉窗口",

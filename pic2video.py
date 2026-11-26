@@ -5787,6 +5787,27 @@ def run_gui() -> int:
                        | Qt.AlignmentFlag.AlignLeft, text)
             p.end()
 
+    class RailBorder(QWidget):
+        """压在左栏所有子控件上面画一圈闭合边框，避免被标签页/列表盖掉。"""
+
+        def __init__(self, parent, color):
+            super().__init__(parent)
+            self._color = QColor(color)
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+
+        def set_color(self, color):
+            self._color = QColor(color)
+            self.update()
+
+        def paintEvent(self, ev):
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(self._color, 1))
+            p.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 10, 10)
+            p.end()
+
     class Timeline(QWidget):
         """双轨时间线：上面视频元素，下面音频元素。
 
@@ -9087,13 +9108,19 @@ def run_gui() -> int:
             left_dock = QWidget()
             left_dock.setObjectName("leftRail")
             lv = QVBoxLayout(left_dock)
-            lv.setContentsMargins(0, 0, 0, 0)
+            # 留 1px 给外框，否则标签页和列表会把圆角边盖掉，看起来像没关拢
+            lv.setContentsMargins(1, 1, 1, 1)
             lv.setSpacing(0)
             lv.addWidget(self.left_tabs, 1)
             self.lbl_left_hint = QLabel(tr("{n} 段素材 · 支持拖入图片和视频", n=0))
             self.lbl_left_hint.setObjectName("hint")
             self.lbl_left_hint.setContentsMargins(12, 6, 12, 10)
             lv.addWidget(self.lbl_left_hint)
+            self._left_rail = left_dock
+            self._left_border = RailBorder(left_dock, "#343c48")
+            self._left_border.setGeometry(left_dock.rect())
+            self._left_border.raise_()
+            left_dock.installEventFilter(self)
             split.addWidget(left_dock)
 
             right = QWidget()
@@ -9505,6 +9532,8 @@ def run_gui() -> int:
             pal = theme.palette(theme.resolve(self.settings["theme"]),
                                 self.settings["accent"])
             self.pal = pal
+            if hasattr(self, "_left_border"):
+                self._left_border.set_color(pal["border"])
             self._apply_toolbar_icons(pal)
             if hasattr(self, "list_delegate"):
                 self.list_delegate.pal = pal
@@ -11460,6 +11489,12 @@ def run_gui() -> int:
             装在 QApplication 上，所以要绕开输入框、下拉框、列表这些
             自己要用方向键的控件。
             """
+            if (obj is getattr(self, "_left_rail", None)
+                    and ev.type() == QEvent.Type.Resize
+                    and hasattr(self, "_left_border")):
+                self._left_border.setGeometry(obj.rect())
+                self._left_border.raise_()
+                return False
             if (ev.type() != QEvent.Type.KeyPress
                     or QApplication.activeModalWidget() is not None
                     or QApplication.activePopupWidget() is not None
