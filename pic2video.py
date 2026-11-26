@@ -4536,7 +4536,7 @@ def run_gui() -> int:
         QPlainTextEdit, QPushButton, QRadioButton, QScrollArea, QScrollBar,
         QSizePolicy,
         QSlider,
-        QSpinBox, QStyle, QStyleOptionSlider,
+        QSpinBox, QStyle, QStyleOptionSlider, QStyledItemDelegate,
         QTextEdit,
         QSplitter, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget)
     from bili_audio import BiliError, bili_audio
@@ -4558,6 +4558,115 @@ def run_gui() -> int:
     def _win_icon(size: int = 18) -> QIcon:
         path = asset_path("icon.ico")
         return QIcon(path) if path else QIcon()
+
+    def ui_icon(kind: str, color: str, size: int = 16) -> QIcon:
+        """命令栏 / 轨头用的细线条图标：统一线宽、圆头、跟着主题色变。"""
+        pm = QPixmap(size, size)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pen = QPen(QColor(color), 1.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        s = float(size)
+        m = 2.0
+        mid = s / 2.0
+
+        def line(x1, y1, x2, y2):
+            p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+
+        if kind == "plus":
+            line(mid, m, mid, s - m)
+            line(m, mid, s - m, mid)
+        elif kind == "overlay":
+            p.drawRoundedRect(QRectF(1.5, 3.0, s * 0.55, s * 0.46), 1.5, 1.5)
+            p.drawRoundedRect(QRectF(s * 0.28, s * 0.36, s * 0.55,
+                                     s * 0.46), 1.5, 1.5)
+        elif kind == "magnet":
+            p.drawArc(QRectF(3.0, 4.0, s - 6.0, s - 4.0), 180 * 16, 180 * 16)
+            line(3.0, s - 5.0, 3.0, 4.5)
+            line(s - 3.0, s - 5.0, s - 3.0, 4.5)
+            line(3.0, s - 5.0, 3.0, s - 2.5)
+            line(s - 3.0, s - 5.0, s - 3.0, s - 2.5)
+        elif kind == "scissors":
+            p.drawEllipse(QPointF(4.2, s - 3.7), 2.0, 2.0)
+            p.drawEllipse(QPointF(4.2, 3.7), 2.0, 2.0)
+            line(5.9, s - 5.2, s - 2.0, 3.0)
+            line(5.9, 5.2, s - 2.0, s - 3.0)
+        elif kind in ("undo", "redo"):
+            flip = kind == "redo"
+            path = QPainterPath()
+            if not flip:
+                path.moveTo(3.0, 6.0)
+                path.cubicTo(6.0, 2.0, 12.5, 2.0, 13.0, 8.0)
+                path.cubicTo(13.2, 11.0, 11.2, 13.0, 8.0, 13.0)
+            else:
+                path.moveTo(s - 3.0, 6.0)
+                path.cubicTo(s - 6.0, 2.0, s - 12.5, 2.0, s - 13.0, 8.0)
+                path.cubicTo(s - 13.2, 11.0, s - 11.2, 13.0, s - 8.0, 13.0)
+            p.drawPath(path)
+            if not flip:
+                line(3.0, 6.0, 3.0, 2.5)
+                line(3.0, 6.0, 6.5, 6.0)
+            else:
+                line(s - 3.0, 6.0, s - 3.0, 2.5)
+                line(s - 3.0, 6.0, s - 6.5, 6.0)
+        elif kind == "gear":
+            # 齿轮：外圈 + 内孔 + 八颗连着的齿（早期版本只画短线，看着像太阳）
+            p.drawEllipse(QPointF(mid, mid), 4.3, 4.3)
+            p.drawEllipse(QPointF(mid, mid), 1.7, 1.7)
+            teeth = QPen(QColor(color), 2.1)
+            teeth.setCapStyle(Qt.PenCapStyle.FlatCap)
+            p.setPen(teeth)
+            for k in range(8):
+                a = math.radians(k * 45.0)
+                line(mid + math.cos(a) * 4.2, mid + math.sin(a) * 4.2,
+                     mid + math.cos(a) * 6.6, mid + math.sin(a) * 6.6)
+            p.setPen(pen)
+        elif kind == "refresh":
+            p.drawArc(QRectF(2.5, 2.5, s - 5.0, s - 5.0), 35 * 16, 285 * 16)
+            line(s - 2.7, 3.0, s - 2.7, 6.2)
+            line(s - 2.7, 3.0, s - 5.9, 3.0)
+        elif kind == "export":
+            line(mid, s - 4.0, mid, 3.0)
+            line(mid - 3.2, 6.0, mid, 3.0)
+            line(mid + 3.2, 6.0, mid, 3.0)
+            p.drawRoundedRect(QRectF(3.0, s - 3.2, s - 6.0, 2.2), 1.0, 1.0)
+        elif kind == "up":
+            line(mid, s - 3.0, mid, 3.0)
+            line(mid - 3.0, 6.0, mid, 3.0)
+            line(mid + 3.0, 6.0, mid, 3.0)
+        elif kind == "down":
+            line(mid, 3.0, mid, s - 3.0)
+            line(mid - 3.0, s - 6.0, mid, s - 3.0)
+            line(mid + 3.0, s - 6.0, mid, s - 3.0)
+        elif kind == "remove":
+            line(3.2, 3.2, s - 3.2, s - 3.2)
+            line(s - 3.2, 3.2, 3.2, s - 3.2)
+        elif kind == "video":
+            p.drawRoundedRect(QRectF(1.5, 4.0, s - 3.0, s - 8.0), 1.5, 1.5)
+            line(s * 0.36, 4.0, s * 0.36, s - 4.0)
+            line(s * 0.64, 4.0, s * 0.64, s - 4.0)
+        elif kind == "subtitle":
+            p.drawRoundedRect(QRectF(1.5, 3.5, s - 3.0, s - 8.0), 2.0, 2.0)
+            line(4.0, 7.0, s - 4.0, 7.0)
+            line(4.0, 10.0, s - 6.0, 10.0)
+        elif kind == "audio":
+            for h, x in ((4.0, 4.2), (8.0, 8.0), (6.0, 11.8)):
+                line(x, mid - h / 2.0, x, mid + h / 2.0)
+        elif kind == "pip":
+            p.drawRoundedRect(QRectF(1.8, 2.8, s - 3.6, s - 5.6), 2.0, 2.0)
+            p.drawRoundedRect(QRectF(s * 0.46, s * 0.45, s * 0.42,
+                                     s * 0.34), 1.0, 1.0)
+        elif kind == "play":
+            p.setBrush(QColor(color))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawPolygon(QPolygonF([QPointF(5.0, 3.0), QPointF(13.0, 8.0),
+                                     QPointF(5.0, 13.0)]))
+        p.end()
+        return QIcon(pm)
 
     def _screen_point(lparam: int) -> tuple[int, int]:
         x = ctypes.c_short(lparam & 0xFFFF).value
@@ -5537,6 +5646,109 @@ def run_gui() -> int:
                 else:
                     self.ok.emit(res)
 
+    class MediaCardDelegate(QStyledItemDelegate):
+        """素材列表画成卡片：缩略图 + 文件名 + 分辨率 + 右下角时长。"""
+
+        NAME_ROLE = Qt.ItemDataRole.UserRole + 4
+        META_ROLE = Qt.ItemDataRole.UserRole + 5
+        DUR_ROLE = Qt.ItemDataRole.UserRole + 6
+        KIND_ROLE = Qt.ItemDataRole.UserRole + 7
+        THUMB_ROLE = Qt.ItemDataRole.UserRole + 8
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.pal = {}
+
+        def sizeHint(self, option, index):
+            return QSize(240, 68)
+
+        def paint(self, p, option, index):
+            pal = self.pal or {}
+            p.save()
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            r = option.rect.adjusted(3, 3, -3, -3)
+            selected = bool(option.state & QStyle.StateFlag.State_Selected)
+            hover = bool(option.state & QStyle.StateFlag.State_MouseOver)
+            bg = QColor(pal.get("selection", "#1c2a3d") if selected else
+                        pal.get("raised", "#171b22") if hover else
+                        pal.get("panel", "#12151a"))
+            border = QColor(pal.get("accent", "#3b82f6") if selected else
+                            pal.get("border", "#343c48"))
+            p.setBrush(bg)
+            p.setPen(QPen(border, 1.4 if selected else 1.0))
+            p.drawRoundedRect(QRectF(r), 8, 8)
+            if selected:
+                # 左侧蓝色竖条，和设计稿的选中态一致
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(pal.get("accent", "#3b82f6")))
+                p.drawRoundedRect(QRectF(r.x() + 1, r.y() + 9, 3,
+                                         r.height() - 18), 1.5, 1.5)
+            thumb = QRect(r.x() + 6, r.y() + 6, 78, 44)
+            thumb_pm = index.data(self.THUMB_ROLE)
+            icon = index.data(Qt.ItemDataRole.DecorationRole)
+            p.save()
+            clip = QPainterPath()
+            clip.addRoundedRect(QRectF(thumb), 4, 4)
+            p.setClipPath(clip)
+            if isinstance(thumb_pm, QPixmap) and not thumb_pm.isNull():
+                p.drawPixmap(thumb, thumb_pm)
+            elif icon is not None and not icon.isNull():
+                # 明确用 Normal 模式取像素，避免选中态把缩略图染色
+                p.drawPixmap(thumb, icon.pixmap(thumb.size(), QIcon.Mode.Normal,
+                                               QIcon.State.Off))
+            else:
+                p.fillRect(thumb, QColor(pal.get("hover", "#1e242d")))
+            p.restore()
+            if index.data(self.KIND_ROLE) in ("video", "intro", "outro"):
+                p.setBrush(QColor(11, 13, 16, 170))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.drawEllipse(QPointF(thumb.center()), 11, 11)
+                ui_icon("play", "#ffffff", 16).paint(
+                    p, QRect(thumb.center().x() - 8,
+                             thumb.center().y() - 8, 16, 16))
+            dur = index.data(self.DUR_ROLE) or ""
+            if dur:
+                fm = p.fontMetrics()
+                bw = fm.horizontalAdvance(dur) + 10
+                br = QRect(thumb.right() - bw + 2, thumb.bottom() - 18,
+                           bw, 16)
+                p.setBrush(QColor(11, 13, 16, 200))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.drawRoundedRect(QRectF(br), 4, 4)
+                p.setPen(QColor("#f1f4f8"))
+                f = QFont(option.font)
+                f.setPointSize(max(7, f.pointSize() - 2))
+                p.setFont(f)
+                p.drawText(br, Qt.AlignmentFlag.AlignCenter, dur)
+            name = index.data(self.NAME_ROLE) or index.data(
+                Qt.ItemDataRole.DisplayRole) or ""
+            meta = index.data(self.META_ROLE) or ""
+            x = thumb.right() + 12
+            p.setPen(QColor(pal.get("text", "#f1f4f8")))
+            f = QFont(option.font)
+            f.setPointSize(max(8, f.pointSize()))
+            f.setBold(True)
+            p.setFont(f)
+            p.drawText(QRect(x, r.y() + 11, r.right() - x - 10, 20),
+                       Qt.AlignmentFlag.AlignVCenter
+                       | Qt.AlignmentFlag.AlignLeft,
+                       p.fontMetrics().elidedText(
+                           str(name), Qt.TextElideMode.ElideRight,
+                           max(10, r.right() - x - 10)))
+            if meta:
+                p.setPen(QColor(pal.get("subtext", "#a4adbb")))
+                f2 = QFont(option.font)
+                f2.setPointSize(max(7, f2.pointSize() - 1))
+                f2.setBold(False)
+                p.setFont(f2)
+                p.drawText(QRect(x, r.y() + 33, r.right() - x - 10, 18),
+                           Qt.AlignmentFlag.AlignVCenter
+                           | Qt.AlignmentFlag.AlignLeft,
+                           p.fontMetrics().elidedText(
+                               str(meta), Qt.TextElideMode.ElideRight,
+                               max(10, r.right() - x - 10)))
+            p.restore()
+
     class ImageList(QListWidget):
         """素材列表。
 
@@ -6068,10 +6280,10 @@ def run_gui() -> int:
                         marks += "◐"
                     if clip.xfade:
                         marks += "⇄"
-                    text = f"{name} · {d:.1f}s {marks}"
                     base = os.path.basename(clip.path or "")
+                    text = f"{name} · {d:.1f}s {marks}"
                     if base and x1 - x0 > 80:
-                        # 块够宽就把文件名也写上，几张相似的图才分得清
+                        # 块够宽就写「序号 · 文件名 · 时长」，跟素材卡片对得上
                         text = f"{name} · {base} · {d:.1f}s {marks}"
                     # 放大后块的左端可能跑到窗口外，文字贴到可见区左边
                     tx = max(int(x0) + 6, 6)
@@ -6079,7 +6291,18 @@ def run_gui() -> int:
                     if avail > 24:
                         text = p.fontMetrics().elidedText(
                             text, Qt.TextElideMode.ElideRight, avail)
-                        p.drawText(tx, top + 15, text)
+                        p.drawText(tx, top + 14, text)
+                        # 第二行给时长：块够高才写，免得挤到下一轨
+                        if vh - top >= 34 and avail > 30:
+                            f2 = QFont(p.font())
+                            f2.setPointSizeF(max(6.5, f2.pointSizeF() - 1.5))
+                            p.setFont(f2)
+                            sec = tr("{dur} 秒", dur=f"{d:.1f}")
+                            sec = p.fontMetrics().elidedText(
+                                sec, Qt.TextElideMode.ElideRight, avail)
+                            p.setPen(QColor(theme.contrast_text(col.name())))
+                            p.drawText(tx, top + 28, sec)
+                            p.setFont(QFont(self.font()))
                 if clip.xfade and i < len(spans) - 1:
                     crosses += 1
                     p.setPen(QPen(QColor(self.c["playhead"]), 1,
@@ -6206,13 +6429,20 @@ def run_gui() -> int:
             head_font.setPointSize(9)
             p.setFont(head_font)
             p.setPen(QColor(self.c["empty"]))
-            p.drawText(12, top + 15, tr("画面"))
+            lane_head = QColor(self.c["empty"])
+
+            def lane_label(kind, text, baseline):
+                ui_icon(kind, lane_head.name(), 14).paint(
+                    p, QRect(11, baseline - 11, 14, 14))
+                p.drawText(31, baseline, text)
+
+            lane_label("video", tr("画面"), top + 15)
             if self.show_overlay:
-                p.drawText(12, otop + 13, tr("画中画"))
+                lane_label("pip", tr("画中画"), otop + 13)
             if self.show_subs:
-                p.drawText(12, stop + 13, tr("字幕"))
+                lane_label("subtitle", tr("字幕"), stop + 13)
             if self.show_audio:
-                p.drawText(12, atrack_top + 13, tr("音频"))
+                lane_label("audio", tr("音频"), atrack_top + 13)
 
             px = int(self._x_at(self.play_pos))
             if TIMELINE_HEADER_W <= px <= self.width():
@@ -7930,6 +8160,12 @@ def run_gui() -> int:
             self._press = None
             super().mouseReleaseEvent(ev)
 
+        def resizeEvent(self, ev):
+            super().resizeEvent(ev)
+            badge = getattr(self, "live_badge", None)
+            if badge is not None:
+                badge.adjustSize()
+
         def paintEvent(self, _ev):
             qp = QPainter(self)
             qp.fillRect(self.rect(), QColor("#000000"))
@@ -7999,6 +8235,7 @@ def run_gui() -> int:
             self._role_map = dict(self.settings["tts_voices"] or {})
             self._role_names = []
             self._role_combos = {}
+            self._media_meta_cache = {}
             self._mix_timer = QTimer(self)
             self._mix_timer.setSingleShot(True)
             self._mix_timer.setInterval(250)
@@ -8093,8 +8330,11 @@ def run_gui() -> int:
             n = self.project.segment_count()
             total = human_time(self.project.total())
             state = tr("未保存") if self._dirty else tr("已保存")
+            dot = "#d29922" if self._dirty else "#3fb950"
             self.lbl_project_meta.setText(
-                tr("{n} 段 · {total} · {state}", n=n, total=total, state=state))
+                f'<span style="color:{dot}">●</span>&nbsp; '
+                + tr("{n} 段 · {total} · {state}",
+                     n=n, total=total, state=state))
 
         def _mark_dirty(self):
             """改了一步：标题点上圆点，自动保存排上队。"""
@@ -8576,38 +8816,48 @@ def run_gui() -> int:
                 line.setFixedHeight(22)
                 bar.addWidget(line)
                 self._cmd_seps.append(line)
-            def btn(text, slot, tip="", signal="clicked"):
+            def btn(text, slot, tip="", signal="clicked", icon=""):
                 b = QPushButton(text)
+                b.setMinimumHeight(32)
+                if icon:
+                    b.setIcon(ui_icon(icon, "#f1f4f8", 15))
+                    b.setIconSize(QSize(15, 15))
                 getattr(b, signal).connect(slot)
                 if tip:
                     b.setToolTip(tip)
                 bar.addWidget(b)
                 return b
             sep()
-            self.btn_add = btn(tr("加素材"), self.on_add)
+            self.btn_add = btn(tr("加素材"), self.on_add, icon="plus")
             self.btn_add.setMinimumWidth(78)
             self.btn_overlay = btn(
                 tr("画中画"), self.on_add_overlay,
-                tr("压一层画面在成片上：图片或视频都行"))
+                tr("压一层画面在成片上：图片或视频都行"), icon="overlay")
             sep()
-            self.btn_up = btn(tr("上移"), lambda: self.on_move(-1))
-            self.btn_down = btn(tr("下移"), lambda: self.on_move(1))
-            self.btn_remove = btn(tr("删除"), self.on_remove)
+            self.btn_up = btn(tr("上移"), lambda: self.on_move(-1), icon="up")
+            self.btn_down = btn(tr("下移"), lambda: self.on_move(1), icon="down")
+            self.btn_remove = btn(tr("删除"), self.on_remove, icon="remove")
             self.btn_snap = btn(tr("磁吸"), self.on_toggle_snap,
                                 tr("吸附：拖动时贴住附近的边（Alt 临时关）"),
-                                "toggled")
+                                "toggled", icon="magnet")
             self.btn_snap.setCheckable(True)
             self.btn_snap.setChecked(bool(self.settings["snap_on"]))
             self.btn_razor = btn(tr("切割"), self.on_toggle_razor,
                                  tr("切割模式：点哪块切哪块（Esc 退出）"),
-                                 "toggled")
+                                 "toggled", icon="scissors")
             self.btn_razor.setCheckable(True)
-            self.btn_undo_bar = btn(tr("撤回"), self.on_undo, tr("撤销上一步（Ctrl+Z）"))
-            self.btn_redo_bar = btn(tr("还原"), self.on_redo, tr("重做（Ctrl+Shift+Z）"))
+            self.btn_undo_bar = btn("", self.on_undo, tr("撤销上一步（Ctrl+Z）"), icon="undo")
+            self.btn_undo_bar.setProperty("iconOnly", True)
+            self.btn_undo_bar.setFixedWidth(36)
+            self.btn_redo_bar = btn("", self.on_redo, tr("重做（Ctrl+Shift+Z）"), icon="redo")
+            self.btn_redo_bar.setProperty("iconOnly", True)
+            self.btn_redo_bar.setFixedWidth(36)
             sep()
             self.btn_settings = btn(
-                tr("设置"), self.on_settings,
-                tr("导出目录、画幅比例、分辨率、帧率、画质、铺底、转场、默认节奏"))
+                "", self.on_settings,
+                tr("导出目录、画幅比例、分辨率、帧率、画质、铺底、转场、默认节奏"), icon="gear")
+            self.btn_settings.setProperty("iconOnly", True)
+            self.btn_settings.setFixedWidth(36)
             bar.addStretch(1)
             # 中间常驻工程状态：几段、多长、存没存，别让人靠标题猜
             self.lbl_project_meta = QLabel()
@@ -8615,19 +8865,42 @@ def run_gui() -> int:
             bar.addWidget(self.lbl_project_meta)
             bar.addStretch(1)
             self.btn_refresh = QPushButton(tr("刷新预览"))
+            self.btn_refresh.setIcon(ui_icon("refresh", "#f1f4f8", 15))
+            self.btn_refresh.setIconSize(QSize(15, 15))
             self.btn_refresh.clicked.connect(self.on_preview)
             bar.addWidget(self.btn_refresh)
             self.btn_export = QPushButton(tr("导出视频"))
+            self.btn_export.setIcon(ui_icon("export", "#ffffff", 15))
+            self.btn_export.setIconSize(QSize(15, 15))
             self.btn_export.setDefault(True)
             self.btn_export.setProperty("accent", True)
             self.btn_export.clicked.connect(self.on_export)
             bar.addWidget(self.btn_export)
-            # 三档：简洁 / 标准 / 专业。点开是菜单，选哪档当场切
+            # 三档：简洁 / 标准 / 专业。并排的分段按钮，当前档一直看得见。
+            # 旧的 btn_mode 菜单留着给快捷键/测试找，不再占命令栏位置。
             self.btn_mode = QToolButton()
             self.btn_mode.setPopupMode(
                 QToolButton.ToolButtonPopupMode.InstantPopup)
             self.btn_mode.setMenu(self._build_ui_menu())
-            bar.addWidget(self.btn_mode)
+            self.btn_mode.hide()
+            self.seg_mode = QWidget()
+            self.seg_mode.setObjectName("segmented")
+            self.seg_mode.setAttribute(
+                Qt.WidgetAttribute.WA_StyledBackground, True)
+            seg_lay = QHBoxLayout(self.seg_mode)
+            seg_lay.setContentsMargins(3, 3, 3, 3)
+            seg_lay.setSpacing(2)
+            self._ui_btns = {}
+            for _tier in UI_TIERS:
+                _b = QPushButton(tr(UI_TIER_LABELS[_tier]))
+                _b.setObjectName("segBtn")
+                _b.setCheckable(True)
+                _b.setMinimumHeight(24)
+                _b.clicked.connect(
+                    lambda _checked=False, t=_tier: self.on_set_ui(t))
+                seg_lay.addWidget(_b)
+                self._ui_btns[_tier] = _b
+            bar.addWidget(self.seg_mode)
             # 简洁模式的入口：右上角「⋯」里放工程与设置
             self.btn_more = QToolButton()
             self.btn_more.setText("⋯")
@@ -8679,13 +8952,21 @@ def run_gui() -> int:
             split = QSplitter(Qt.Orientation.Horizontal)
             split.setHandleWidth(10)
             self.list = ImageList()
+            self.list.setObjectName("mediaList")
             self.list.setIconSize(QSize(96, 54))
+            self.list_delegate = MediaCardDelegate(self.list)
+            self.list.setItemDelegate(self.list_delegate)
+            self.list.setMouseTracking(True)
+            self.list.setSpacing(0)
             self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
             self.list.setDefaultDropAction(Qt.DropAction.MoveAction)
             self.list.setSelectionMode(
                 QAbstractItemView.SelectionMode.ExtendedSelection)
             self.list.setMinimumWidth(300)
-            self.list.setStyleSheet("QListWidget::item{padding:4px 2px;}")
+            self.list.setStyleSheet(
+                "QListWidget{background:transparent;border:none;}"
+                "QListWidget::item{background:transparent;border:none;"
+                "padding:0px;}")
             self.list.order_changed.connect(self.on_rows_moved)
             self.list.drop_files.connect(self.on_drop_into_list)
             self.list.itemDoubleClicked.connect(self.on_edit_dur)
@@ -8894,6 +9175,14 @@ def run_gui() -> int:
             rv.setContentsMargins(12, 10, 12, 10)
             rv.setSpacing(8)
             self.video = PreviewCanvas()
+            self.live_badge = QLabel(tr("实时合成"), self.video)
+            self.live_badge.setObjectName("liveBadge")
+            self.live_badge.setAttribute(
+                Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            _pv = QVBoxLayout(self.video)
+            _pv.setContentsMargins(10, 10, 10, 10)
+            _pv.addStretch(1)
+            _pv.addWidget(self.live_badge, 0, Qt.AlignmentFlag.AlignLeft)
             self.video.clicked.connect(self.toggle_play)
             self.player.mediaStatusChanged.connect(self.on_media_status)
             self.player.positionChanged.connect(self.on_position)
@@ -9075,9 +9364,9 @@ def run_gui() -> int:
             self.btn_snap.setToolTip(tr("吸附：拖动时贴住附近的边（Alt 临时关）"))
             self.btn_razor.setText(tr("切割"))
             self.btn_razor.setToolTip(tr("切割模式：点哪块切哪块（Esc 退出）"))
-            self.btn_undo_bar.setText(tr("撤回"))
             self.btn_undo_bar.setToolTip(tr("撤销上一步（Ctrl+Z）"))
-            self.btn_redo_bar.setText(tr("还原"))
+            self.btn_undo_bar.setToolTip(tr("撤销上一步（Ctrl+Z）"))
+            self.btn_redo_bar.setToolTip(tr("重做（Ctrl+Shift+Z）"))
             self.btn_redo_bar.setToolTip(tr("重做（Ctrl+Shift+Z）"))
             self.video.setToolTip(tr("点画面：播放 / 暂停"))
             self.lbl_tl_tip.setText(tr("右键片段：改时长 / 转场 / 调色"))
@@ -9132,7 +9421,8 @@ def run_gui() -> int:
                     _lab.setText(_txt)
             self._sync_role_rows(force=True)
             self.on_script_changed()
-            self.btn_settings.setText(tr("设置"))
+            self.btn_settings.setToolTip(
+                tr("导出目录、画幅比例、分辨率、帧率、画质、铺底、转场、默认节奏"))
             self.btn_settings.setToolTip(
                 tr("导出目录、画幅比例、分辨率、帧率、画质、铺底、转场、默认节奏"))
             self.cmb_rhythm.setItemText(0, tr(MODE_LABELS["bgm"]))
@@ -9147,13 +9437,17 @@ def run_gui() -> int:
             self.btn_retry.setText(tr("重试"))
             self.btn_export.setText(tr("导出视频"))
             tier = ui_tier(self.settings["ui"])
-            self.btn_mode.setText(tr(UI_TIER_LABELS[tier]) + "  ▾")
-            self.btn_mode.setToolTip(
+            for _t, _b in getattr(self, "_ui_btns", {}).items():
+                _b.setText(tr(UI_TIER_LABELS[_t]))
+                _b.setChecked(_t == tier)
+            self.seg_mode.setToolTip(
                 tr("界面模式：简洁只做三件事，标准日常剪辑，专业全部参数"))
             for t, act in getattr(self, "_ui_actions", {}).items():
                 act.setText(tr(UI_TIER_LABELS[t]))
                 act.setChecked(t == tier)
             self.btn_more.setToolTip(tr("更多：工程与设置"))
+            if hasattr(self, "live_badge"):
+                self.live_badge.setText(tr("实时合成"))
             if self.preview_name:
                 self.lbl_preview.setText(
                     tr("预览：{name}", name=self.preview_name))
@@ -9246,6 +9540,27 @@ def run_gui() -> int:
             tri("chevron.png", 9, 6, down=True)
             return folder
 
+        def _apply_toolbar_icons(self, pal):
+            """图标跟着主题色重画：浅色主题用深灰线，深色主题用亮灰线。"""
+            c = pal["text"]
+            icons = {
+                "add": ("plus", self.btn_add),
+                "overlay": ("overlay", self.btn_overlay),
+                "up": ("up", self.btn_up),
+                "down": ("down", self.btn_down),
+                "remove": ("remove", self.btn_remove),
+                "snap": ("magnet", self.btn_snap),
+                "razor": ("scissors", self.btn_razor),
+                "undo": ("undo", self.btn_undo_bar),
+                "redo": ("redo", self.btn_redo_bar),
+                "settings": ("gear", self.btn_settings),
+                "refresh": ("refresh", self.btn_refresh),
+            }
+            for _kind, _b in icons.values():
+                _b.setIcon(ui_icon(_kind, c, 15))
+                _b.setIconSize(QSize(15, 15))
+            self.btn_export.setIcon(ui_icon("export", "#ffffff", 15))
+
         def apply_theme(self):
             """按设置算一套配色，往整个应用上贴 QSS；时间线单独喂一份颜色。"""
             log("apply_theme %s / %s" % (self.settings["theme"],
@@ -9253,6 +9568,10 @@ def run_gui() -> int:
             pal = theme.palette(theme.resolve(self.settings["theme"]),
                                 self.settings["accent"])
             self.pal = pal
+            self._apply_toolbar_icons(pal)
+            if hasattr(self, "list_delegate"):
+                self.list_delegate.pal = pal
+                self.list.viewport().update()
             qss = theme.build_qss(pal, assets=self._theme_assets(pal))
             app_ = QApplication.instance()
             if app_ is not None:   # 贴到应用上：连 parent 为空的对话框也同款
@@ -9304,11 +9623,12 @@ def run_gui() -> int:
                 "total": self.spin_total,
                 "refresh": self.btn_refresh,
                 "export": self.btn_export,
-                "mode": self.btn_mode,
+                "mode": self.seg_mode,
                 "more": self.btn_more,
             }
             for name, w_ in widgets.items():
                 w_.setVisible(name in allowed)
+            self.btn_mode.setVisible(False)
             # 简洁档只剩「加素材」，分组竖线会变成一根孤零零的线，藏起来
             for line in self._cmd_seps:
                 line.setVisible(tier != "simple")
@@ -9980,7 +10300,10 @@ def run_gui() -> int:
             cur = self.list.currentRow()
             self.list.clear()
             for i, c in enumerate(self.project.clips):
-                it = QListWidgetItem(self._thumb(c.path, c.kind), "")
+                thumb_icon = self._thumb(c.path, c.kind)
+                it = QListWidgetItem(thumb_icon, "")
+                it.setData(self.list_delegate.THUMB_ROLE,
+                           thumb_icon.pixmap(96, 54))
                 it.setData(Qt.ItemDataRole.UserRole, c.path)
                 it.setData(Qt.ItemDataRole.UserRole + 1, c.dur)
                 # 拖拽重排时按这个号找回原来的 Clip（别把调色/转场丢了）
@@ -9991,7 +10314,47 @@ def run_gui() -> int:
             self._update_titles()
             if 0 <= cur < self.list.count():
                 self.list.setCurrentRow(cur)
+            elif self.list.count() > 0:
+                self.list.setCurrentRow(0)
             self._rebuilding = False
+            self._sync_selection()
+
+        def _media_meta(self, c) -> str:
+            """素材卡片第二行：原图分辨率；视频只看时长，不在这里起转码。"""
+            path = c.path or ""
+            if not path:
+                return ""
+            try:
+                st = os.stat(path)
+                key = (path, st.st_mtime, st.st_size)
+            except OSError:
+                return tr("文件不在了")
+            if key in self._media_meta_cache:
+                return self._media_meta_cache[key]
+            w = h = 0
+            if c.is_video:
+                if not missing_tools():
+                    try:
+                        r = subprocess.run(
+                            [FFPROBE, "-v", "error", "-select_streams", "v:0",
+                             "-show_entries", "stream=width,height",
+                             "-of", "csv=p=0", path],
+                            capture_output=True, text=True, timeout=6,
+                            stdin=subprocess.DEVNULL,
+                            creationflags=CREATION_NO_WINDOW)
+                        parts = (r.stdout or "").replace(",", " ").split()
+                        if len(parts) >= 2:
+                            w, h = int(float(parts[0])), int(float(parts[1]))
+                    except (OSError, ValueError, subprocess.SubprocessError):
+                        pass
+            else:
+                sz = QImageReader(path).size()
+                if sz.isValid():
+                    w, h = sz.width(), sz.height()
+            text = f"{w} × {h}" if w > 0 and h > 0 else (
+                tr("视频") if c.is_video else "")
+            self._media_meta_cache[key] = text
+            return text
 
         def _update_titles(self):
             for i, c in enumerate(self.project.clips):
@@ -10002,10 +10365,14 @@ def run_gui() -> int:
                 it.setData(Qt.ItemDataRole.UserRole + 1, c.dur)
                 it.setData(Qt.ItemDataRole.UserRole + 3, c.kind)
                 head = {"intro": tr("片头"),
-                        "outro": tr("片尾")}.get(c.kind, f"{i + 1}.")
-                it.setText(tr("{i}.  {dur} 秒   {name}", i=head,
-                              dur=f"{c.span:.1f}",
-                              name=os.path.basename(c.path)))
+                        "outro": tr("片尾")}.get(c.kind, "")
+                base = os.path.basename(c.path)
+                name = f"{head} · {base}" if head else base
+                it.setData(MediaCardDelegate.NAME_ROLE, name)
+                it.setData(MediaCardDelegate.META_ROLE, self._media_meta(c))
+                it.setData(MediaCardDelegate.DUR_ROLE, f"{c.span:.1f}s")
+                it.setData(MediaCardDelegate.KIND_ROLE, c.kind)
+                it.setText(f"{base}")
 
         def _thumb(self, path, kind="image"):
             if kind in ("video", "intro", "outro"):

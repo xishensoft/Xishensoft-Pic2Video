@@ -308,6 +308,12 @@ QLabel#pill {{
     border-radius: 12px; padding: 3px 11px; color: {p['subtext']};
 }}
 
+QLabel#liveBadge {{
+    background: rgba(11, 13, 16, 210);
+    color: #f1f4f8; border: 1px solid rgba(255, 255, 255, 40);
+    border-radius: 6px; padding: 3px 8px; font-size: 11px;
+}}
+
 QTabWidget::pane {{
     border: none; border-top: 1px solid {p['border']};
     background: transparent; top: 0;
@@ -330,6 +336,7 @@ QPushButton, QToolButton {{
     border: 1px solid {p['border']}; border-radius: 7px;
     padding: 5px 12px;
 }}
+QPushButton[iconOnly="true"] {{ padding: 5px 8px; }}
 QToolButton::menu-indicator {{ image: none; width: 0px; }}
 QPushButton:hover, QToolButton:hover {{ background: {p['hover']}; border-color: {p['accent']}; }}
 QPushButton:pressed, QToolButton:pressed {{ background: {p['pressed']}; }}
@@ -343,6 +350,23 @@ QPushButton:default:hover, QPushButton[accent="true"]:hover {{
 }}
 QPushButton:default:pressed, QPushButton[accent="true"]:pressed {{
     background: {p['accent_press']};
+}}
+/* 三档界面：并排分段，当前档亮起，不抢导出按钮的蓝色 */
+QWidget#segmented {{
+    background: {p['window']}; border: 1px solid {p['border']};
+    border-radius: 8px;
+}}
+QPushButton#segBtn {{
+    background: transparent; border: 1px solid transparent;
+    border-radius: 5px; padding: 2px 9px; color: {p['subtext']};
+    font-size: 12px;
+}}
+QPushButton#segBtn:hover {{
+    background: {p['hover']}; color: {p['text']};
+}}
+QPushButton#segBtn:checked {{
+    background: {p['raised']}; color: {p['text']};
+    border: 1px solid {p['border']}; font-weight: 600;
 }}
 /* 磁吸 / 切割这类「按下去就是开着」的按钮：亮起来，一眼看出状态 */
 QPushButton:checked {{
@@ -409,6 +433,8 @@ QListWidget::item:selected {{
     background: {p['accent_soft']}; color: {p['text']};
     border: none; border-left: 3px solid {p['accent']};
 }}
+/* 素材卡由 MediaCardDelegate 自己画选中态，别让 QSS 再盖一层色 */
+QListWidget#mediaList::item:selected {{ background: transparent; border: none; }}
 
 QRadioButton, QCheckBox {{ background: transparent; color: {p['text']}; spacing: 7px; }}
 QRadioButton:disabled, QCheckBox:disabled {{ color: {p['muted']}; }}

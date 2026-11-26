@@ -3619,3 +3619,12 @@ _TR_EXTRA68 = (
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA68:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+# ---- _TR_EXTRA69：素材卡片 / 时间线双行标签
+_TR_EXTRA69 = (
+    ("{dur} 秒", "{dur} 秒", "{dur} s", "{dur} 秒", "{dur}초"),
+    ("文件不在了", "檔案不在了", "File missing", "ファイルが見つかりません", "파일이 없습니다"),
+    ("视频", "影片", "Video", "動画", "동영상"),
+)
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA69:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)

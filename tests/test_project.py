@@ -3588,7 +3588,7 @@ check("磁吸/切割的词条四语齐全",
 
 
 check("磁吸/切割按钮走 toggled，程序里改选中也能生效",
-      'def btn(text, slot, tip="", signal="clicked")' in _src
+      'def btn(text, slot, tip="", signal="clicked", icon="")' in _src
       and '"toggled"' in _src)
 
 # ---------------- 74 时间线缩放 / 横向滚动
@@ -4375,6 +4375,18 @@ check("左栏有拖放提示", "self.lbl_left_hint" in _src
       and 'tr("支持拖入图片、视频和音频")' in _src)
 check("左栏提示有四语",
       all("支持拖入图片、视频和音频" in tbl for tbl in _i18n.values()))
+check("命令栏有线条图标", "def ui_icon(kind: str, color: str, size: int = 16)" in _src
+      and "def _apply_toolbar_icons(self, pal):" in _src
+      and '"add": ("plus", self.btn_add)' in _src)
+check("素材列表是卡片", "class MediaCardDelegate(QStyledItemDelegate)" in _src
+      and "THUMB_ROLE = Qt.ItemDataRole.UserRole + 8" in _src
+      and "NAME_ROLE = Qt.ItemDataRole.UserRole + 4" in _src)
+check("三档是分段控件", 'self.seg_mode = QWidget()' in _src
+      and 'setObjectName("segBtn")' in _src)
+check("时间线轨头有图标", 'lane_label("video", tr("画面")' in _src
+      and 'lane_label("subtitle", tr("字幕")' in _src)
+check("预览有实时合成角标", 'self.live_badge = QLabel(tr("实时合成")' in _src
+      and 'setObjectName("liveBadge")' in _src)
 
 check("最大化时切档不拉宽", "if not self.is_maxed() and target > self.width():" in _src)
 check("不再无条件按最小宽度拉窗口",
