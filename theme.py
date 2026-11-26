@@ -288,8 +288,13 @@ QFrame#sep {{ background: {p['border']}; border: none;
 QFrame#vsep {{ background: {p['border']}; border: none;
               min-width: 1px; max-width: 1px; }}
 QWidget#timingbar {{
-    background: {p['panel']}; border: 1px solid {p['border']};
-    border-radius: 8px;
+    background: {p['panel']}; border: none;
+    border-top: 1px solid {p['border']};
+    border-radius: 0px;
+}}
+QWidget#statusbar {{
+    background: transparent; border: none;
+    border-top: 1px solid {p['border']};
 }}
 QWidget#panelCard {{
     background: {p['panel']}; border: 1px solid {p['border']};
@@ -309,6 +314,10 @@ QTabWidget#leftDock QTabBar::tab {{
 }}
 QTabWidget#leftDock QListWidget {{
     border: none; background: transparent; padding: 2px;
+}}
+QLabel#settingsTitle {{
+    color: {p['text']}; font-size: 17px; font-weight: 600;
+    padding: 2px 0 12px 0;
 }}
 QLabel#pill {{
     background: {p['field']}; border: 1px solid {p['border']};

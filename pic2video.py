@@ -47,7 +47,7 @@ components.prepend_path()      # tools/ 里的 ffmpeg 优先于系统那份
 # exe 是窗口程序，没有控制台：起子进程时别让它继承无效的句柄
 CREATION_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 
 WIDTH, HEIGHT, FPS = 1920, 1080, 30
 PREVIEW_W, PREVIEW_H = 960, 540
@@ -497,7 +497,8 @@ UI_TOOLBAR = {
     # 简洁：工具条上只有三件事，工程菜单收进「⋯」
     "simple": ("add", "export", "mode", "more"),
     "normal": ("project", "add", "overlay", "snap", "razor", "undo",
-               "redo", "settings", "rhythm", "total", "export", "mode"),
+               "redo", "settings", "rhythm", "total", "refresh", "export",
+               "mode"),
     "pro": ("project", "add", "overlay", "up", "down", "remove", "snap",
             "razor", "undo", "redo", "settings", "rhythm", "total",
             "refresh", "export", "mode"),
@@ -4647,7 +4648,7 @@ def run_gui() -> int:
         def __init__(self, win, title: str = "", *, maximize: bool = False):
             super().__init__(win)
             self.setObjectName("titlebar")
-            self.setFixedHeight(34)
+            self.setFixedHeight(36)
             self.win = win
             self._drag = None
             row = QHBoxLayout(self)
@@ -4681,7 +4682,7 @@ def run_gui() -> int:
         def _button(text: str, tip: str) -> QPushButton:
             b = QPushButton(text)
             b.setObjectName("winbtn")
-            b.setFixedSize(32, 24)
+            b.setFixedSize(34, 26)
             b.setToolTip(tip)
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.setCursor(Qt.CursorShape.ArrowCursor)
@@ -7602,6 +7603,9 @@ def run_gui() -> int:
                         page.setLayout(form)
                         page.hide()
                         continue
+                    head = QLabel(tr(name))
+                    head.setObjectName("settingsTitle")
+                    form.insertRow(0, head)
                     form.setContentsMargins(20, 14, 20, 16)
                     form.setVerticalSpacing(10)
                     form.setHorizontalSpacing(16)
@@ -8242,7 +8246,13 @@ def run_gui() -> int:
             if not hasattr(self, "lbl_project_meta"):
                 return
             n = self.project.segment_count()
-            total = human_time(self.project.total())
+            secs_total = self.project.total()
+            mins = int(secs_total) // 60
+            secs = int(secs_total) % 60
+            if secs_total >= 3600:
+                total = f"{int(secs_total) // 3600}:{mins % 60:02d}:{secs:02d}"
+            else:
+                total = f"{mins:02d}:{secs:02d}"
             state = tr("未保存") if self._dirty else tr("已保存")
             dot = "#d29922" if self._dirty else "#3fb950"
             self.lbl_project_meta.setText(
@@ -8713,9 +8723,9 @@ def run_gui() -> int:
             # 分组之间用细竖线隔开，靠眼睛就能分出「加素材」「编辑」「工程」。
             cmdbar = QVBoxLayout()
             cmdbar.setContentsMargins(0, 0, 0, 0)
-            cmdbar.setSpacing(6)
+            cmdbar.setSpacing(0)
             bar = QHBoxLayout()
-            bar.setContentsMargins(0, 0, 0, 0)
+            bar.setContentsMargins(0, 9, 0, 9)
             bar.setSpacing(8)
             self.btn_project = QToolButton()
             self.btn_project.setPopupMode(
@@ -8727,12 +8737,12 @@ def run_gui() -> int:
                 line = QFrame()
                 line.setObjectName("vsep")
                 line.setFixedWidth(1)
-                line.setFixedHeight(22)
+                line.setFixedHeight(24)
                 bar.addWidget(line)
                 self._cmd_seps.append(line)
             def btn(text, slot, tip="", signal="clicked", icon=""):
                 b = QPushButton(text)
-                b.setMinimumHeight(32)
+                b.setMinimumHeight(30)
                 if icon:
                     b.setIcon(ui_icon(icon, "#f1f4f8", 15))
                     b.setIconSize(QSize(15, 15))
@@ -8762,16 +8772,16 @@ def run_gui() -> int:
             self.btn_razor.setCheckable(True)
             self.btn_undo_bar = btn("", self.on_undo, tr("撤销上一步（Ctrl+Z）"), icon="undo")
             self.btn_undo_bar.setProperty("iconOnly", True)
-            self.btn_undo_bar.setFixedWidth(36)
+            self.btn_undo_bar.setFixedWidth(30)
             self.btn_redo_bar = btn("", self.on_redo, tr("重做（Ctrl+Shift+Z）"), icon="redo")
             self.btn_redo_bar.setProperty("iconOnly", True)
-            self.btn_redo_bar.setFixedWidth(36)
+            self.btn_redo_bar.setFixedWidth(30)
             sep()
             self.btn_settings = btn(
                 "", self.on_settings,
                 tr("导出目录、画幅比例、分辨率、帧率、画质、铺底、转场、默认节奏"), icon="gear")
             self.btn_settings.setProperty("iconOnly", True)
-            self.btn_settings.setFixedWidth(36)
+            self.btn_settings.setFixedWidth(30)
             bar.addStretch(1)
             # 中间常驻工程状态：几段、多长、存没存，别让人靠标题猜
             self.lbl_project_meta = QLabel()
@@ -8828,8 +8838,9 @@ def run_gui() -> int:
 
             self.timing_bar = QWidget()
             self.timing_bar.setObjectName("timingbar")
+            self.timing_bar.setFixedHeight(40)
             tbar = QHBoxLayout(self.timing_bar)
-            tbar.setContentsMargins(10, 4, 10, 4)
+            tbar.setContentsMargins(0, 5, 0, 5)
             tbar.setSpacing(10)
             self.cmb_rhythm = QComboBox()
             self.cmb_rhythm.addItem(ui_icon("music", "#a4adbb", 14),
@@ -9079,7 +9090,7 @@ def run_gui() -> int:
             lv.setContentsMargins(0, 0, 0, 0)
             lv.setSpacing(0)
             lv.addWidget(self.left_tabs, 1)
-            self.lbl_left_hint = QLabel(tr("支持拖入图片、视频和音频"))
+            self.lbl_left_hint = QLabel(tr("{n} 段素材 · 支持拖入图片和视频", n=0))
             self.lbl_left_hint.setObjectName("hint")
             self.lbl_left_hint.setContentsMargins(12, 6, 12, 10)
             lv.addWidget(self.lbl_left_hint)
@@ -9233,13 +9244,20 @@ def run_gui() -> int:
             v.addWidget(split, 1)
 
 
-            foot = QHBoxLayout()
+            footer = QWidget()
+            footer.setObjectName("statusbar")
+            footer.setFixedHeight(28)
+            foot = QHBoxLayout(footer)
+            foot.setContentsMargins(6, 0, 6, 0)
+            foot.setSpacing(10)
             self.lbl_status = QLabel(tr("拖图片或视频进来开始"))
-            foot.addWidget(self.lbl_status, 1)
-            # 右键功能藏在菜单里，底栏常驻一句提示，别让人到处找
+            foot.addWidget(self.lbl_status)
+            # 右键功能藏在菜单里，底栏正中常驻一句提示，别让人到处找
+            foot.addStretch(1)
             self.lbl_tl_tip = QLabel(tr("右键片段：改时长 / 转场 / 调色"))
             self.lbl_tl_tip.setObjectName("hint")
             foot.addWidget(self.lbl_tl_tip)
+            foot.addStretch(1)
             self.lbl_audio = QLabel()
             self.lbl_audio.setObjectName("hint")
             foot.addWidget(self.lbl_audio)
@@ -9253,7 +9271,7 @@ def run_gui() -> int:
             self.btn_abort.setVisible(False)
             self.btn_abort.clicked.connect(self.on_abort)
             foot.addWidget(self.btn_abort)
-            v.addLayout(foot)
+            v.addWidget(footer)
 
             self.setCentralWidget(root)
             self.timer = QTimer(self)
@@ -10214,6 +10232,13 @@ def run_gui() -> int:
             self.lbl_mode_hint.setText(text)
             self.lbl_mode_hint.setToolTip(tip)
 
+        def _refresh_left_hint(self):
+            if not hasattr(self, "lbl_left_hint"):
+                return
+            self.lbl_left_hint.setText(
+                tr("{n} 段素材 · 支持拖入图片和视频",
+                   n=self.project.segment_count()))
+
         def _refresh_list(self):
             self._rebuilding = True
             cur = self.list.currentRow()
@@ -10231,6 +10256,7 @@ def run_gui() -> int:
                 it.setData(Qt.ItemDataRole.UserRole + 3, c.kind)
                 self.list.addItem(it)
             self._update_titles()
+            self._refresh_left_hint()
             if 0 <= cur < self.list.count():
                 self.list.setCurrentRow(cur)
             elif self.list.count() > 0:

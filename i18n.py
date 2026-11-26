@@ -3628,3 +3628,15 @@ _TR_EXTRA69 = (
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA69:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+
+# ---- _TR_EXTRA70：左栏底部素材计数
+_TR_EXTRA70 = (
+    ("{n} 段素材 · 支持拖入图片和视频",
+     "{n} 段素材 · 支援拖入圖片和影片",
+     "{n} clips · drop images or videos",
+     "{n} 素材 · 画像や動画をドロップ",
+     "{n}개 클립 · 이미지나 동영상을 끌어다 놓으세요"),
+)
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA70:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)

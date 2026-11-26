@@ -3727,8 +3727,9 @@ _normal = set(p.ui_toolbar("normal"))
 check("标准模式有日常剪辑那几件",
       {"project", "add", "overlay", "snap", "razor", "undo", "redo",
        "settings", "export", "mode"} <= _normal, _normal)
-check("标准模式不露排序/刷新/更多",
-      not (_normal & {"up", "down", "remove", "refresh", "more"}), _normal)
+check("标准模式不露排序/更多，但露刷新",
+      not (_normal & {"up", "down", "remove", "more"})
+      and "refresh" in _normal, _normal)
 check("标准模式也露节奏和总长",
       {"rhythm", "total"} <= _normal, _normal)
 _pro = set(p.ui_toolbar("pro"))
@@ -4357,7 +4358,7 @@ check("切档拉宽会被屏幕宽度封顶",
 # ---------------- 91 新版界面：命令栏 / 轨头 / 设置页
 check("命令栏有工程状态胶囊", 'self.lbl_project_meta.setObjectName("pill")' in _src
       and 'tr("{n} 段 · {total} · {state}"' in _src)
-check("标准档也露时长行", '"rhythm", "total", "export", "mode"' in _src
+check("标准档也露时长行", '"rhythm", "total", "refresh", "export"' in _src
       and "self.timing_bar.setVisible(total)" in _src)
 check("简洁档藏分组竖线", "for line in self._cmd_seps:" in _src
       and 'line.setVisible(tier != "simple")' in _src)
@@ -4372,9 +4373,9 @@ check("设置页按屏幕封顶", "min(880, max(640, avail.width() - 60))" in _s
       and "avail.height() - 80" in _src)
 check("截图不写回用户设置", "w.settings.save = lambda: None" in _src)
 check("左栏有拖放提示", "self.lbl_left_hint" in _src
-      and 'tr("支持拖入图片、视频和音频")' in _src)
+      and 'tr("{n} 段素材 · 支持拖入图片和视频"' in _src)
 check("左栏提示有四语",
-      all("支持拖入图片、视频和音频" in tbl for tbl in _i18n.values()))
+      all("{n} 段素材 · 支持拖入图片和视频" in tbl for tbl in _i18n.values()))
 check("命令栏有线条图标", "def ui_icon(kind: str, color: str, size: int = 16)" in _src
       and "def _apply_toolbar_icons(self, pal):" in _src
       and '"add": ("plus", self.btn_add)' in _src)
