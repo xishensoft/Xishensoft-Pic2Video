@@ -231,7 +231,9 @@ check("语言与模式会记住", s6["lang"] == "ja" and s6["ui"] == "simple", (
 check("主题三档", TH.THEMES == ("auto", "light", "dark"), TH.THEMES)
 light = TH.palette("light", TH.DEFAULT_ACCENT)
 dark = TH.palette("dark", TH.DEFAULT_ACCENT)
-check("调色板 22 个键", len(light) == 22 and set(light) == set(dark), sorted(light))
+check("调色板 23 个键", len(light) == 23 and set(light) == set(dark), sorted(light))
+check("调色板带高一层底色", light["raised"] != light["panel"] and dark["raised"] != dark["panel"],
+      (light["raised"], dark["raised"]))
 check("深浅底色不同", light["window"] != dark["window"], (light["window"], dark["window"]))
 check("深色底更暗", TH.luminance(dark["window"]) < TH.luminance(light["window"]),
       (TH.luminance(dark["window"]), TH.luminance(light["window"])))
@@ -3650,16 +3652,17 @@ check("Shift+滚轮/空白处横向滚动",
 check("音频块上普通滚轮仍是调音量",
       "self.audioVolume.emit(k, step)" in _zw_body)
 check("各段像素位置按可见窗口算",
-      "timeline_x(x, start, span, self.width())" in _tl_src
-      and "timeline_x(max(0.0, a.start), start, span," in _tl_src
-      and "timeline_x(max(0.0, o.start), start, span," in _tl_src)
+      "def _tx(self, t: float) -> float:" in _tl_src
+      and "TIMELINE_HEADER_W + timeline_x(" in _tl_src
+      and "self._tx(max(0.0, a.start))" in _tl_src
+      and "self._tx(max(0.0, o.start))" in _tl_src)
 check("拖动改长度的增量按可见窗口换算",
-      "(x - x0) * self._view_span() / max(1, self.width())" in _tl_src)
+      "(x - x0) * self._view_span() / max(1, self._lane_w())" in _tl_src)
 check("窗口外的边也能算准（不夹范围）",
       "def _raw_time" in _tl_src and "self._raw_time(xs0 if kind" in _tl_src)
 check("播放头/吸附线只画在窗口里",
-      "if 0 <= px <= self.width():" in _tl_src
-      and "if 0 <= gx <= self.width():" in _tl_src)
+      "if TIMELINE_HEADER_W <= px <= self.width():" in _tl_src
+      and "if TIMELINE_HEADER_W <= gx <= self.width():" in _tl_src)
 check("画之前先把窗口拉回片子范围",
       "self.clamp_view()" in _tl_src)
 
@@ -3724,9 +3727,10 @@ _normal = set(p.ui_toolbar("normal"))
 check("标准模式有日常剪辑那几件",
       {"project", "add", "overlay", "snap", "razor", "undo", "redo",
        "settings", "export", "mode"} <= _normal, _normal)
-check("标准模式不露排序/节奏/刷新",
-      not (_normal & {"up", "down", "remove", "rhythm", "total",
-                      "refresh", "more"}), _normal)
+check("标准模式不露排序/刷新/更多",
+      not (_normal & {"up", "down", "remove", "refresh", "more"}), _normal)
+check("标准模式也露节奏和总长",
+      {"rhythm", "total"} <= _normal, _normal)
 _pro = set(p.ui_toolbar("pro"))
 check("专业模式全给",
       {"up", "down", "remove", "rhythm", "total", "refresh"} <= _pro
@@ -4336,7 +4340,7 @@ check("启动窗口提示四语齐",
 
 # ---------------- 87 标准模式设置分页 / 切档不越屏
 check("标准模式也一组一页", "if self.daily:" in _src
-      and "tabs.addTab(page, tr(name))" in _src)
+      and "tabs.addTab(scroll, tr(name))" in _src)
 check("简洁模式仍是一列",
       "else:                             # 简洁：一列，按档位藏" in _src
       and "hide.update(self._hide_fields[\"normal\"])" in _src)
@@ -4349,6 +4353,29 @@ check("只有简洁模式画组标题",
 check("切档拉宽会被屏幕宽度封顶",
       "target = min(need, limit)" in _src
       and "if not self.is_maxed() and target > self.width():" in _src)
+
+# ---------------- 91 新版界面：命令栏 / 轨头 / 设置页
+check("命令栏有工程状态胶囊", 'self.lbl_project_meta.setObjectName("pill")' in _src
+      and 'tr("{n} 段 · {total} · {state}"' in _src)
+check("标准档也露时长行", '"rhythm", "total", "export", "mode"' in _src
+      and "self.timing_bar.setVisible(total)" in _src)
+check("简洁档藏分组竖线", "for line in self._cmd_seps:" in _src
+      and 'line.setVisible(tier != "simple")' in _src)
+check("时间线有四轨轨头", "TIMELINE_HEADER_W = 112" in _src
+      and 'tr("画面")' in _src and 'tr("画中画")' in _src
+      and 'tr("字幕")' in _src and 'tr("音频")' in _src)
+check("时间线用 lane 宽度算 x", "def _lane_w(self)" in _src
+      and "return TIMELINE_HEADER_W + timeline_x(" in _src)
+check("设置页可滚动", "scroll.setWidget(page)" in _src
+      and "self.resize(880, 680)" in _src)
+check("设置页按屏幕封顶", "min(880, max(640, avail.width() - 60))" in _src
+      and "avail.height() - 80" in _src)
+check("截图不写回用户设置", "w.settings.save = lambda: None" in _src)
+check("左栏有拖放提示", "self.lbl_left_hint" in _src
+      and 'tr("支持拖入图片、视频和音频")' in _src)
+check("左栏提示有四语",
+      all("支持拖入图片、视频和音频" in tbl for tbl in _i18n.values()))
+
 check("最大化时切档不拉宽", "if not self.is_maxed() and target > self.width():" in _src)
 check("不再无条件按最小宽度拉窗口",
       "self.resize(need, self.height())" not in _src)

@@ -3585,3 +3585,37 @@ _TR_EXTRA65 = (
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA65:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+
+# ---- _TR_EXTRA66：命令栏工程状态
+_TR_EXTRA66 = (
+    ("已保存", "已儲存", "Saved", "保存済み", "저장됨"),
+    ("未保存", "未儲存", "Unsaved", "未保存", "저장 안 됨"),
+    ("{n} 段 · {total} · {state}",
+     "{n} 段 · {total} · {state}",
+     "{n} segments · {total} · {state}",
+     "{n} クリップ · {total} · {state}",
+     "{n}개 클립 · {total} · {state}"),
+)
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA66:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)
+
+# ---- _TR_EXTRA67：状态栏里的背景音乐
+_TR_EXTRA67 = (
+    ("背景音乐", "背景音樂", "Background music", "BGM", "배경 음악"),
+)
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA67:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)
+
+# ---- _TR_EXTRA68：左栏底部拖放提示
+_TR_EXTRA68 = (
+    ("支持拖入图片、视频和音频",
+     "支援拖入圖片、影片和音訊",
+     "Drop images, videos, or audio here",
+     "画像・動画・音声をここにドロップできます",
+     "이미지, 동영상, 오디오를 여기에 끌어다 놓으세요"),
+)
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA68:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)

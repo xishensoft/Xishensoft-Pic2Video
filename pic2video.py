@@ -497,7 +497,7 @@ UI_TOOLBAR = {
     # 简洁：工具条上只有三件事，工程菜单收进「⋯」
     "simple": ("add", "export", "mode", "more"),
     "normal": ("project", "add", "overlay", "snap", "razor", "undo",
-               "redo", "settings", "export", "mode"),
+               "redo", "settings", "rhythm", "total", "export", "mode"),
     "pro": ("project", "add", "overlay", "up", "down", "remove", "snap",
             "razor", "undo", "redo", "settings", "rhythm", "total",
             "refresh", "export", "mode"),
@@ -2797,6 +2797,7 @@ def snap_candidates(project, playhead: float = 0.0, extra=()) -> list:
 TIMELINE_ZOOM_MIN = 1.0    # 1.0 = 整条片子铺满时间线
 TIMELINE_ZOOM_MAX = 64.0
 TIMELINE_RULER_H = 18      # 顶部时间刻度条的高度
+TIMELINE_HEADER_W = 112    # 左侧轨头宽度：画面 / 画中画 / 字幕 / 音频
 
 
 def timeline_span(total: float, zoom: float) -> float:
@@ -5706,7 +5707,8 @@ def run_gui() -> int:
                           "selected_edge": "#3b82f6", "audio": "#2f6f5e",
                           "audio_sel": "#3f9d84", "overlay": "#566bb0",
                           "overlay_sel": "#7c8fe0", "border": "#343a46",
-                          "sub": "#6d5f8f", "sub_sel": "#a78bfa"}
+                          "sub": "#6d5f8f", "sub_sel": "#a78bfa",
+                          "audio_gap": "#8a6a2f"}
 
         def __init__(self, project, parent=None):
             super().__init__(parent)
@@ -5844,15 +5846,20 @@ def run_gui() -> int:
                 # 留 15% 的余量，别让播放头顶在右边缘
                 self.set_view_start(t - span * 0.85)
 
+        def _lane_w(self) -> int:
+            """扣掉左侧轨头之后，真正画时间条的那段宽度。"""
+            return max(60, int(self.width()) - TIMELINE_HEADER_W)
+
+        def _tx(self, t: float) -> float:
+            """时刻 → 控件里的 x（含轨头偏移）。"""
+            return TIMELINE_HEADER_W + timeline_x(
+                t, self.view_start, self._view_span(), self._lane_w())
+
         def _spans(self):
             total = self._total()
-            span = self._view_span()
-            start = self.view_start
             x, spans = 0.0, []
             for d in (c.span for c in self.project.clips):
-                x0 = timeline_x(x, start, span, self.width())
-                x1 = timeline_x(x + d, start, span, self.width())
-                spans.append((x0, x1, d))
+                spans.append((self._tx(x), self._tx(x + d), d))
                 x += d
             return spans, total
 
@@ -5862,9 +5869,8 @@ def run_gui() -> int:
             start = self.view_start
             out = []
             for a in self.project.audios:
-                x0 = timeline_x(max(0.0, a.start), start, span, self.width())
-                x1 = timeline_x(min(total, a.start + a.dur), start, span,
-                                self.width())
+                x0 = self._tx(max(0.0, a.start))
+                x1 = self._tx(min(total, a.start + a.dur))
                 out.append((x0, max(x0 + 3, x1), a))
             return out
 
@@ -5874,8 +5880,8 @@ def run_gui() -> int:
             start = self.view_start
             out = []
             for o in self.project.overlays:
-                x0 = timeline_x(max(0.0, o.start), start, span, self.width())
-                x1 = timeline_x(min(total, o.end), start, span, self.width())
+                x0 = self._tx(max(0.0, o.start))
+                x1 = self._tx(min(total, o.end))
                 out.append((x0, max(x0 + 3, x1), o))
             return out
 
@@ -5887,14 +5893,13 @@ def run_gui() -> int:
             for cue in self.project.cues:
                 t0 = max(0.0, _doc_num(cue.get("start"), 0.0))
                 t1 = min(total, _doc_num(cue.get("end"), t0))
-                x0 = timeline_x(t0, start, span, self.width())
-                x1 = timeline_x(t1, start, span, self.width())
+                x0 = self._tx(t0)
+                x1 = self._tx(t1)
                 out.append((x0, max(x0 + 3, x1), cue))
             return out
 
         def _x_at(self, t: float) -> float:
-            return timeline_x(t, self.view_start, self._view_span(),
-                              self.width())
+            return self._tx(t)
 
         def _wave(self, path: str):
             """波形峰值：内存里按「路径+指纹」缓一份，画的时候只查表。"""
@@ -5958,7 +5963,7 @@ def run_gui() -> int:
             self.update()
 
         def _snap_tol(self) -> float:
-            return SNAP_PX * self._view_span() / max(1, self.width())
+            return SNAP_PX * self._view_span() / max(1, self._lane_w())
 
         def _snap_time(self, t: float, alt: bool = False):
             """把时刻吸到附近的边；按住 Alt 当场不吸，guide 记下贴到了哪。"""
@@ -6022,12 +6027,12 @@ def run_gui() -> int:
             top, vh = self._video_rect()
             # 顶部时间刻度：每格至少 64px，缩放/滚动都跟着重算
             ticks = timeline_ticks(self.view_start, self._view_span(),
-                                   self.width())
+                                   self._lane_w())
             p.setPen(QPen(QColor(self.c["border"]), 1))
             p.drawLine(0, TIMELINE_RULER_H - 1, self.width(),
                        TIMELINE_RULER_H - 1)
             for _t, _x, _label in ticks:
-                xi = int(_x)
+                xi = int(_x) + TIMELINE_HEADER_W
                 if xi < -2 or xi > self.width() + 2:
                     continue
                 p.setPen(QPen(QColor(self.c["empty"]), 1))
@@ -6146,7 +6151,7 @@ def run_gui() -> int:
                 col = QColor(self.c["audio_sel"] if k in self.sel_audio
                              else self.c["audio"])
                 if a.gap:
-                    col = QColor(self.c["piece_b"])
+                    col = QColor(self.c.get("audio_gap", self.c["piece_b"]))
                 p.fillRect(int(x0), int(ry0) + 1, max(2, int(x1 - x0)),
                            max(4, int(ry1 - ry0) - 1), col)
                 # 波形：每个像素列画一根竖线，高度取最近 20 ms 的峰
@@ -6188,21 +6193,42 @@ def run_gui() -> int:
                         p.drawEllipse(QPointF(ex, ey), rad, rad)
                     p.setBrush(Qt.BrushStyle.NoBrush)
 
+            # 左侧轨头：先把内容盖掉，再画标题，时间条永远从轨头右边开始
+            p.fillRect(0, 0, TIMELINE_HEADER_W, self.height(),
+                       QColor(self.c["bg"]).lighter(108))
+            p.setPen(QPen(QColor(self.c["border"]), 1))
+            p.drawLine(TIMELINE_HEADER_W - 1, TIMELINE_RULER_H - 1,
+                       TIMELINE_HEADER_W - 1, self.height())
+            for _y in (top, otop, stop, atrack_top):
+                if _y > TIMELINE_RULER_H:
+                    p.drawLine(TIMELINE_HEADER_W, _y, self.width(), _y)
+            head_font = QFont(self.font())
+            head_font.setPointSize(9)
+            p.setFont(head_font)
+            p.setPen(QColor(self.c["empty"]))
+            p.drawText(12, top + 15, tr("画面"))
+            if self.show_overlay:
+                p.drawText(12, otop + 13, tr("画中画"))
+            if self.show_subs:
+                p.drawText(12, stop + 13, tr("字幕"))
+            if self.show_audio:
+                p.drawText(12, atrack_top + 13, tr("音频"))
+
             px = int(self._x_at(self.play_pos))
-            if 0 <= px <= self.width():
+            if TIMELINE_HEADER_W <= px <= self.width():
                 p.setPen(QPen(QColor(self.c["playhead"]), 2))
                 p.drawLine(px, 0, px, self.height())
 
             if self.drop_guide is not None:
                 gx = int(self._x_at(self.drop_guide))
-                if 0 <= gx <= self.width():
+                if TIMELINE_HEADER_W <= gx <= self.width():
                     p.setPen(QPen(QColor(self.c["selected_edge"]), 2,
                                   Qt.PenStyle.DashLine))
                     p.drawLine(gx, TIMELINE_RULER_H, gx, self.height())
 
             if self.snap_guide is not None:
                 gx = int(self._x_at(self.snap_guide))
-                if 0 <= gx <= self.width():
+                if TIMELINE_HEADER_W <= gx <= self.width():
                     p.setPen(QPen(QColor(self.c["selected_edge"]), 1,
                                   Qt.PenStyle.DashLine))
                     p.drawLine(gx, 0, gx, self.height())
@@ -6264,6 +6290,8 @@ def run_gui() -> int:
         def mousePressEvent(self, ev):
             x, y = ev.position().x(), ev.position().y()
             self._press = x
+            if x < TIMELINE_HEADER_W:
+                return          # 点在左侧轨头上：不跳转、不拖块
             if ev.button() == Qt.MouseButton.RightButton:
                 ek, ej = self._hit_env(x, y)
                 if ek >= 0:
@@ -6525,7 +6553,7 @@ def run_gui() -> int:
                     cue = self.project.cues[k]
                     dur = max(0.0, _doc_num(cue.get("end"), 0.0)
                               - _doc_num(cue.get("start"), 0.0))
-                    delta = (x - x0) * self._view_span() / max(1, self.width())
+                    delta = (x - x0) * self._view_span() / max(1, self._lane_w())
                     total = self._total()
                     new = max(0.0, start0 + delta)
                     new = min(new, max(0.0, total - dur))
@@ -6545,7 +6573,7 @@ def run_gui() -> int:
             if kind in ("trimL", "trimR"):
                 _k, i, x0, _span0 = self._drag
                 _spans, _total = self._spans()
-                delta = (x - x0) * self._view_span() / max(1, self.width())
+                delta = (x - x0) * self._view_span() / max(1, self._lane_w())
                 alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
                 xs0, xs1, _d = _spans[i]
                 edge = self._raw_time(xs0 if kind == "trimL" else xs1)
@@ -6559,7 +6587,7 @@ def run_gui() -> int:
                 _k, i, x0, d0 = self._drag
                 _spans, _total = self._spans()
                 start_t = sum(c.span for c in self.project.clips[:i])
-                d = d0 + (x - x0) * self._view_span() / max(1, self.width())
+                d = d0 + (x - x0) * self._view_span() / max(1, self._lane_w())
                 alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
                 end_t = self._snap_time(start_t + d, alt)
                 self.resized.emit(i, max(0.05, end_t - start_t))
@@ -6569,7 +6597,7 @@ def run_gui() -> int:
                 _k, idx, x0, _v = self._drag
                 _spans, _total = self._spans()
                 a = self.project.audios[idx]
-                delta = (x - x0) * self._view_span() / max(1, self.width())
+                delta = (x - x0) * self._view_span() / max(1, self._lane_w())
                 alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
                 edge = a.start if kind == "atrimL" else a.start + a.dur
                 snapped = self._snap_time(edge + delta, alt)
@@ -6607,12 +6635,13 @@ def run_gui() -> int:
 
         def _raw_time(self, x: float) -> float:
             """像素 → 时间，不夹范围（窗口外也能算出准确的时刻）。"""
-            return self.view_start + float(x) * self._view_span() / max(
-                1.0, float(self.width()))
+            return self.view_start + max(0.0, float(x) - TIMELINE_HEADER_W) * \
+                self._view_span() / max(1.0, float(self._lane_w()))
 
         def _time_at(self, x: float) -> float:
-            return timeline_time(x, self.view_start, self._view_span(),
-                                 self.width(), self._total())
+            return timeline_time(max(0.0, x - TIMELINE_HEADER_W),
+                                 self.view_start, self._view_span(),
+                                 self._lane_w(), self._total())
 
         def mouseReleaseEvent(self, ev):
             drag, self._drag = self._drag, None
@@ -6652,7 +6681,7 @@ def run_gui() -> int:
                 _tag, idx, x0, start0, base = drag
                 if abs(x - x0) <= 6:
                     return
-                delta = (x - x0) * self._view_span() / max(1, self.width())
+                delta = (x - x0) * self._view_span() / max(1, self._lane_w())
                 a = self.project.audios[idx]
                 start_t = start0 + delta
                 alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
@@ -6689,14 +6718,14 @@ def run_gui() -> int:
                 _k, idx, x0, start0 = drag
                 if abs(x - x0) <= 6:
                     return
-                delta = (x - x0) * self._view_span() / max(1, self.width())
+                delta = (x - x0) * self._view_span() / max(1, self._lane_w())
                 self.overlayMoved.emit(idx, max(0.0, start0 + delta))
                 return
             if kind == "audio":
                 _k, idx, x0, start0 = drag
                 if abs(x - x0) <= 6:
                     return
-                delta = (x - x0) * self._view_span() / max(1, self.width())
+                delta = (x - x0) * self._view_span() / max(1, self._lane_w())
                 a = self.project.audios[idx]
                 start_t = max(0.0, start0 + delta)
                 alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
@@ -6907,7 +6936,7 @@ def run_gui() -> int:
             super().__init__(parent, tr("设置"))
             self.s = settings
             self.project = project
-            self.setMinimumWidth(620)
+            self.setMinimumWidth(760)
             self.tier = ui_tier(settings["ui"])
             self.pro = self.tier == "pro"
             self.daily = self.tier != "simple"   # 标准 / 专业：日常剪辑项都露出来
@@ -7429,9 +7458,18 @@ def run_gui() -> int:
                         page.setLayout(form)
                         page.hide()
                         continue
+                    form.setContentsMargins(20, 14, 20, 16)
+                    form.setVerticalSpacing(10)
+                    form.setHorizontalSpacing(16)
                     page = QWidget()
                     page.setLayout(form)
-                    tabs.addTab(page, tr(name))
+                    scroll = QScrollArea()
+                    scroll.setWidgetResizable(True)
+                    scroll.setFrameShape(QFrame.Shape.NoFrame)
+                    scroll.setHorizontalScrollBarPolicy(
+                        Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                    scroll.setWidget(page)
+                    tabs.addTab(scroll, tr(name))
                 outer.addWidget(tabs, 1)
             else:                             # 简洁：一列，按档位藏
                 hide = set(self._hide_fields["pro"])
@@ -7440,8 +7478,8 @@ def run_gui() -> int:
                     w_.setVisible(False)
                 holder = QWidget()
                 v = QVBoxLayout(holder)
-                v.setContentsMargins(0, 0, 0, 0)
-                v.setSpacing(4)
+                v.setContentsMargins(12, 10, 12, 12)
+                v.setSpacing(6)
                 for name in self._order:
                     form = self._groups[name]
                     g = self._group_tier.get(name) or ""
@@ -7450,13 +7488,32 @@ def run_gui() -> int:
                         page.setLayout(form)
                         page.hide()
                         continue
-                    v.addLayout(form)
-                outer.addWidget(holder, 1)
+                    box = QWidget()
+                    box.setLayout(form)
+                    box.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                      QSizePolicy.Policy.Maximum)
+                    v.addWidget(box)
+                v.addStretch(1)
+                scroll = QScrollArea()
+                scroll.setWidgetResizable(True)
+                scroll.setFrameShape(QFrame.Shape.NoFrame)
+                scroll.setHorizontalScrollBarPolicy(
+                    Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                scroll.setWidget(holder)
+                outer.addWidget(scroll, 1)
             outer.addWidget(buttons)
 
             self._sync_size_label()
             self._sync_fit()
             self._sync_trans()
+            # 设置页多、屏幕小的时候别顶出屏幕；内容由每页的滚动区接住
+            scr = QApplication.primaryScreen()
+            avail = scr.availableGeometry() if scr is not None else None
+            if avail is not None:
+                self.resize(min(880, max(640, avail.width() - 60)),
+                            min(680, max(480, avail.height() - 80)))
+            else:
+                self.resize(880, 680)
 
         def _form(self) -> QFormLayout:
             """当前这一组的表单（add_row / 直接 form.addRow 都走它）。"""
@@ -8027,6 +8084,17 @@ def run_gui() -> int:
             text = f"{self._project_name()}{star} —— Pic2Video"
             self.setWindowTitle(text)
             self.titlebar.set_title(text)
+            self._refresh_project_meta()
+
+        def _refresh_project_meta(self):
+            """命令栏中间的工程状态：几段、多长、存没存。"""
+            if not hasattr(self, "lbl_project_meta"):
+                return
+            n = self.project.segment_count()
+            total = human_time(self.project.total())
+            state = tr("未保存") if self._dirty else tr("已保存")
+            self.lbl_project_meta.setText(
+                tr("{n} 段 · {total} · {state}", n=n, total=total, state=state))
 
         def _mark_dirty(self):
             """改了一步：标题点上圆点，自动保存排上队。"""
@@ -8487,12 +8555,27 @@ def run_gui() -> int:
             v.setSpacing(8)
             outer.addWidget(body, 1)
 
+            # 命令栏分两行：上行是工程/编辑/设置这类动作，下行是时长与节奏。
+            # 分组之间用细竖线隔开，靠眼睛就能分出「加素材」「编辑」「工程」。
+            cmdbar = QVBoxLayout()
+            cmdbar.setContentsMargins(0, 0, 0, 0)
+            cmdbar.setSpacing(6)
             bar = QHBoxLayout()
+            bar.setContentsMargins(0, 0, 0, 0)
+            bar.setSpacing(8)
             self.btn_project = QToolButton()
             self.btn_project.setPopupMode(
                 QToolButton.ToolButtonPopupMode.InstantPopup)
             self.btn_project.setMenu(self._build_project_menu())
             bar.addWidget(self.btn_project)
+            self._cmd_seps = []
+            def sep():
+                line = QFrame()
+                line.setObjectName("vsep")
+                line.setFixedWidth(1)
+                line.setFixedHeight(22)
+                bar.addWidget(line)
+                self._cmd_seps.append(line)
             def btn(text, slot, tip="", signal="clicked"):
                 b = QPushButton(text)
                 getattr(b, signal).connect(slot)
@@ -8500,11 +8583,13 @@ def run_gui() -> int:
                     b.setToolTip(tip)
                 bar.addWidget(b)
                 return b
+            sep()
             self.btn_add = btn(tr("加素材"), self.on_add)
             self.btn_add.setMinimumWidth(78)
             self.btn_overlay = btn(
                 tr("画中画"), self.on_add_overlay,
                 tr("压一层画面在成片上：图片或视频都行"))
+            sep()
             self.btn_up = btn(tr("上移"), lambda: self.on_move(-1))
             self.btn_down = btn(tr("下移"), lambda: self.on_move(1))
             self.btn_remove = btn(tr("删除"), self.on_remove)
@@ -8519,54 +8604,29 @@ def run_gui() -> int:
             self.btn_razor.setCheckable(True)
             self.btn_undo_bar = btn(tr("撤回"), self.on_undo, tr("撤销上一步（Ctrl+Z）"))
             self.btn_redo_bar = btn(tr("还原"), self.on_redo, tr("重做（Ctrl+Shift+Z）"))
+            sep()
             self.btn_settings = btn(
                 tr("设置"), self.on_settings,
                 tr("导出目录、画幅比例、分辨率、帧率、画质、铺底、转场、默认节奏"))
-            bar.addSpacing(12)
-            self.cmb_rhythm = QComboBox()
-            self.cmb_rhythm.addItem(tr(MODE_LABELS["bgm"]), "bgm")
-            self.cmb_rhythm.addItem(tr(MODE_LABELS["material"]), "material")
-            self.cmb_rhythm.activated.connect(
-                lambda _i: self.on_mode(self.cmb_rhythm.currentData()))
-            self.radio_total = QRadioButton(tr("自设总长"))
-            self.radio_free = QRadioButton(tr("逐段秒数"))
-            self.radio_voice = QRadioButton(tr("跟旁白"))
-            self.radio_voice.setToolTip(
-                tr("按配音页生成的旁白长度铺满画面，画面不会比声音长"))
-            bar.addWidget(self.cmb_rhythm)
-            group = QButtonGroup(self)
-            for r in (self.radio_total, self.radio_free, self.radio_voice):
-                group.addButton(r)
-                bar.addWidget(r)
-            self.spin_total = QDoubleSpinBox()
-            self.spin_total.setRange(0.5, 3600.0)
-            self.spin_total.setSingleStep(0.5)
-            self.spin_total.setSuffix(tr(" 秒"))
-            self.spin_total.setDecimals(1)
-            self.spin_total.setValue(10.0)
-            self.spin_total.setEnabled(False)
-            self.spin_total.setFixedWidth(96)
-            bar.addWidget(self.spin_total)
-            # 这一行字解释当前时长是按谁算的，省得四个控件互相打架
-            self.lbl_mode_hint = QLabel()
-            self.lbl_mode_hint.setObjectName("hint")
-            bar.addWidget(self.lbl_mode_hint)
+            bar.addStretch(1)
+            # 中间常驻工程状态：几段、多长、存没存，别让人靠标题猜
+            self.lbl_project_meta = QLabel()
+            self.lbl_project_meta.setObjectName("pill")
+            bar.addWidget(self.lbl_project_meta)
             bar.addStretch(1)
             self.btn_refresh = QPushButton(tr("刷新预览"))
             self.btn_refresh.clicked.connect(self.on_preview)
             bar.addWidget(self.btn_refresh)
             self.btn_export = QPushButton(tr("导出视频"))
             self.btn_export.setDefault(True)
-            self.btn_export.setStyleSheet("QPushButton{padding:4px 14px;font-weight:600}")
+            self.btn_export.setProperty("accent", True)
             self.btn_export.clicked.connect(self.on_export)
             bar.addWidget(self.btn_export)
-            bar.addSpacing(6)
             # 三档：简洁 / 标准 / 专业。点开是菜单，选哪档当场切
             self.btn_mode = QToolButton()
             self.btn_mode.setPopupMode(
                 QToolButton.ToolButtonPopupMode.InstantPopup)
             self.btn_mode.setMenu(self._build_ui_menu())
-            self.btn_mode.setStyleSheet("QToolButton{padding:3px 10px}")
             bar.addWidget(self.btn_mode)
             # 简洁模式的入口：右上角「⋯」里放工程与设置
             self.btn_more = QToolButton()
@@ -8577,9 +8637,47 @@ def run_gui() -> int:
             self.btn_more.setMenu(self._build_more_menu())
             self.btn_more.setToolTip(tr("更多：工程与设置"))
             bar.addWidget(self.btn_more)
-            v.addLayout(bar)
+            cmdbar.addLayout(bar)
+
+            self.timing_bar = QWidget()
+            self.timing_bar.setObjectName("timingbar")
+            tbar = QHBoxLayout(self.timing_bar)
+            tbar.setContentsMargins(10, 4, 10, 4)
+            tbar.setSpacing(10)
+            self.cmb_rhythm = QComboBox()
+            self.cmb_rhythm.addItem(tr(MODE_LABELS["bgm"]), "bgm")
+            self.cmb_rhythm.addItem(tr(MODE_LABELS["material"]), "material")
+            self.cmb_rhythm.activated.connect(
+                lambda _i: self.on_mode(self.cmb_rhythm.currentData()))
+            self.radio_total = QRadioButton(tr("自设总长"))
+            self.radio_free = QRadioButton(tr("逐段秒数"))
+            self.radio_voice = QRadioButton(tr("跟旁白"))
+            self.radio_voice.setToolTip(
+                tr("按配音页生成的旁白长度铺满画面，画面不会比声音长"))
+            tbar.addWidget(self.cmb_rhythm)
+            group = QButtonGroup(self)
+            for r in (self.radio_total, self.radio_free, self.radio_voice):
+                group.addButton(r)
+                tbar.addWidget(r)
+            self.spin_total = QDoubleSpinBox()
+            self.spin_total.setRange(0.5, 3600.0)
+            self.spin_total.setSingleStep(0.5)
+            self.spin_total.setSuffix(tr(" 秒"))
+            self.spin_total.setDecimals(1)
+            self.spin_total.setValue(10.0)
+            self.spin_total.setEnabled(False)
+            self.spin_total.setFixedWidth(96)
+            tbar.addWidget(self.spin_total)
+            # 这一行字解释当前时长是按谁算的，省得四个控件互相打架
+            self.lbl_mode_hint = QLabel()
+            self.lbl_mode_hint.setObjectName("hint")
+            tbar.addWidget(self.lbl_mode_hint)
+            tbar.addStretch(1)
+            cmdbar.addWidget(self.timing_bar)
+            v.addLayout(cmdbar)
 
             split = QSplitter(Qt.Orientation.Horizontal)
+            split.setHandleWidth(10)
             self.list = ImageList()
             self.list.setIconSize(QSize(96, 54))
             self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
@@ -8597,6 +8695,7 @@ def run_gui() -> int:
                 Qt.ContextMenuPolicy.CustomContextMenu)
             self.list.customContextMenuRequested.connect(self.on_list_menu)
             self.left_tabs = QTabWidget()
+            self.left_tabs.setObjectName("leftDock")
             self.left_tabs.addTab(self.list, tr("素材"))
             hist_page = QWidget()
             hvp = QVBoxLayout(hist_page)
@@ -8778,11 +8877,22 @@ def run_gui() -> int:
             voice_scroll.setWidget(voice_page)
             self._voice_scroll = voice_scroll
             self.left_tabs.addTab(voice_scroll, tr("配音"))
-            split.addWidget(self.left_tabs)
+            left_dock = QWidget()
+            lv = QVBoxLayout(left_dock)
+            lv.setContentsMargins(0, 0, 0, 0)
+            lv.setSpacing(4)
+            lv.addWidget(self.left_tabs, 1)
+            self.lbl_left_hint = QLabel(tr("支持拖入图片、视频和音频"))
+            self.lbl_left_hint.setObjectName("hint")
+            self.lbl_left_hint.setContentsMargins(6, 0, 6, 2)
+            lv.addWidget(self.lbl_left_hint)
+            split.addWidget(left_dock)
 
             right = QWidget()
+            right.setObjectName("panelCard")
             rv = QVBoxLayout(right)
-            rv.setContentsMargins(0, 0, 0, 0)
+            rv.setContentsMargins(12, 10, 12, 10)
+            rv.setSpacing(8)
             self.video = PreviewCanvas()
             self.video.clicked.connect(self.toggle_play)
             self.player.mediaStatusChanged.connect(self.on_media_status)
@@ -8796,18 +8906,18 @@ def run_gui() -> int:
             pbar = QHBoxLayout()
             pbar.setContentsMargins(0, 2, 0, 0)
             pbar.setSpacing(6)
-            self.btn_play = QPushButton("▶")
-            self.btn_play.setFixedSize(34, 26)
-            self.btn_play.setToolTip(tr("播放 / 暂停（空格）"))
-            self.btn_play.clicked.connect(self.toggle_play)
-            pbar.addWidget(self.btn_play)
             self.btn_back = QPushButton("−5s")
-            self.btn_back.setFixedSize(46, 26)
+            self.btn_back.setFixedSize(46, 28)
             self.btn_back.setToolTip(tr("后退 5 秒"))
             self.btn_back.clicked.connect(lambda: self.on_skip(-5.0))
             pbar.addWidget(self.btn_back)
+            self.btn_play = QPushButton("▶")
+            self.btn_play.setFixedSize(36, 28)
+            self.btn_play.setToolTip(tr("播放 / 暂停（空格）"))
+            self.btn_play.clicked.connect(self.toggle_play)
+            pbar.addWidget(self.btn_play)
             self.btn_fwd = QPushButton("+5s")
-            self.btn_fwd.setFixedSize(46, 26)
+            self.btn_fwd.setFixedSize(46, 28)
             self.btn_fwd.setToolTip(tr("前进 5 秒"))
             self.btn_fwd.clicked.connect(lambda: self.on_skip(5.0))
             pbar.addWidget(self.btn_fwd)
@@ -8952,7 +9062,7 @@ def run_gui() -> int:
         def retranslate(self):
             """换语言或换模式后重设文案，不重建窗口。"""
             self._refresh_title()
-            self.btn_project.setText(tr("工程"))
+            self.btn_project.setText(tr("工程") + "  ▾")
             self.btn_project.setToolTip(tr("新建 / 打开 / 保存工程（Ctrl+S 保存）"))
             self.btn_add.setText(tr("加素材"))
             self.btn_overlay.setText(tr("画中画"))
@@ -9037,7 +9147,7 @@ def run_gui() -> int:
             self.btn_retry.setText(tr("重试"))
             self.btn_export.setText(tr("导出视频"))
             tier = ui_tier(self.settings["ui"])
-            self.btn_mode.setText(tr(UI_TIER_LABELS[tier]))
+            self.btn_mode.setText(tr(UI_TIER_LABELS[tier]) + "  ▾")
             self.btn_mode.setToolTip(
                 tr("界面模式：简洁只做三件事，标准日常剪辑，专业全部参数"))
             for t, act in getattr(self, "_ui_actions", {}).items():
@@ -9199,12 +9309,17 @@ def run_gui() -> int:
             }
             for name, w_ in widgets.items():
                 w_.setVisible(name in allowed)
+            # 简洁档只剩「加素材」，分组竖线会变成一根孤零零的线，藏起来
+            for line in self._cmd_seps:
+                line.setVisible(tier != "simple")
             # 时长三选一是「自设总长 + 逐段秒数 + 总长输入」一组
             total = "total" in allowed
             self.radio_total.setVisible(total)
             self.radio_free.setVisible(total)
             self.radio_voice.setVisible(total and bool(self.project.narration_path))
             self.lbl_mode_hint.setVisible(total)
+            # 标准 / 专业都露时长行；简洁档只有三步出片
+            self.timing_bar.setVisible(total)
             # 倍速 / 清晰度是剪辑时才需要调的
             advanced = ui_advanced(tier)
             self.cmb_speed.setVisible(advanced)
@@ -9822,12 +9937,12 @@ def run_gui() -> int:
                 self.spin_total.blockSignals(True)
                 self.spin_total.setValue(self.project.total_setting)
                 self.spin_total.blockSignals(False)
-            n = self.project.image_count()
+            n = self.project.segment_count()
             if self.project.narration_path:
                 src = tr("旁白 {name}", name=os.path.basename(
                     self.project.narration_path))
             elif self.project.audio_path:
-                src = "BGM"
+                src = tr("背景音乐")
             else:
                 src = tr("无音乐")
             extra = ""
@@ -9838,6 +9953,7 @@ def run_gui() -> int:
             self.lbl_status.setText(
                 tr("{n} 段素材 · 总长 {total} · {src}", n=n,
                    total=human_time(self.project.total()), src=src) + extra)
+            self._refresh_project_meta()
 
         def _refresh_mode_hint(self):
             """四个时长控件旁边的解释：总长到底按谁算。"""
@@ -11664,6 +11780,8 @@ def run_gui() -> int:
     w.show()
 
     if shot:
+        # 截图用的主题/模式/窗口尺寸都是临时的，别写回用户设置
+        w.settings.save = lambda: None
         for p in [x for x in os.environ.get("PIC2VIDEO_SHOT_IMAGES", "").split(";") if x]:
             w.add_media([p])
         audio = os.environ.get("PIC2VIDEO_SHOT_AUDIO")
