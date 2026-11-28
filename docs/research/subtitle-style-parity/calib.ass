@@ -1,0 +1,20 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: S0,Microsoft YaHei,10,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+Style: S1,Microsoft YaHei,10,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+Style: S2,Microsoft YaHei,10,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+Style: S3,Microsoft YaHei,10,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,S0,,0,0,0,,{\an7\pos(100,120)\fs36}国国国国
+Dialogue: 0,0:00:00.00,0:00:05.00,S1,,0,0,0,,{\an7\pos(550,120)\fs48}国国国国
+Dialogue: 0,0:00:00.00,0:00:05.00,S2,,0,0,0,,{\an7\pos(1000,120)\fs72}国国国国
+Dialogue: 0,0:00:00.00,0:00:05.00,S3,,0,0,0,,{\an7\pos(1450,120)\fs96}国国国国

@@ -1,0 +1,84 @@
+{
+  "font_family": "Microsoft YaHei",
+  "line_factor": 1.32,
+  "cases": [
+    {
+      "case": "bottom",
+      "ff_bbox": [
+        490,
+        838,
+        1429,
+        1009
+      ],
+      "qt_bbox": [
+        489,
+        838,
+        1428,
+        1008
+      ],
+      "ff_px": 77384,
+      "qt_px": 75970,
+      "iou": 0.9353,
+      "bbox_delta": [
+        -1,
+        0,
+        -1,
+        -1
+      ],
+      "compare": "E:\\deepseek\\Xishensoft-Pic2Video\\docs\\research\\subtitle-style-parity\\compare_bottom.png",
+      "zoom": "E:\\deepseek\\Xishensoft-Pic2Video\\docs\\research\\subtitle-style-parity\\zoom_bottom.png"
+    },
+    {
+      "case": "mid_right",
+      "ff_bbox": [
+        1511,
+        510,
+        1762,
+        575
+      ],
+      "qt_bbox": [
+        1509,
+        510,
+        1762,
+        575
+      ],
+      "ff_px": 9130,
+      "qt_px": 9268,
+      "iou": 0.8764,
+      "bbox_delta": [
+        -2,
+        0,
+        0,
+        0
+      ],
+      "compare": "E:\\deepseek\\Xishensoft-Pic2Video\\docs\\research\\subtitle-style-parity\\compare_mid_right.png",
+      "zoom": "E:\\deepseek\\Xishensoft-Pic2Video\\docs\\research\\subtitle-style-parity\\zoom_mid_right.png"
+    },
+    {
+      "case": "topleft_box",
+      "ff_bbox": [
+        76,
+        86,
+        413,
+        159
+      ],
+      "qt_bbox": [
+        77,
+        86,
+        412,
+        159
+      ],
+      "ff_px": 25012,
+      "qt_px": 24864,
+      "iou": 0.9941,
+      "bbox_delta": [
+        1,
+        0,
+        -1,
+        0
+      ],
+      "compare": "E:\\deepseek\\Xishensoft-Pic2Video\\docs\\research\\subtitle-style-parity\\compare_topleft_box.png",
+      "zoom": "E:\\deepseek\\Xishensoft-Pic2Video\\docs\\research\\subtitle-style-parity\\zoom_topleft_box.png"
+    }
+  ]
+}

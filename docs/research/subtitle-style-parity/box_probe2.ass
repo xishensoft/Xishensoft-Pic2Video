@@ -1,0 +1,22 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 960
+PlayResY: 760
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: V0,Microsoft YaHei,40,&H00FFFFFF,&H00FFFFFF,&H000000FF,&H0030C020,0,0,0,0,100,100,0,0,3,2,0,7,0,0,0,1
+Style: V1,Microsoft YaHei,40,&H00FFFFFF,&H00FFFFFF,&H000000FF,&H0030C020,0,0,0,0,100,100,0,0,3,0.5,0,7,0,0,0,1
+Style: V2,Microsoft YaHei,40,&H00FFFFFF,&H00FFFFFF,&H000000FF,&H0030C020,0,0,0,0,100,100,0,0,4,0,0,7,0,0,0,1
+Style: V3,Microsoft YaHei,40,&H00FFFFFF,&H00FFFFFF,&H000000FF,&H0030C020,0,0,0,0,100,100,0,0,4,3,0,7,0,0,0,1
+Style: V4,Microsoft YaHei,40,&H00FFFFFF,&H00FFFFFF,&H000000FF,&H8030C020,0,0,0,0,100,100,0,0,4,0,0,7,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,V0,,0,0,0,,{\an7\pos(60,30)}底色框
+Dialogue: 0,0:00:00.00,0:00:05.00,V1,,0,0,0,,{\an7\pos(60,170)}底色框
+Dialogue: 0,0:00:00.00,0:00:05.00,V2,,0,0,0,,{\an7\pos(60,310)}底色框
+Dialogue: 0,0:00:00.00,0:00:05.00,V3,,0,0,0,,{\an7\pos(60,450)}底色框
+Dialogue: 0,0:00:00.00,0:00:05.00,V4,,0,0,0,,{\an7\pos(60,590)}底色框

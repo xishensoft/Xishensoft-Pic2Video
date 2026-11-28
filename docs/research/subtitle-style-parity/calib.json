@@ -1,0 +1,46 @@
+[
+ {
+  "size": 36,
+  "ff_ink_w": 106,
+  "ff_ink_h": 26,
+  "qt_ink_w": 140,
+  "qt_ink_h": 34,
+  "qt_advance": 144.0,
+  "qt_line_h": 47.0,
+  "w_ratio": 0.757,
+  "h_ratio": 0.765
+ },
+ {
+  "size": 48,
+  "ff_ink_w": 141,
+  "ff_ink_h": 34,
+  "qt_ink_w": 186,
+  "qt_ink_h": 45,
+  "qt_advance": 192.0,
+  "qt_line_h": 64.0,
+  "w_ratio": 0.758,
+  "h_ratio": 0.756
+ },
+ {
+  "size": 72,
+  "ff_ink_w": 212,
+  "ff_ink_h": 50,
+  "qt_ink_w": 278,
+  "qt_ink_h": 67,
+  "qt_advance": 288.0,
+  "qt_line_h": 95.0,
+  "w_ratio": 0.763,
+  "h_ratio": 0.746
+ },
+ {
+  "size": 96,
+  "ff_ink_w": 281,
+  "ff_ink_h": 67,
+  "qt_ink_w": 371,
+  "qt_ink_h": 88,
+  "qt_advance": 384.0,
+  "qt_line_h": 127.0,
+  "w_ratio": 0.757,
+  "h_ratio": 0.761
+ }
+]
