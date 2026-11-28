@@ -261,6 +261,44 @@ check("系数 1.0 时不写缩放指令", "\\fscx" not in _pnone, _pnone)
 
 
 
+
+# ---------------- 5 阶段 4：另存的两种写法 / 旁白与字幕的二选一
+
+_c4 = [p._cue(0.5, 1.5, "第一句"), p._cue(2.0, 3.0, "第二句")]
+_styles4 = {"Default": S.seed_default("Microsoft YaHei", 48)}
+_out4 = p.subtitle_export_texts(_c4, _styles4, "Default", 1920, 1080)
+_srt4 = _out4[".srt"]
+_ass4 = _out4[".ass"]
+check(".srt 只有序号、时间、文字",
+      "1\n00:00:00,500 --> 00:00:01,500\n第一句" in _srt4, _srt4[:80])
+check(".srt 里没有样式痕迹",
+      "Style:" not in _srt4 and "\\pos" not in _srt4 and "{" not in _srt4,
+      _srt4[:80])
+check(".ass 带样式表与定位",
+      "Style: Default" in _ass4 and "\\pos(" in _ass4, _ass4[:120])
+check(".ass 不靠 force_style", "force_style" not in _ass4)
+check(".ass 的时间轴是成片时间", "0:00:00.50,0:00:01.50" in _ass4)
+
+_pr4 = p.Project()
+p.set_mode(_pr4, "free")
+_pr4.cues = [p._cue(1.0, 2.0, "原来的字幕")]
+_new4 = [p._cue(0.0, 1.0, "新旁白带来的字幕")]
+p.apply_narration(_pr4, "C:/tmp/p2v_narr.m4a", 12.0, _new4,
+                  keep_subtitles=True)
+check("只换声音时字幕原样保留",
+      [c["text"] for c in _pr4.cues] == ["原来的字幕"],
+      [c["text"] for c in _pr4.cues])
+check("旁白挂上后切到跟旁白模式",
+      _pr4.mode == "voice" and abs(_pr4.narration_dur - 12.0) < 1e-6,
+      (_pr4.mode, _pr4.narration_dur))
+p.apply_narration(_pr4, "C:/tmp/p2v_narr.m4a", 12.0, _new4,
+                  keep_subtitles=False)
+check("选一起换时字幕按新旁白来",
+      all("新旁白" in c["text"] for c in _pr4.cues) and _pr4.cues,
+      [c["text"] for c in _pr4.cues])
+check("旁白音频只有一条",
+      len([a for a in _pr4.audios if a.path.endswith("p2v_narr.m4a")]) == 1,
+      [a.path for a in _pr4.audios])
 print("")
 if fails:
     print("FAILED %d: %s" % (len(fails), ", ".join(fails)))

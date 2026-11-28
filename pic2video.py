@@ -2974,6 +2974,16 @@ def set_narration(project, path: str, dur: float, cues=None):
     project.normalize()
 
 
+def apply_narration(project, path: str, dur: float, cues,
+                    keep_subtitles: bool = False):
+    """新旁白挂上去，字幕按用户的选择处理。
+
+    keep_subtitles=True 只换声音：旁白自带的那套 cue 丢掉，时间轴上的字幕原样
+    留着（用户可能已经手改过行内样式，重排会把改动冲掉）。
+    """
+    set_narration(project, path, dur, None if keep_subtitles else cues)
+
+
 def _ass_time(t: float) -> str:
     """成片时间 → .ass 的 0:00:01.00 这种写法（百分秒）。"""
     cs_all = int(round(max(0.0, float(t)) * 100))
@@ -3114,6 +3124,19 @@ def format_ass(cues: list, font: str = "Microsoft YaHei", size: int = 48,
             _ass_time(cue.get("start", 0.0)), _ass_time(cue.get("end", 0.0)),
             name, prefix, _ass_escape(cue.get("text", ""))))
     return "\n".join(lines) + "\n"
+
+
+def subtitle_export_texts(cues, styles=None, default_style=None,
+                          w: int = WIDTH, h: int = HEIGHT) -> dict:
+    """另存字幕的两种写法：.srt 只留序号 / 时间 / 文字，.ass 连样式一起。
+
+    两种都从同一份 cue 走：.srt 给打轴、翻译、别的编辑器用；.ass 拖进支持 ASS 的
+    软件里，字体颜色位置都还在。
+    """
+    cues = [c for c in (cues or []) if isinstance(c, dict)]
+    return {".srt": tts_engine.cues_srt(cues),
+            ".ass": format_ass(cues, w=w, h=h, styles=styles,
+                               default_style=default_style)}
 
 
 def subtitle_px(size: int, height: int) -> int:
@@ -9640,9 +9663,9 @@ def run_gui() -> int:
             self.btn_sub_add.clicked.connect(self.on_import_subtitle)
             self.btn_sub_del = QPushButton(tr("移除字幕"))
             self.btn_sub_del.clicked.connect(self.on_clear_subtitle)
-            self.btn_sub_save = QPushButton(tr("另存 .srt…"))
+            self.btn_sub_save = QPushButton(tr("另存字幕…"))
             self.btn_sub_save.setToolTip(
-                tr("把当前字幕存成 .srt：时间轴按成片时间算，能直接贴到别处"))
+                tr("可以存成 .srt（只有时间与文字）或 .ass（连样式一起）"))
             self.btn_sub_save.clicked.connect(self.on_save_subtitle)
             sb.addWidget(self.btn_sub_add)
             sb.addWidget(self.btn_sub_del)
@@ -10037,8 +10060,9 @@ def run_gui() -> int:
                 tr("九宫格按小键盘排：1-3 贴底，4-6 居中，7-9 贴顶"))
             self.btn_sub_add.setText(tr("导入字幕…"))
             self.btn_sub_del.setText(tr("移除字幕"))
-            self.btn_sub_save.setText(tr("另存 .srt…"))
-            self.btn_sub_save.setToolTip(tr("把当前字幕存成 .srt：时间轴按成片时间算，能直接贴到别处"))
+            self.btn_sub_save.setText(tr("另存字幕…"))
+            self.btn_sub_save.setToolTip(
+                tr("可以存成 .srt（只有时间与文字）或 .ass（连样式一起）"))
             # 配音页
             self.left_tabs.setTabText(3, tr("配音"))
             self.lbl_script.setText(
@@ -10404,8 +10428,21 @@ def run_gui() -> int:
             self._mark_stale()
             self.lbl_status.setText(tr("字幕已移除"))
 
+        def _subtitle_export_text(self) -> dict:
+            """两个落点的文本：.srt 只有序号/时间/文字，.ass 连样式与位置。"""
+            # .ass 要先有样式表：v2 老工程可能还是空的
+            self.project.seed_default_style(self.settings)
+            plan = export_plan(
+                self.project.export_preset or self.settings["export_preset"],
+                dict(w=even(self.settings["width"]),
+                     h=even(self.settings["height"]),
+                     fps=int(self.settings["fps"])))
+            return subtitle_export_texts(
+                self.project.cues, self.project.styles,
+                self.project.default_style, plan["w"], plan["h"])
+
         def on_save_subtitle(self):
-            """把当前字幕存成 .srt：时间轴按成片时间算，方便粘到别处。"""
+            """把当前字幕存成 .srt（只留时间与文字）或 .ass（连样式一起）。"""
             if not self.project.cues:
                 MsgBox.warn(self, tr("还没有字幕"),
                             tr("先导入字幕，或者到「配音」页生成，再来另存。"))
@@ -10416,10 +10453,14 @@ def run_gui() -> int:
             path = FileDialog.get_save_file(
                 self, tr("字幕另存为…"),
                 os.path.join(base, stem + ".srt"),
-                tr("字幕 (*.srt)"), suffix="srt")
+                tr("字幕 (*.srt *.ass)"), suffix="srt")
             if not path:
                 return
-            text = tts_engine.cues_srt(self.project.cues)
+            ext = os.path.splitext(path)[1].lower()
+            if ext not in (".srt", ".ass"):
+                ext = ".srt"
+                path += ext
+            text = self._subtitle_export_text()[ext]
             try:
                 with open(path, "w", encoding="utf-8", newline="\n") as f:
                     f.write(text)
@@ -11264,7 +11305,16 @@ def run_gui() -> int:
             if not path or dur <= 0:
                 self.on_tts_bad(tr("合成完了却没拿到可用的音频"))
                 return
-            set_narration(self.project, path, dur, cues)
+            keep = False
+            if self.project.cues:
+                keep = MsgBox.ask(
+                    self, tr("旁白好了，字幕怎么处理"),
+                    tr("新旁白也带了自己的字幕（{n} 条）。时间轴上现在还有"
+                       " {m} 条，要保留吗？", n=len(cues),
+                       m=len(self.project.cues)),
+                    tr("保留现在的字幕"), tr("用新旁白的字幕"))
+            apply_narration(self.project, path, dur, cues,
+                            keep_subtitles=keep)
             self.settings.update(
                 tts_script=self._script_text(),
                 tts_provider=self._tts_provider(),

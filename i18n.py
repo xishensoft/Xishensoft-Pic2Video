@@ -3897,3 +3897,29 @@ _TR_EXTRA70 = (
 for _k, _tw, _en, _ja, _ko in _TR_EXTRA70:
     for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
         TR[_lang].setdefault(_k, _v)
+# ---- _TR_EXTRA71：阶段 4 的两处出口（.ass 导出、旁白字幕二选一）
+_TR_EXTRA71 = (
+    ("旁白好了，字幕怎么处理",
+     "旁白好了，字幕怎麼處理",
+     "Narration ready — what about the captions?",
+     "ナレーション完成。字幕はどうしますか",
+     "내레이션이 완성되었습니다. 자막은 어떻게 할까요"),
+    ("新旁白也带了自己的字幕（{n} 条）。时间轴上现在还有 {m} 条，要保留吗？",
+     "新旁白也帶了自己的字幕（{n} 條）。時間軸上現在還有 {m} 條，要保留嗎？",
+     "The new narration comes with {n} captions of its own, and the timeline already has {m}. Keep the current ones?",
+     "新しいナレーションには独自の字幕（{n} 件）が付いてきます。タイムラインには現在 {m} 件あります。今の字幕を残しますか",
+     "새 내레이션에는 자체 자막({n}개)이 함께 있습니다. 타임라인에는 지금 {m}개가 있습니다. 지금 자막을 유지할까요?"),
+    ("保留现在的字幕", "保留現在的字幕", "Keep current captions",
+     "今の字幕を残す", "지금 자막 유지"),
+    ("用新旁白的字幕", "用新旁白的字幕", "Use the new narration's captions",
+     "新しいナレーションの字幕を使う", "새 내레이션 자막 사용"),
+    ("另存字幕…", "另存字幕…", "Save subtitles...", "字幕を別名保存…", "자막 다른 이름으로 저장…"),
+    ("可以存成 .srt（只有时间与文字）或 .ass（连样式一起）",
+     "可以存成 .srt（只有時間與文字）或 .ass（連樣式一起）",
+     "Save as .srt (timing and text only) or .ass (styles included)",
+     ".srt（時間とテキストのみ）または .ass（スタイル込み）で保存できます",
+     ".srt(시간과 텍스트만) 또는 .ass(스타일 포함)로 저장할 수 있습니다"),
+)
+for _k, _tw, _en, _ja, _ko in _TR_EXTRA71:
+    for _lang, _v in zip(("zh-TW", "en", "ja", "ko"), (_tw, _en, _ja, _ko)):
+        TR[_lang].setdefault(_k, _v)
