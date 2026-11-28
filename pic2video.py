@@ -48,7 +48,7 @@ components.prepend_path()      # tools/ 里的 ffmpeg 优先于系统那份
 # exe 是窗口程序，没有控制台：起子进程时别让它继承无效的句柄
 CREATION_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 
 WIDTH, HEIGHT, FPS = 1920, 1080, 30
 PREVIEW_W, PREVIEW_H = 960, 540
