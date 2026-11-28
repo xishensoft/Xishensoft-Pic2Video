@@ -1008,7 +1008,7 @@ _pr34.audios.append(p.AudioClip(os.path.join(FIXTURES, "tone6.m4a"), 6.0, 1.5, 0
 _pr34.mode = "total"
 _pr34.total_setting = 9.0
 _doc34 = _pr34.to_doc()
-check("工程格式带版本号", _doc34.get("version") == p.PROJECT_VERSION == 2,
+check("工程格式带版本号", _doc34.get("version") == p.PROJECT_VERSION == 3,
       _doc34.get("version"))
 check("工程格式：片段是 dict 不是元组",
       isinstance(_doc34["clips"][0], dict)
@@ -1075,7 +1075,7 @@ _pr35.clips = [p.Clip(_cn35, 2.0)]
 _cn_doc35 = os.path.join(_dir35, "中文工程.p2v")
 p.save_project(_pr35, _cn_doc35)
 _raw35 = open(_cn_doc35, encoding="utf-8").read()
-check("存盘带版本号", '"version": 2' in _raw35, _raw35[:40])
+check("存盘带版本号", '"version": 3' in _raw35, _raw35[:40])
 check("存盘不转义中文", "中文素材" in _raw35)
 check("中文路径能读回", p.load_project(_cn_doc35).clips[0].path == _cn35)
 
@@ -1553,8 +1553,9 @@ check("样式里写了字体与字号",
       [ln for ln in ass.split("\n") if ln.startswith("Style:")])
 check("两条字幕两行 Dialogue",
       sum(1 for ln in ass.split("\n") if ln.startswith("Dialogue:")) == 2)
-check("时间写成 时:分:秒.百分秒",
-      "Dialogue: 0,0:00:01.00,0:00:03.50,Default,第一行\\N第二行" in ass,
+check("时间写成 时:分:秒.百分秒，位置写成 \\an+\\pos",
+      "Dialogue: 0,0:00:01.00,0:00:03.50,Default,"
+      "{\\an2\\pos(640,693)}第一行\\N第二行" in ass,
       [ln for ln in ass.split("\n") if ln.startswith("Dialogue:")][0])
 check("超过一小时也写得下",
       "0,1:01:01.23,1:01:02.00,Default," in ass,
@@ -1568,11 +1569,12 @@ check("没有字幕就只有头，没有 Dialogue",
 
 f = p.ass_filter("C:\\tmp\\a b.ass", "Microsoft YaHei", 48)
 check("字幕滤镜：正斜杠 + 冒号转义 + 引号",
-      f == "subtitles=filename='C\\:/tmp/a b.ass':force_style="
-           "'FontName=Microsoft YaHei,FontSize=48'", f)
+      f == "subtitles=filename='C\\:/tmp/a b.ass'", f)
+check("字幕滤镜不再 force_style（否则整张样式表被盖掉）",
+      "force_style" not in f, f)
 f2 = p.ass_filter("C:\\tmp\\a.ass", "思源黑体", 42, "C:\\Windows\\Fonts")
 check("给了字体目录就带上 fontsdir",
-      ":fontsdir='C\\:/Windows/Fonts'" in f2 and "FontName=思源黑体" in f2, f2)
+      ":fontsdir='C\\:/Windows/Fonts'" in f2 and "force_style" not in f2, f2)
 
 pr = mk(2)
 g = p.build_graph(pr.frame_counts(), pr.total(), clips=pr.clips, fps=30,
@@ -1990,7 +1992,7 @@ except p.RenderError as _exc:
 
 # ---------------- 54 画中画：工程格式（叠加层） ----------------
 _ov0 = p.Project()
-check("工程格式版本升到 2", _ov0.to_doc()["version"] == 2)
+check("工程格式版本升到 3", _ov0.to_doc()["version"] == 3)
 check("新工程没有叠加层", _ov0.to_doc().get("overlays") == [])
 
 _ov0.overlays.append(p.Overlay(IMG[0], 1.0, 4.0))

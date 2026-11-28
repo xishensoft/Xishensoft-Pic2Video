@@ -35,6 +35,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import components
+import subtitle_style as sub_style
 import theme
 import tts_engine
 from audio_source import (AUDIO_EXTS, SourceError, fetch_audio, install_ytdlp,
@@ -231,7 +232,7 @@ SETTINGS_PATH = components.settings_path()   # 打包后跟着 exe 走，目录�
 
 # ---------------------------------------------------------------- 工程文件
 # .p2v 是带版本号的 JSON。改格式就 +1，并在这里写往上迁移的分支。
-PROJECT_VERSION = 2
+PROJECT_VERSION = 3
 PROJECT_SUFFIX = ".p2v"
 PROJECT_FILTER = "Pic2Video 工程 (*.p2v)"
 
@@ -565,6 +566,8 @@ class Settings:
         "crop_focus": "center",   # 裁切铺满时留中心 / 偏上 / 偏下
         "subtitle_font": "Microsoft YaHei",   # 烧字幕用的字体
         "subtitle_size": 48,      # 字号（按成片像素算）
+        # 默认字幕样式里除字体/字号以外的几项（描边、颜色、位置…），见 subtitle_style
+        "subtitle_style": {},
         # 配音（文稿 -> TTS -> 旁白 + 字幕）
         "tts_provider": "edge",   # edge / gemini / azure / openai
         "tts_voice": "zh-CN-XiaoxiaoNeural",   # 上次用的音色
@@ -741,6 +744,11 @@ class Settings:
                 d.get("subtitle_size", 48)))))
         except (TypeError, ValueError):
             d["subtitle_size"] = 48
+        # 默认字幕样式：字体/字号以 subtitle_font/subtitle_size 为准，这里只留别的键
+        extra = sub_style.clean_overrides(d.get("subtitle_style"))
+        extra.pop("font", None)
+        extra.pop("size", None)
+        d["subtitle_style"] = extra
         # 配音：服务名必须认识，key 只收字符串，语速和停顿夹进合理范围
         if d.get("tts_provider") not in tts_engine.TTS_PROVIDERS:
             d["tts_provider"] = "edge"
@@ -1721,6 +1729,9 @@ class Project:
         self.fps = int(fps)
         self.subtitles_path = ""      # 导入的字幕文件（工程里记着，方便重定位）
         self.cues: list[dict] = []    # 解析好的字幕条目，时间对齐成片总轴
+        self.styles: dict = {}        # 命名样式表：名字 -> 14 键样式字典
+        self.default_style = sub_style.DEFAULT_STYLE_NAME
+        self._styles_seeded = False   # v2 工程读进来时为 False，由窗口补种 Default
         self.export_preset = "generic"   # 上次选的导出预设（跟着工程存）
         self.narration_path = ""      # 配音旁白（跟旁白模式按它定时长）
         self.narration_dur = 0.0
@@ -1800,7 +1811,10 @@ class Project:
                           "dx": o.dx, "dy": o.dy, "opacity": o.opacity}
                          for o in self.overlays],
             "subtitles": {"path": self.subtitles_path,
-                          "cues": [dict(c) for c in self.cues]},
+                          "cues": [dict(c) for c in self.cues],
+                          "styles": {str(k): dict(v)
+                                     for k, v in self.styles.items()},
+                          "default_style": self.default_style},
             "narration": {"path": self.narration_path, "dur": self.narration_dur},
             "export_preset": self.export_preset,
         }
@@ -1845,6 +1859,7 @@ class Project:
         if not isinstance(sub_path, str):
             sub_path = ""
         new_cues = _clean_cues(raw_cues)
+        new_styles, new_default = _read_style_table(raw_subs)
         raw_nar = doc.get("narration") or {}
         if not isinstance(raw_nar, dict):
             raw_nar = {}
@@ -1865,9 +1880,31 @@ class Project:
         self.fps = 60 if _doc_num(doc.get("fps"), FPS) >= 50 else 30
         self.subtitles_path = sub_path
         self.cues = new_cues
+        self.styles = new_styles
+        self.default_style = new_default
+        self._styles_seeded = bool(new_styles)
         self.narration_path = nar_path
         self.narration_dur = nar_dur
         self.export_preset = preset
+
+    def seed_default_style(self, settings=None) -> bool:
+        """v2 工程升级：用设置里的字体/字号补一份 Default 样式。
+
+        只在还没种过的时候动手；返回 True 表示这次补了（调用方据此标脏）。
+        """
+        if self._styles_seeded:
+            return False
+        font, size, extra = "", 0, {}
+        try:
+            font = settings["subtitle_font"]
+            size = settings["subtitle_size"]
+            extra = settings["subtitle_style"] or {}
+        except (KeyError, TypeError, IndexError):
+            extra = {}
+        self.styles = dict(self.styles or {})
+        self.styles[self.default_style] = sub_style.seed_default(font, size, extra)
+        self._styles_seeded = True
+        return True
 
     @staticmethod
     def _clip_from_doc(raw) -> Clip:
@@ -2560,8 +2597,11 @@ def _sub_time(text: str) -> float | None:
     return round(h * 3600 + m * 60 + s, 3)
 
 
-def _cue(start: float, end: float, text: str, style: str = "") -> dict:
-    return {"start": start, "end": end, "text": text, "style": style}
+def _cue(start: float, end: float, text: str, style: str = "",
+         overrides=None) -> dict:
+    """一条字幕。overrides 只记跟样式不一样的键（见 subtitle_style.STYLE_KEYS）。"""
+    return {"start": start, "end": end, "text": text, "style": style,
+            "overrides": sub_style.clean_overrides(overrides)}
 
 
 def _sub_body(text: str) -> str:
@@ -2677,8 +2717,25 @@ def _clean_cues(raw_list) -> list:
         text = raw.get("text")
         if start < 0 or end <= start or not isinstance(text, str):
             continue
-        out.append(_cue(start, end, text, str(raw.get("style") or "")))
+        out.append(_cue(start, end, text, str(raw.get("style") or ""),
+                        raw.get("overrides")))
     return out
+
+
+def _read_style_table(raw_subs: dict):
+    """从工程的 subtitles 段读样式表；坏值洗掉，读不出来就当没有。"""
+    raw = raw_subs.get("styles") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    styles = {}
+    for name, style in raw.items():
+        if isinstance(style, dict):
+            styles[sub_style.clean_style_name(name)] = sub_style.clean_style(style)
+    default = raw_subs.get("default_style")
+    default = sub_style.clean_style_name(default) if isinstance(default, str) and default else ""
+    if default not in styles:
+        default = sub_style.DEFAULT_STYLE_NAME
+    return styles, default
 
 
 def set_subtitles(project, path: str, cues: list):
@@ -2699,7 +2756,7 @@ def set_narration(project, path: str, dur: float, cues=None):
     project.narration_path = str(path or "")
     project.narration_dur = dur
     if cues is not None:
-        project.cues = [] if not cues else tts_engine.fold_cues(cues)
+        project.cues = [] if not cues else _clean_cues(tts_engine.fold_cues(cues))
         project.subtitles_path = ""
     found = False
     for a in project.audios:
@@ -2736,9 +2793,92 @@ ASS_STYLE_FORMAT = (
     "Alignment, MarginL, MarginR, MarginV, Encoding")
 
 
+_LINE_FACTORS: dict = {}
+
+
+def line_factor(family: str) -> float:
+    """libass 的 Fontsize 按字形高度（ascent+descent）缩放，Qt 的 setPixelSize 按 em 框。
+
+    两者差这个系数（微软雅黑 ≈ 1.32）。同一个「预览多大」的字号，写到 .ass 里
+    要乘上它才一样大 —— 这正是以前烧出来的字幕比预览小一截的原因。
+    没有 QApplication 时摆不平字体库，退回 1.0，让命令行/测试的输出可预期。
+    """
+    fam = str(family or "").strip()
+    if fam in _LINE_FACTORS:
+        return _LINE_FACTORS[fam]
+    factor = 1.0
+    try:
+        from PyQt6.QtGui import QFont, QFontMetricsF
+        from PyQt6.QtWidgets import QApplication
+        if QApplication.instance() is not None:
+            probe = QFont(fam or "Microsoft YaHei")
+            probe.setPixelSize(1000)
+            metrics = QFontMetricsF(probe)
+            height = float(metrics.ascent()) + float(metrics.descent())
+            if height > 0:
+                factor = height / 1000.0
+    except Exception:      # noqa: BLE001  没装 Qt / 没起窗口都不该挡住烧录
+        factor = 1.0
+    factor = max(0.5, min(2.5, factor))
+    _LINE_FACTORS[fam] = factor
+    return factor
+
+
+def _ass_factor(factor, font: str) -> float:
+    """factor 给数就是固定值（测试用），给函数就按字体现查。"""
+    if callable(factor):
+        try:
+            return float(factor(font))
+        except Exception:  # noqa: BLE001
+            return 1.0
+    try:
+        return float(factor)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _style_table(styles, default_style, font: str, size: int, h: int):
+    """样式表 + 兜底的 Default。默认样式没给就按 font/size 现造一份。"""
+    table = {}
+    for name, style in (styles or {}).items():
+        if isinstance(style, dict):
+            table[sub_style.clean_style_name(name)] = sub_style.clean_style(style)
+    default_name = sub_style.clean_style_name(
+        default_style or sub_style.DEFAULT_STYLE_NAME)
+    if default_name not in table:
+        try:                       # size 是「这条成片高下该多大」，换算回 1080 基准
+            baseline = int(round(float(size or 48) * 1080.0 / max(1, int(h))))
+        except (TypeError, ValueError):
+            baseline = 48
+        table[default_name] = sub_style.seed_default(
+            font or "Microsoft YaHei", baseline)
+    return table, default_name
+
+
 def format_ass(cues: list, font: str = "Microsoft YaHei", size: int = 48,
-               w: int = WIDTH, h: int = HEIGHT) -> str:
-    """把解析好的字幕写成一份 .ass（烧录用）。字号按像素，跟成片同尺寸。"""
+               w: int = WIDTH, h: int = HEIGHT, *, styles=None,
+               default_style=None, factor=1.0) -> str:
+    r"""把解析好的字幕写成一份 .ass（烧录用）。
+
+    styles 是工程里那份命名样式表，不传就按 font/size 现造一份 Default。
+    位置一律用 {\an…\pos(…)} 写在 Dialogue 里，因为底/中/顶三档边距用
+    MarginV 表达不了（同名样式换档也不能靠 MarginV 做到）。
+    """
+    cues = [c for c in (cues or []) if isinstance(c, dict)]
+    table, default_name = _style_table(styles, default_style, font, size, h)
+    rows = []
+    for cue in cues:
+        name = sub_style.clean_style_name(cue.get("style") or default_name)
+        if name not in table:
+            name = default_name          # 引用了不存在的样式名：退回默认
+        base = table[name]
+        rows.append((name, base,
+                     sub_style.merge_style(base, cue.get("overrides"))))
+    # 底色框只能整条样式开关（BorderStyle），所以一条样式里只要有一条要框，
+    # 这一行就写 4，别的条目用 \4a 全透明躲开
+    boxes = {}
+    for name, _base, style in rows:
+        boxes[name] = boxes.get(name, False) or style["back_opacity"] > 0
     lines = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -2749,16 +2889,18 @@ def format_ass(cues: list, font: str = "Microsoft YaHei", size: int = 48,
         "",
         "[V4+ Styles]",
         ASS_STYLE_FORMAT,
-        ("Style: Default,%s,%d,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
-         "0,0,0,0,100,100,0,0,1,2.5,0,2,60,60,40,1" % (font, int(size))),
-        "",
-        "[Events]",
-        "Format: Layer, Start, End, Style, Text",
     ]
-    for c in cues or []:
-        lines.append("Dialogue: 0,%s,%s,%s,%s" % (
-            _ass_time(c.get("start", 0.0)), _ass_time(c.get("end", 0.0)),
-            c.get("style") or "Default", _ass_escape(c.get("text", ""))))
+    for name, style in table.items():
+        lines.append(sub_style.ass_style_line(
+            name, style, h, _ass_factor(factor, style["font"]),
+            box=boxes.get(name, style["back_opacity"] > 0)))
+    lines += ["", "[Events]", "Format: Layer, Start, End, Style, Text"]
+    for cue, (name, base, style) in zip(cues, rows):
+        prefix = sub_style.dialogue_prefix(
+            style, base, w, h, _ass_factor(factor, style["font"]))
+        lines.append("Dialogue: 0,%s,%s,%s,%s%s" % (
+            _ass_time(cue.get("start", 0.0)), _ass_time(cue.get("end", 0.0)),
+            name, prefix, _ass_escape(cue.get("text", ""))))
     return "\n".join(lines) + "\n"
 
 
@@ -2909,9 +3051,20 @@ def timeline_block_dest(durations, rows, drop_t: float) -> int:
     return max(0, min(dest, len(rest)))
 
 
-def _write_ass(cues, w: int, h: int, font: str, size: int) -> str:
-    """把字幕写成临时 .ass，返回路径（用完由调用方删）。"""
-    text = format_ass(cues, font=font, size=size, w=w, h=h)
+def _write_ass(cues, w: int, h: int, font: str = "Microsoft YaHei",
+               size: int = 48, styles=None, default_style=None,
+               factors=None) -> str:
+    """把字幕写成临时 .ass，返回路径（用完由调用方删）。
+
+    factors 是 {字体名: line_factor}：主线程先算好传进来，渲染线程别碰 Qt。
+    """
+    if factors is None:
+        fonts = {str(s.get("font") or "") for s in (styles or {}).values()}
+        fonts.add(str(font or ""))
+        factors = {fam: line_factor(fam) for fam in fonts if fam}
+    text = format_ass(cues, font=font, size=size, w=w, h=h, styles=styles,
+                      default_style=default_style,
+                      factor=lambda fam: factors.get(fam, 1.0))
     fd, path = tempfile.mkstemp(prefix="p2v_sub_", suffix=".ass")
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
@@ -2931,11 +3084,14 @@ def default_font_dir() -> str:
 
 def ass_filter(path: str, font: str = "Microsoft YaHei", size: int = 48,
                fontsdir: str = "") -> str:
-    """一条 subtitles 滤镜：烧录临时 .ass，并强制字体/字号。"""
+    """一条 subtitles 滤镜：烧录临时 .ass，并告诉 libass 去哪找字体。
+
+    font/size 只为兼容旧调用留着，不再 force_style：样式全在 .ass 的样式表
+    里，force_style 会把整张样式表（颜色、描边、位置）盖掉。
+    """
     out = "subtitles=filename='%s'" % _filter_path(path)
     if fontsdir:
         out += ":fontsdir='%s'" % _filter_path(fontsdir)
-    out += ":force_style='FontName=%s,FontSize=%d'" % (font, int(size))
     return out
 
 
@@ -4157,6 +4313,8 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
            volume=1.0, crop_focus="center", music_start=0.0, xfade_sec=0.3,
            subtitles=None, subtitle_font="Microsoft YaHei",
            subtitle_size=48, subtitle_fonts="", ab="192k", overlays=None,
+           subtitle_styles=None, subtitle_default_style=None,
+           subtitle_factors=None,
            on_progress=None, proc_holder=None) -> str:
     """一条 filtergraph 渲完；on_progress(0..1) 回调。
 
@@ -4221,7 +4379,10 @@ def render(clips, counts, audio, out_path, *, w=WIDTH, h=HEIGHT,
 
     sub_file = ""
     if subtitles:
-        sub_file = _write_ass(subtitles, w, h, subtitle_font, subtitle_size)
+        sub_file = _write_ass(subtitles, w, h, subtitle_font, subtitle_size,
+                              styles=subtitle_styles,
+                              default_style=subtitle_default_style,
+                              factors=subtitle_factors)
     sub_kw = dict(subtitle_file=sub_file, subtitle_font=subtitle_font,
                   subtitle_size=subtitle_size, subtitle_fonts=subtitle_fonts)
     ov_base = len(counts) + (1 if add_bg else 0) + 1 + len(extras)
@@ -8405,11 +8566,14 @@ def run_gui() -> int:
                 MsgBox.warn(self, tr("打不开这个工程"), project_error_text(exc))
                 return False
             self.project = project
+            # v2 工程没有样式表：拿设置里的字体/字号补一份 Default（不写盘，
+            # 等用户存盘时一起落进 v3），所以这里要把它算成一处改动
+            seeded = self.project.seed_default_style(self.settings)
             self.settings.data["fps"] = int(project.fps)
             self.settings.data["mode"] = project.mode
             self.settings.save()
             self.project_path = path
-            self._dirty = False
+            self._dirty = seeded
             self.autosaver.clear()
             self.settings.push_recent(path)
             self._refresh_all()
@@ -10418,6 +10582,14 @@ def run_gui() -> int:
             except AttributeError:
                 pass
 
+        def _subtitle_factors(self) -> dict:
+            """样式表里每种字体算一遍 libass↔Qt 的字号系数（只在主线程算）。"""
+            fonts = {str(style.get("font") or "")
+                     for style in self.project.styles.values()
+                     if isinstance(style, dict)}
+            fonts.add(str(self.settings["subtitle_font"] or ""))
+            return {fam: line_factor(fam) for fam in fonts if fam}
+
         def _opts(self, preview=False):
             s = self.settings
             w, h = (s.preview_size(s["preview_quality"]) if preview
@@ -10438,6 +10610,10 @@ def run_gui() -> int:
                         subtitle_font=s["subtitle_font"],
                         subtitle_fonts=font_lookup_dir(s["subtitle_font"]),
                         subtitle_size=subtitle_px(int(s["subtitle_size"]), h),
+                        subtitle_styles={k: dict(v) for k, v in
+                                         self.project.styles.items()},
+                        subtitle_default_style=self.project.default_style,
+                        subtitle_factors=self._subtitle_factors(),
                         overlays=[o.copy() for o in self.project.overlays])
 
         # ---------------- 动作
