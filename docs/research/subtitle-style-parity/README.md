@@ -9,7 +9,10 @@ python docs/research/subtitle-style-parity/parity_probe.py     # 三用例主脚
 python docs/research/subtitle-style-parity/calib.py            # 字号标定：libass Fontsize vs Qt setPixelSize
 python docs/research/subtitle-style-parity/box_probe.py        # BorderStyle 3/4 的填充色
 python docs/research/subtitle-style-parity/box_probe2.py       # BorderStyle 4 的框尺寸规则
+python docs/research/subtitle-style-parity/parity_product.py   # 走产品真代码路径（format_ass/ass_filter vs paint_cues）
 ```
+
+`parity_probe.py` 是自己拼 ASS 的探针，用来标定常数；`parity_product.py` 走产品代码：左边 `format_ass()` → `ass_filter()` → ffmpeg 烧，右边 `paint_cues()` 画同一帧，1080p 与 540p 各跑一遍。改完渲染相关代码就重跑后者。
 
 依赖：本机 `ffmpeg`（带 libass）、`PySide6`、`C:\Windows\Fonts\msyh.ttc`。脚本用 `QT_QPA_PLATFORM=offscreen`，并且**必须** `QFontDatabase.addApplicationFont()` 显式加载字体，否则 offscreen 下的 Qt 会画出缺字方块。
 
@@ -26,5 +29,9 @@ python docs/research/subtitle-style-parity/box_probe2.py       # BorderStyle 4 �
 1. `line_factor = (ascent + descent) / em ≈ 1.32`（msyh）。libass 的 `Fontsize` 是字体自身行高，不是 em；生成 ASS 时要乘它，Qt 才不用乘。
 2. Qt 侧 `QPen` 宽度 = `2 × outline`（libass 描边外扩，QPen 以路径为中轴）。
 3. 底色框必须 `BorderStyle=4`；`BorderStyle=3` 画的是描边色框，且 `Outline=0` 时框消失。
+4. `Fontsize` 只能写整数，取整零头用 `\fscx/\fscy` 补（540p 下不补会整体偏大 1%、居中字幕右移 3 px）。
+5. 预览侧要 `QFont.HintingPreference.PreferNoHinting`：libass 不做 hinting，Qt 做了会把小字号中文笔画挤细。
+
+产品路径复测（`parity_product.py`）：1080p IoU 0.9303 / 0.9609 / 0.9695，540p 0.8693 / 0.9337 / 0.9080，包围盒偏差全部 ≤2 px。
 
 图片说明：`ff_*.png` 为 libass 真渲、`qt_*.png` 为 QPainter、`diff_*.png` 灰=重合/红=只 libass/绿=只 Qt、`compare_*.png` 三联图、`zoom_*.png` 1:1 左右并排。

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """字幕样式：样式字典的洗值、ASS 换算、工程 v2→v3 迁移（不碰 GUI）。"""
-import json, os, sys
+import json, os, re, sys
 try:                      # 控制台是 GBK，日/韩文本会炸，统一用 UTF-8 输出
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:         # noqa: BLE001
@@ -111,8 +111,10 @@ pre = S.dialogue_prefix(base, base, 1920, 1080, 1.32)
 check(r"前缀永远带 \an 与 \pos",
       pre.startswith("{\\an2\\pos(960,1040)") and pre.endswith("}"), pre)
 pre7 = S.dialogue_prefix(S.merge_style(base, {"align": 7}), base, 1920, 1080, 1.32)
+# 字号补偿（\fscx/\fscy）是渲染层的取整补救，不算样式差异，允许出现在前缀里
+pre7_core = re.sub(r"\\fscx[0-9.]+\\fscy[0-9.]+", "", pre7)
 check(r"只有对齐变了就只写 \an 与 \pos，别的键不重复",
-      pre7 == "{\\an7\\pos(60,40)}", pre7)
+      pre7_core == "{\\an7\\pos(60,40)}", pre7)
 pre_red = S.dialogue_prefix(S.merge_style(base, {"primary": "#FF0000"}),
                             base, 1920, 1080, 1.32)
 check("换了主色就带 \1c", "\\1c&H000000FF" in pre_red, pre_red)
@@ -223,6 +225,40 @@ finally:
     os.remove(tmpf)
 check("_write_ass 落盘的就是这份 .ass",
       "Style: Big," in written and "{\\an2\\pos" in written)
+
+# ---- 阶段 2：预览与烧录对齐用到的换算 -------------------------------------
+check("字号补偿：1080p 下的取整零头补回来",
+      S.font_scale(base, 1080, 1.32) == 100.6, S.font_scale(base, 1080, 1.32))
+check("字号补偿：540p 下是 99（Fontsize 取整后偏大 1%）",
+      S.font_scale(base, 540, 1.32) == 99.0, S.font_scale(base, 540, 1.32))
+check("字号补偿：不传系数（1.0）就不用补",
+      (S.font_scale(base, 540, 1.0), S.font_scale(base, 1080, 1.0)) == (100.0, 100.0),
+      (S.font_scale(base, 540, 1.0), S.font_scale(base, 1080, 1.0)))
+check("底色不透明度：Qt 的 alpha 与 ASS 的 AA 正好相反",
+      S.paint_alpha(100) == 255 and S.paint_alpha(0) == 0
+      and S.paint_alpha(80) == 255 - S.back_alpha(80),
+      (S.paint_alpha(100), S.paint_alpha(0), S.back_alpha(80)))
+check("字号按画面高度换算", (S.em_px(base, 1080), S.em_px(base, 540)) == (48, 24),
+      (S.em_px(base, 1080), S.em_px(base, 540)))
+
+_a2 = S.anchor_px(base, 1920, 1080)
+_a5 = S.anchor_px(S.merge_style(base, {"align": 5}), 1920, 1080)
+_a7 = S.anchor_px(S.merge_style(base, {"align": 7}), 1920, 1080)
+check("底部居中定位点贴在底边距上", _a2[0] == 2 and _a2[2] > 1000, _a2)
+check("中间一档的定位点在画面中心", _a5[2] == 540, _a5)
+check("左上角定位点落在左边距/上边距", _a7[1] < 200 and _a7[2] < 200, _a7)
+_half = S.anchor_px(base, 960, 540)
+check("换分辨率后定位点按比例走",
+      abs(_half[2] - _a2[2] / 2.0) <= 1 and abs(_half[1] - _a2[1] / 2.0) <= 1, (_a2, _half))
+
+_p540 = S.dialogue_prefix(base, base, 960, 540, 1.32)
+check("540p 的 Dialogue 前缀带缩放补偿", "\\fscx99\\fscy99" in _p540, _p540)
+_p1080 = S.dialogue_prefix(base, base, 1920, 1080, 1.32)
+check("1080p 的 Dialogue 前缀也补 0.6% 的零头",
+      "\\fscx100.6\\fscy100.6" in _p1080, _p1080)
+_pnone = S.dialogue_prefix(base, base, 1920, 1080, 1.0)
+check("系数 1.0 时不写缩放指令", "\\fscx" not in _pnone, _pnone)
+
 
 
 print("")

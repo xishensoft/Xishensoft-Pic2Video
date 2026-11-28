@@ -185,6 +185,25 @@ def ass_fontsize(style, height=1080, factor=1.0) -> int:
     return max(1, int(round(em_px(style, height) * factor)))
 
 
+def font_scale(style, height=1080, factor=1.0) -> int:
+    """字号补偿百分比：Fontsize 只能写整数，缩放补回那点零头。
+
+    Fontsize 取整之后 libass 的 em 会偏（540p 下 36 变成 36.36，宽出来 1%，
+    行也跟着错位），用 \fscx/\fscy 乘回去就能和预览的整数像素字号对齐。
+    """
+    em = float(em_px(style, height))
+    try:
+        factor = float(factor)
+    except (TypeError, ValueError):
+        factor = 1.0
+    if factor <= 0:
+        factor = 1.0
+    size = ass_fontsize(style, height, factor)
+    if size <= 0 or em <= 0:
+        return 100
+    return round(100.0 * em * factor / float(size), 1)
+
+
 def ass_colour(colour, alpha=0) -> str:
     """#RRGGBB → ASS 的 &HAABBGGRR（AA = 00 不透明 / FF 全透明）。"""
     hexed = norm_colour(colour)[1:]
@@ -200,6 +219,19 @@ def back_alpha(opacity) -> int:
         pct = 0.0
     pct = _clamp(pct, 0.0, 100.0)
     return int(round(255.0 * (1.0 - pct / 100.0)))
+
+
+def paint_alpha(opacity) -> int:
+    """底色不透明度 0..100 → Qt 的 0..255（和 ASS 的 AA 正好相反）。"""
+    return 255 - back_alpha(opacity)
+
+
+def scaled_px(value, height=1080) -> float:
+    """样式里的像素值按 1080 基准换算到成片高度（描边、阴影都用它）。"""
+    try:
+        return float(value) * float(height) / 1080.0
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def anchor_px(style, width=1920, height=1080):
@@ -245,10 +277,12 @@ def style_line(name, style, height=1080, factor=1.0, box=None) -> str:
     if box is None:
         box = opacity > 0
     border_style = 4 if box else 1
+    # BorderStyle=1 时 BackColour 就是阴影色，必须不透明；=4 时才是底色框
+    back = ass_colour(style["back_color"], back_alpha(opacity)) if box \
+        else ass_colour(style["shadow_color"], 0)
     primary = ass_colour(style["primary"], 0)
     secondary = ass_colour(style["outline_color"], 0)
     outline_c = ass_colour(style["outline_color"], 0)
-    back = ass_colour(style["back_color"], back_alpha(opacity))
     field = [
         clean_style_name(name),
         style["font"],
@@ -261,8 +295,8 @@ def style_line(name, style, height=1080, factor=1.0, box=None) -> str:
         "-1" if style["italic"] else "0",
         "0", "0", "100", "100", "0", "0",
         str(border_style),
-        "%.1f" % float(style["outline"]),
-        "%.1f" % float(style["shadow"]),
+        "%.2f" % scaled_px(style["outline"], height),
+        "%.2f" % scaled_px(style["shadow"], height),
         str(int(style["align"])),
         str(int(round(float(style["margin_l"]) / 100.0 * 1920))),
         str(int(round(float(style["margin_r"]) / 100.0 * 1920))),
@@ -290,14 +324,17 @@ def dialogue_prefix(style, base, width=1920, height=1080, factor=1.0) -> str:
     fs = ass_fontsize(style, height, factor)
     if fs != ass_fontsize(base, height, factor):
         bits.append("\\fs%d" % fs)
+    scale = font_scale(style, height, factor)
+    if abs(scale - 100.0) > 0.05:   # 字号取整的零头，用缩放补回来
+        bits.append("\\fscx%g\\fscy%g" % (scale, scale))
     if style["primary"] != base["primary"]:
         bits.append("\\1c%s" % ass_colour(style["primary"], 0))
     if style["outline_color"] != base["outline_color"]:
         bits.append("\\3c%s" % ass_colour(style["outline_color"], 0))
     if style["outline"] != base["outline"]:
-        bits.append("\\bord%.1f" % float(style["outline"]))
+        bits.append("\\bord%.2f" % scaled_px(style["outline"], height))
     if style["shadow"] != base["shadow"]:
-        bits.append("\\shad%.1f" % float(style["shadow"]))
+        bits.append("\\shad%.2f" % scaled_px(style["shadow"], height))
     if style["shadow_color"] != base["shadow_color"]:
         bits.append("\\4c%s" % ass_colour(style["shadow_color"], 0))
     if style["bold"] != base["bold"]:

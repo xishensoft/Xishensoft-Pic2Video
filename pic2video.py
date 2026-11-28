@@ -2808,9 +2808,11 @@ def line_factor(family: str) -> float:
         return _LINE_FACTORS[fam]
     factor = 1.0
     try:
+        from PyQt6.QtCore import QCoreApplication
         from PyQt6.QtGui import QFont, QFontMetricsF
-        from PyQt6.QtWidgets import QApplication
-        if QApplication.instance() is not None:
+        # 只装了 QGuiApplication 也算（无头预览/实测脚本用得上），
+        # 没有应用实例时字体库没起来，量出来的数不可信，才退回 1.0。
+        if QCoreApplication.instance() is not None:
             probe = QFont(fam or "Microsoft YaHei")
             probe.setPixelSize(1000)
             metrics = QFontMetricsF(probe)
@@ -2825,7 +2827,13 @@ def line_factor(family: str) -> float:
 
 
 def _ass_factor(factor, font: str) -> float:
-    """factor 给数就是固定值（测试用），给函数就按字体现查。"""
+    """factor 给数就是固定值，给函数就按字体现查，不给就现量一次。
+
+    不给的时候按字体当场量，所以哪怕是命令行/脚本直接调 format_ass，
+    烧出来也和预览一样大；只有确实没有 Qt 应用实例时才退回 1.0。
+    """
+    if factor is None:
+        return line_factor(font)
     if callable(factor):
         try:
             return float(factor(font))
@@ -2857,7 +2865,7 @@ def _style_table(styles, default_style, font: str, size: int, h: int):
 
 def format_ass(cues: list, font: str = "Microsoft YaHei", size: int = 48,
                w: int = WIDTH, h: int = HEIGHT, *, styles=None,
-               default_style=None, factor=1.0) -> str:
+               default_style=None, factor=None) -> str:
     r"""把解析好的字幕写成一份 .ass（烧录用）。
 
     styles 是工程里那份命名样式表，不传就按 font/size 现造一份 Default。
@@ -3325,6 +3333,95 @@ def _plain_cue(text: str) -> list[str]:
     return [ln for ln in out if ln] if any(ln for ln in out) else [""]
 
 
+def paint_cues(qp, cues, styles=None, default_name="Default",
+               w=WIDTH, h=HEIGHT, font="Microsoft YaHei", size=32):
+    r"""把字幕画到 painter 上——预览与烧录用同一套换算（见 subtitle_style）。
+
+    位置、字号、行高、描边、底色框全部从样式字典算，规则和 format_ass 里
+    写进 .ass 的那份一一对应；这里的 px 都是成片像素（*h/1080 已换算过）。
+    """
+    from PyQt6.QtCore import QPointF, QRectF
+    from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainterPath, QPen
+
+    qp.setRenderHint(qp.RenderHint.Antialiasing, True)
+    table = {}
+    for name, st in (styles or {}).items():
+        if isinstance(st, dict):
+            table[sub_style.clean_style_name(name)] = sub_style.clean_style(st)
+    default_name = sub_style.clean_style_name(
+        default_name or sub_style.DEFAULT_STYLE_NAME)
+    if default_name not in table:   # 没有样式表：按设置里的字体/字号现造一份
+        baseline = max(8, int(round(float(size or 48) * 1080.0 / max(1, h))))
+        table[default_name] = sub_style.seed_default(font, baseline)
+
+    cache = {}
+    for cue in cues or []:
+        if not isinstance(cue, dict):
+            continue
+        style = sub_style.effective_style(cue, table, default_name)
+        fam = style["font"] or "Microsoft YaHei"
+        em = sub_style.em_px(style, h)
+        key = (fam, em, bool(style["bold"]), bool(style["italic"]))
+        fnt = cache.get(key)
+        if fnt is None:
+            fnt = QFont(fam)
+            fnt.setPixelSize(em)
+            # libass 走 harfbuzz 不做 hinting，Qt 默认会按小字号 hinting 把
+            # 中文笔画挤细，同一字号烧出来比预览胖一圈——对齐才怪。
+            fnt.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+            fnt.setBold(bool(style["bold"]))
+            fnt.setItalic(bool(style["italic"]))
+            cache[key] = fnt
+        metrics = QFontMetricsF(fnt)
+        ascent = float(metrics.ascent())
+        line_h = ascent + float(metrics.descent())
+        lines = _plain_cue(cue.get("text", "")) or [""]
+        widths = [float(metrics.horizontalAdvance(ln)) for ln in lines]
+        align, ax, ay = sub_style.anchor_px(style, w, h)
+        col = (align - 1) % 3
+        row = 2 - (align - 1) // 3
+        block_h = line_h * len(lines)
+        if row == 0:
+            top = float(ay)
+        elif row == 2:
+            top = float(ay) - block_h
+        else:
+            top = float(ay) - block_h / 2.0
+        outline = sub_style.scaled_px(style["outline"], h)
+        shadow = sub_style.scaled_px(style["shadow"], h)
+        boxed = style["back_opacity"] > 0
+        primary = QColor(style["primary"])
+        outline_c = QColor(style["outline_color"])
+        back_c = QColor(style["back_color"])
+        back_c.setAlpha(sub_style.paint_alpha(style["back_opacity"]))
+        shadow_c = QColor(style["shadow_color"])
+        pen = QPen(outline_c, max(0.0, 2.0 * outline))   # QPen 压中轴，=2×outline
+        for i, line in enumerate(lines):
+            lw = widths[i]
+            if col == 0:
+                x = float(ax)
+            elif col == 2:
+                x = float(ax) - lw
+            else:
+                x = float(ax) - lw / 2.0
+            y = top + line_h * i + ascent
+            if boxed:                     # 底框：文本宽 + 2×描边，行高 + 2×描边
+                qp.fillRect(QRectF(x - outline, top + line_h * i - outline,
+                                   lw + 2.0 * outline, line_h + 2.0 * outline),
+                            back_c)
+            path = QPainterPath()
+            path.addText(QPointF(x, y), fnt, line)
+            if shadow > 0 and not boxed:  # BorderStyle=4 时不画阴影，和 libass 一致
+                qp.save()
+                qp.translate(shadow, shadow)
+                qp.fillPath(path, shadow_c)
+                qp.restore()
+            if outline > 0:
+                qp.setPen(pen)
+                qp.drawPath(path)
+            qp.fillPath(path, primary)
+
+
 class VideoFrameReader:
     """逐帧读视频：一条 ffmpeg 管道顺序读，跳太远才重开，别再一帧起一个进程。"""
 
@@ -3435,6 +3532,12 @@ class Scene:
         self.cues = [dict(c) for c in (cues or [])]
         self.subtitle_font = opts.get("subtitle_font", "Microsoft YaHei")
         self.subtitle_size = int(opts.get("subtitle_size", 48))
+        self.subtitle_styles = {}
+        for name, style in (opts.get("subtitle_styles") or {}).items():
+            if isinstance(style, dict):
+                self.subtitle_styles[str(name)] = dict(style)
+        self.subtitle_default_style = str(
+            opts.get("subtitle_default_style") or sub_style.DEFAULT_STYLE_NAME)
 
         geom = (self.w, self.h, self.fit, self.bg_blur, self.pad_color,
                 self.bg_path, self.crop_focus)
@@ -3857,28 +3960,15 @@ class Scene:
         return frame
 
     def _draw_subtitles(self, frame, cues):
+        # 样式、位置、描边、底色框全由 subtitle_style 一套规则算出来，
+        # 和 format_ass 写进 .ass 的那份一一对应，预览才有资格说「所见即所得」。
         qp = self._QPainter(frame)
-        qp.setRenderHint(self._QPainter.RenderHint.Antialiasing, True)
-        font = self._QFont(self.subtitle_font)
-        font.setPixelSize(max(8, int(self.subtitle_size)))
-        qp.setFont(font)
-        line_h = max(10, int(self.subtitle_size * 1.25))
-        bottom = self.h - 40
-        for cue in cues:
-            lines = _plain_cue(cue.get("text", ""))
-            total_h = line_h * len(lines)
-            y = bottom - total_h
-            for line in lines:
-                metrics = qp.fontMetrics()
-                tw = metrics.horizontalAdvance(line)
-                path = self._QPainterPath()
-                path.addText((self.w - tw) / 2.0, y + line_h * 0.82, font, line)
-                qp.setPen(self._QPen(self._QColor("#000000"),
-                                     max(1.0, self.subtitle_size * 0.06)))
-                qp.drawPath(path)
-                qp.fillPath(path, self._QColor("#ffffff"))
-                y += line_h
-        qp.end()
+        try:
+            paint_cues(qp, cues, self.subtitle_styles,
+                       self.subtitle_default_style, self.w, self.h,
+                       self.subtitle_font, self.subtitle_size)
+        finally:
+            qp.end()
         return frame
 
 
