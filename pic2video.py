@@ -2805,7 +2805,7 @@ def _cue(start: float, end: float, text: str, style: str = "",
 
 
 CUE_MIN_DUR = 0.1      # 一条字幕最短 0.1 s，再短就没法看也没法拖
-CUE_ADD_SEC = 2.0      # 新建字幕的默认时长（对齐 ARCTIME 的「Enter 建 2 秒块」）
+CUE_ADD_SEC = 2.0      # 新建字幕的默认时长（成熟字幕工具普遍默认 2 秒）
 
 
 def _sub_body(text: str) -> str:
