@@ -2507,6 +2507,206 @@ class Project:
         cue["end"] = round(start + dur, 3)
         return True
 
+    # -- 字幕编辑 ------------------------------------------------------
+    def _cue_span_of(self, index: int):
+        """第 index 条字幕的 (start, end)；越界给 None。"""
+        if not (0 <= index < len(self.cues)):
+            return None
+        cue = self.cues[index]
+        start = max(0.0, _doc_num(cue.get("start"), 0.0))
+        end = max(start, _doc_num(cue.get("end"), start))
+        return start, end
+
+    def _cue_prev_end(self, index: int) -> float:
+        span = self._cue_span_of(index - 1)
+        return span[1] if span else 0.0
+
+    def _cue_next_start(self, index: int):
+        span = self._cue_span_of(index + 1)
+        return span[0] if span else None
+
+    def set_cue_text(self, index: int, text) -> bool:
+        """改一条字幕的正文：首尾空白去掉，空的不要（返回 False）。"""
+        if not (0 <= index < len(self.cues)):
+            return False
+        body = _sub_body(str(text if text is not None else "")).strip()
+        if not body:
+            return False
+        self.cues[index]["text"] = body
+        return True
+
+    def set_cue_style(self, index: int, name) -> bool:
+        """这条字幕用哪套样式；指不到表里就退回默认样式。"""
+        if not (0 <= index < len(self.cues)):
+            return False
+        picked = sub_style.clean_style_name(name) if name else ""
+        if picked and picked not in self.styles:
+            picked = ""
+        self.cues[index]["style"] = picked
+        return True
+
+    def set_cue_overrides(self, index: int, overrides) -> bool:
+        """只把跟样式不一样的键写进这一条（空值等于「没改」）。"""
+        if not (0 <= index < len(self.cues)):
+            return False
+        self.cues[index]["overrides"] = sub_style.clean_overrides(overrides)
+        return True
+
+    def _shift_cues(self, index: int, delta: float) -> bool:
+        """把 index 及其后的字幕整体平移 delta；会顶出片尾/片头就整批不挪。"""
+        if abs(delta) < 1e-9:
+            return True
+        spans = [self._cue_span_of(k) for k in range(index, len(self.cues))]
+        if not spans or any(s is None for s in spans):
+            return False
+        total = self.total()
+        if total > 0.0 and max(s[1] for s in spans) + delta > total + 1e-6:
+            return False
+        if min(s[0] for s in spans) + delta < -1e-6:
+            return False
+        for k in range(index, len(self.cues)):
+            cue = self.cues[k]
+            cue["start"] = round(max(0.0, _doc_num(cue.get("start"), 0.0)) + delta, 3)
+            cue["end"] = round(max(0.0, _doc_num(cue.get("end"), 0.0)) + delta, 3)
+        return True
+
+    def trim_cue(self, index: int, edge: str, value: float):
+        """拖一端改时间，返回实际落点（秒）；改不动给 None。
+
+        edge="left"：不越过前一条的 end，并且留够 0.1 s；
+        edge="right"：跨过后一条 start 时后一条整体让位（链式），顶到片尾就夹住。
+        """
+        span = self._cue_span_of(index)
+        if span is None or edge not in ("left", "right"):
+            return None
+        start, end = span
+        cue = self.cues[index]
+        value = _doc_num(value, start if edge == "left" else end)
+        if edge == "left":
+            value = max(0.0, value, self._cue_prev_end(index))
+            limit = end - CUE_MIN_DUR
+            if value > limit + 1e-6:
+                value = limit
+            if value < self._cue_prev_end(index) - 1e-6 or value > limit + 1e-6:
+                return None
+            cue["start"] = round(value, 3)
+            return cue["start"]
+        total = self.total()
+        if total > 0.0:
+            value = min(value, total)
+        value = max(value, start + CUE_MIN_DUR)
+        nxt = self._cue_next_start(index)
+        if nxt is not None and value > nxt + 1e-6:
+            if not self._shift_cues(index + 1, value - nxt):
+                value = nxt          # 后面顶到片尾了：夹住，不把别人挤出时间线
+        cue["end"] = round(value, 3)
+        return cue["end"]
+
+    def set_cue_span(self, index: int, start=None, end=None):
+        """数值框改入出点：先夹起点再夹终点，返回最终的 (start, end)。"""
+        if self._cue_span_of(index) is None:
+            return None
+        if start is not None:
+            self.trim_cue(index, "left", start)
+        if end is not None:
+            self.trim_cue(index, "right", end)
+        return self._cue_span_of(index)
+
+    def move_cue(self, index: int, start: float) -> bool:
+        """整条挪到 start（时长不变）：不许压到前后邻居，也不许跑出片长。"""
+        span = self._cue_span_of(index)
+        if span is None:
+            return False
+        dur = span[1] - span[0]
+        total = self.total()
+        lo = self._cue_prev_end(index)
+        hi = (self._cue_next_start(index) - dur
+              if self._cue_next_start(index) is not None else None)
+        if hi is None and total > 0.0:
+            hi = max(0.0, total - dur)
+        if hi is not None and lo > hi + 1e-6:
+            return False                 # 前后夹得没地方，别硬塞
+        start = max(0.0, _doc_num(start, span[0]))
+        start = max(start, lo)
+        if hi is not None:
+            start = min(start, hi)
+        cue = self.cues[index]
+        cue["start"] = round(start, 3)
+        cue["end"] = round(start + dur, 3)
+        return True
+
+    def add_cue(self, start: float = 0.0, end=None, text: str = "") -> int:
+        """在 start 处新建一条空字幕（默认 2 s）；撞上现有块就顺延到下一个空隙。
+
+        返回新条目在 cues 里的下标；时间轴空着或找不到够 0.1 s 的空隙给 -1。
+        """
+        total = self.total()
+        if total <= 0.0:
+            return -1
+        dur = max(CUE_MIN_DUR, (_doc_num(end, 0.0) - _doc_num(start, 0.0))
+                  if end is not None else CUE_ADD_SEC)
+        cand = max(0.0, min(_doc_num(start, 0.0), total))
+        slot = None
+        for _step in range(len(self.cues) + 2):
+            stop = min(total, cand + dur)
+            if stop - cand < CUE_MIN_DUR - 1e-9:
+                return -1
+            clash = None
+            for k in range(len(self.cues)):
+                s, e = self._cue_span_of(k)
+                if s < stop - 1e-6 and cand < e - 1e-6:
+                    clash = e
+                    break
+            if clash is None:
+                slot = (cand, stop)
+                break
+            cand = clash
+        if slot is None:
+            return -1
+        cue = _cue(round(slot[0], 3), round(slot[1], 3), str(text or ""))
+        self.cues.append(cue)
+        self.cues.sort(key=lambda c: (float(c.get("start") or 0.0),
+                                      float(c.get("end") or 0.0)))
+        return self.cues.index(cue)
+
+    def remove_cue(self, index: int) -> bool:
+        if not (0 <= index < len(self.cues)):
+            return False
+        self.cues.pop(index)
+        return True
+
+    def split_cue(self, index: int, t: float) -> bool:
+        """在播放头 t 处把这一条拆成两段，两段都保留原文与样式。"""
+        span = self._cue_span_of(index)
+        if span is None:
+            return False
+        start, end = span
+        t = _doc_num(t, start)
+        if not (start + CUE_MIN_DUR < t < end - CUE_MIN_DUR):
+            return False
+        cue = self.cues[index]
+        left = _cue(round(start, 3), round(t, 3), cue.get("text", ""),
+                    cue.get("style", ""), cue.get("overrides"))
+        right = _cue(round(t, 3), round(end, 3), cue.get("text", ""),
+                     cue.get("style", ""), cue.get("overrides"))
+        self.cues[index:index + 1] = [left, right]
+        return True
+
+    def merge_cue(self, index: int) -> bool:
+        """把这一条和紧随其后的一条并成一条：样式取前一条，文字用换行连。"""
+        span = self._cue_span_of(index)
+        nxt = self._cue_span_of(index + 1)
+        if span is None or nxt is None:
+            return False
+        cue = self.cues[index]
+        left = str(cue.get("text", "")).rstrip()
+        right = str(self.cues[index + 1].get("text", "")).lstrip()
+        text = ((left + "\n" + right).strip("\n")) or left or right
+        merged = _cue(round(span[0], 3), round(max(span[1], nxt[1]), 3), text,
+                      cue.get("style", ""), cue.get("overrides"))
+        self.cues[index:index + 2] = [merged]
+        return True
+
     # -- 帧数 ----------------------------------------------------------
     def frame_counts(self) -> list[int]:
         """按累计时间取整，保证总帧数 = round(总时长 * FPS)，不漂移。"""
@@ -2602,6 +2802,10 @@ def _cue(start: float, end: float, text: str, style: str = "",
     """一条字幕。overrides 只记跟样式不一样的键（见 subtitle_style.STYLE_KEYS）。"""
     return {"start": start, "end": end, "text": text, "style": style,
             "overrides": sub_style.clean_overrides(overrides)}
+
+
+CUE_MIN_DUR = 0.1      # 一条字幕最短 0.1 s，再短就没法看也没法拖
+CUE_ADD_SEC = 2.0      # 新建字幕的默认时长（对齐 ARCTIME 的「Enter 建 2 秒块」）
 
 
 def _sub_body(text: str) -> str:
@@ -2930,8 +3134,12 @@ def snap_value(value: float, targets, tolerance: float):
     return (best if best is not None else value), best
 
 
-def snap_candidates(project, playhead: float = 0.0, extra=()) -> list:
-    """时间线上值得贴的点：首尾、播放头、每个边界、音频与画中画的首尾。"""
+def snap_candidates(project, playhead: float = 0.0, extra=(),
+                    skip_cue=None) -> list:
+    """时间线上值得贴的点：首尾、播放头、每个边界、音频、画中画与字幕的首尾。
+
+    skip_cue 是正在拖的那条字幕：它自己的首尾不进去，不然会一直吸住自己。
+    """
     out = [0.0, project.total(), max(0.0, float(playhead))]
     acc = 0.0
     for c in project.clips:
@@ -2941,6 +3149,11 @@ def snap_candidates(project, playhead: float = 0.0, extra=()) -> list:
         out.extend([a.start, a.start + a.dur])
     for o in project.overlays:
         out.extend([o.start, o.end])
+    for k, cue in enumerate(project.cues):   # 字幕首尾也值得贴：拖时间时互相咬住
+        if k == skip_cue:
+            continue
+        out.extend([_doc_num(cue.get("start"), 0.0),
+                    _doc_num(cue.get("end"), 0.0)])
     out.extend(float(v) for v in extra)
     return sorted({round(v, 3) for v in out if v >= 0.0})
 
@@ -3958,6 +4171,14 @@ class Scene:
                 self._Qt.TransformationMode.SmoothTransformation))
         qp.end()
         return frame
+
+    def set_cues(self, cues):
+        """只换字幕（拖时间、改字时用），别的参数一个也不动。
+
+        拖动过程中每帧都会走这里，所以只做浅拷贝，不重建样式表、
+        不碰解码缓存——500 条也不会卡。
+        """
+        self.cues = [dict(c) for c in (cues or []) if isinstance(c, dict)]
 
     def _draw_subtitles(self, frame, cues):
         # 样式、位置、描边、底色框全由 subtitle_style 一套规则算出来，
@@ -6083,6 +6304,8 @@ def run_gui() -> int:
         blockMoved = pyqtSignal(object, int)         # 整块拖动（行号, 落位）
         audioGroupMoved = pyqtSignal(object)         # 多条音频一起挪 [(序号, 起点)]
         subtitleMoved = pyqtSignal(int, float)       # 字幕整条挪（序号, 新起点）
+        subtitleDragged = pyqtSignal()               # 拖动中：只刷预览，不记历史
+        subtitleTrimmed = pyqtSignal(int)            # 拖两端改完（序号）
 
         DEFAULT_COLORS = {"bg": "#1f2329", "empty": "#9ca3af",
                           "raised": "#171b22", "field": "#0b0d10",
@@ -6357,13 +6580,17 @@ def run_gui() -> int:
         def _snap_tol(self) -> float:
             return SNAP_PX * self._view_span() / max(1, self._lane_w())
 
-        def _snap_time(self, t: float, alt: bool = False):
-            """把时刻吸到附近的边；按住 Alt 当场不吸，guide 记下贴到了哪。"""
+        def _snap_time(self, t: float, alt: bool = False, skip_cue=None):
+            """把时刻吸到附近的边；按住 Alt 当场不吸，guide 记下贴到了哪。
+
+            skip_cue 正在拖，它自己的首尾不算候选点。
+            """
             if not self.snap_on or alt:
                 self.snap_guide = None
                 return t
             value, hit = snap_value(t, snap_candidates(self.project,
-                                                       self.play_pos),
+                                                       self.play_pos, (),
+                                                       skip_cue),
                                     self._snap_tol())
             self.snap_guide = hit
             return value
@@ -6840,9 +7067,20 @@ def run_gui() -> int:
                 self.sel_subs = [k]
                 cue = self.project.cues[k]
                 start = max(0.0, _doc_num(cue.get("start"), 0.0))
-                self.play_pos = start
-                self.seeked.emit(start)
-                self._drag = ("subtitle", k, x, start)
+                sx0, sx1, _c = self._sub_spans()[k]
+                edge = ""
+                if sx1 - sx0 > 14:      # 太窄就不分左右端，只整条挪
+                    if abs(x - sx0) <= 6:
+                        edge = "left"
+                    elif abs(x - sx1) <= 6:
+                        edge = "right"
+                self.sub_touched = False
+                if edge:                # 捏住两端：改出点/入点，不挪播放头
+                    self._drag = ("subtrim", k, x, edge)
+                else:
+                    self.play_pos = start
+                    self.seeked.emit(start)
+                    self._drag = ("subtitle", k, x, start)
                 self.setCursor(Qt.CursorShape.SizeHorCursor)
                 self.update()
                 return
@@ -6964,18 +7202,25 @@ def run_gui() -> int:
                 self.play_pos = self._time_at(x)
                 self.update()
                 return
-            if kind == "subtitle":
-                _tag, k, x0, start0 = self._drag
-                if 0 <= k < len(self.project.cues):
-                    cue = self.project.cues[k]
-                    dur = max(0.0, _doc_num(cue.get("end"), 0.0)
-                              - _doc_num(cue.get("start"), 0.0))
-                    delta = (x - x0) * self._view_span() / max(1, self._lane_w())
-                    total = self._total()
-                    new = max(0.0, start0 + delta)
-                    new = min(new, max(0.0, total - dur))
-                    cue["start"] = round(new, 3)
-                    cue["end"] = round(new + dur, 3)
+            if kind in ("subtitle", "subtrim"):
+                k = self._drag[1]
+                if not (0 <= k < len(self.project.cues)):
+                    self.update()
+                    return
+                alt = bool(ev.modifiers() & Qt.KeyboardModifier.AltModifier)
+                t = self._time_at(x)
+                if kind == "subtitle":       # 整条挪：保持时长，夹在前后邻居之间
+                    x0, start0 = self._drag[2], self._drag[3]
+                    t = start0 + (t - self._time_at(x0))
+                    t = self._snap_time(t, alt, skip_cue=k)
+                    if self.project.move_cue(k, t):
+                        self.sub_touched = True
+                else:                        # 拖两端：改入点或出点
+                    edge = self._drag[3]
+                    t = self._snap_time(t, alt, skip_cue=k)
+                    if self.project.trim_cue(k, edge, t) is not None:
+                        self.sub_touched = True
+                self.subtitleDragged.emit()   # 拖动中只刷预览
                 self.update()
                 return
             if kind == "audios":
@@ -7088,11 +7333,17 @@ def run_gui() -> int:
                 dest = timeline_block_dest(durations, rows, self._time_at(x))
                 self.blockMoved.emit(rows, dest)
                 return
-            if kind == "subtitle":
-                _tag, k, x0, start0 = drag
-                if abs(x - x0) > 6 and 0 <= k < len(self.project.cues):
-                    self.subtitleMoved.emit(
-                        k, float(self.project.cues[k].get("start") or 0.0))
+            if kind in ("subtitle", "subtrim"):
+                k = drag[1]
+                if (self.sub_touched and 0 <= k < len(self.project.cues)
+                        and self.project.cues):
+                    if kind == "subtitle":
+                        self.subtitleMoved.emit(
+                            k, float(self.project.cues[k].get("start") or 0.0))
+                    else:
+                        self.subtitleTrimmed.emit(k)
+                self.sub_touched = False
+                self.update()
                 return
             if kind == "audios":
                 _tag, idx, x0, start0, base = drag
@@ -7182,6 +7433,28 @@ def run_gui() -> int:
             if dy:
                 self.scroll_by(-dy / 120.0 * self._view_span() * 0.12)
             ev.accept()
+
+
+    class SubtitleList(QListWidget):
+        """字幕列表：Delete/M/S/N/F2 直接发信号，交给窗口去改数据。"""
+
+        actioned = pyqtSignal(str)
+
+        _KEYS = {Qt.Key.Key_Delete: "delete",
+                 Qt.Key.Key_Backspace: "delete",
+                 Qt.Key.Key_F2: "rename",
+                 Qt.Key.Key_M: "merge",
+                 Qt.Key.Key_N: "add",
+                 Qt.Key.Key_S: "split"}
+
+        def keyPressEvent(self, event):
+            if event.modifiers() == Qt.KeyboardModifier.NoModifier:
+                name = self._KEYS.get(event.key())
+                if name:
+                    self.actioned.emit(name)
+                    event.accept()
+                    return
+            super().keyPressEvent(event)
 
 
     class ColorWheel(QWidget):
@@ -9197,6 +9470,7 @@ def run_gui() -> int:
             hb.addStretch(1)
             hvp.addLayout(hb)
             self.left_tabs.addTab(hist_page, tr("历史"))
+            # ---- 字幕面板（方案 §3.1）：上面列表、下面属性区
             sub_page = QWidget()
             svp = QVBoxLayout(sub_page)
             svp.setContentsMargins(0, 0, 0, 0)
@@ -9204,11 +9478,162 @@ def run_gui() -> int:
             self.lbl_subs = QLabel(tr("还没有字幕"))
             self.lbl_subs.setWordWrap(True)
             svp.addWidget(self.lbl_subs)
-            self.sub_list = QListWidget()
+            self.sub_list = SubtitleList()
             self.sub_list.setAlternatingRowColors(True)
             self.sub_list.setSelectionMode(
                 QAbstractItemView.SelectionMode.SingleSelection)
+            self.sub_list.currentRowChanged.connect(self.on_sub_row_changed)
+            self.sub_list.itemDoubleClicked.connect(self.on_sub_edit_text)
+            self.sub_list.actioned.connect(self.on_sub_action)
             svp.addWidget(self.sub_list, 1)
+
+            self.sub_props = QWidget()
+            pv = QVBoxLayout(self.sub_props)
+            pv.setContentsMargins(0, 0, 0, 0)
+            pv.setSpacing(4)
+            prow = QHBoxLayout()
+            prow.addWidget(QLabel(tr("入点")))
+            self.sub_in = QDoubleSpinBox()
+            self.sub_in.setDecimals(2)
+            self.sub_in.setSingleStep(0.1)
+            self.sub_in.setRange(0.0, 36000.0)
+            self.sub_in.setSuffix(" s")
+            self.sub_in.setKeyboardTracking(False)
+            self.sub_in.editingFinished.connect(self.on_sub_span_edited)
+            prow.addWidget(self.sub_in, 1)
+            prow.addWidget(QLabel(tr("出点")))
+            self.sub_out = QDoubleSpinBox()
+            self.sub_out.setDecimals(2)
+            self.sub_out.setSingleStep(0.1)
+            self.sub_out.setRange(0.0, 36000.0)
+            self.sub_out.setSuffix(" s")
+            self.sub_out.setKeyboardTracking(False)
+            self.sub_out.editingFinished.connect(self.on_sub_span_edited)
+            prow.addWidget(self.sub_out, 1)
+            pv.addLayout(prow)
+            self.sub_text = QPlainTextEdit()
+            self.sub_text.setPlaceholderText(tr("这一条字幕的文字，可以多行"))
+            self.sub_text.setMaximumHeight(72)
+            self.sub_text.textChanged.connect(self.on_sub_text_changed)
+            pv.addWidget(self.sub_text)
+            srow = QHBoxLayout()
+            srow.addWidget(QLabel(tr("样式")))
+            self.sub_style = QComboBox()
+            self.sub_style.currentIndexChanged.connect(self.on_sub_style_picked)
+            srow.addWidget(self.sub_style, 1)
+            self.lbl_sub_ovr = QLabel(tr("未改样式"))
+            srow.addWidget(self.lbl_sub_ovr)
+            self.btn_sub_reset = QPushButton(tr("还原样式"))
+            self.btn_sub_reset.setToolTip(
+                tr("把这一条改过的样式清掉，回到样式表里的设置"))
+            self.btn_sub_reset.clicked.connect(self.on_sub_reset_style)
+            srow.addWidget(self.btn_sub_reset)
+            pv.addLayout(srow)
+
+            self._sub_colour_btns = {}
+            sc = QScrollArea()
+            sc.setWidgetResizable(True)
+            sc.setMaximumHeight(238)
+            holder = QWidget()
+            form = QFormLayout(holder)
+            form.setContentsMargins(0, 0, 6, 0)
+            form.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            self.sub_font = QFontComboBox()
+            self.sub_font.currentFontChanged.connect(
+                lambda _f: self.on_sub_style_changed("font"))
+            form.addRow(tr("字体"), self.sub_font)
+            self.sub_size = QSpinBox()
+            self.sub_size.setRange(16, 160)
+            self.sub_size.setSuffix(" px")
+            self.sub_size.valueChanged.connect(
+                lambda _v: self.on_sub_style_changed("size"))
+            form.addRow(tr("字号"), self.sub_size)
+            brow = QHBoxLayout()
+            self.sub_bold = QCheckBox(tr("粗体"))
+            self.sub_bold.toggled.connect(
+                lambda _v: self.on_sub_style_changed("bold"))
+            brow.addWidget(self.sub_bold)
+            self.sub_italic = QCheckBox(tr("斜体"))
+            self.sub_italic.toggled.connect(
+                lambda _v: self.on_sub_style_changed("italic"))
+            brow.addWidget(self.sub_italic)
+            brow.addStretch(1)
+            form.addRow(tr("字形"), brow)
+            form.addRow(tr("主色"), self._sub_colour_button("primary"))
+            form.addRow(tr("描边色"), self._sub_colour_button("outline_color"))
+            self.sub_outline = QDoubleSpinBox()
+            self.sub_outline.setRange(0.0, 20.0)
+            self.sub_outline.setSingleStep(0.5)
+            self.sub_outline.setSuffix(" px")
+            self.sub_outline.valueChanged.connect(
+                lambda _v: self.on_sub_style_changed("outline"))
+            form.addRow(tr("描边宽"), self.sub_outline)
+            form.addRow(tr("阴影色"), self._sub_colour_button("shadow_color"))
+            self.sub_shadow = QDoubleSpinBox()
+            self.sub_shadow.setRange(0.0, 20.0)
+            self.sub_shadow.setSingleStep(0.5)
+            self.sub_shadow.setSuffix(" px")
+            self.sub_shadow.valueChanged.connect(
+                lambda _v: self.on_sub_style_changed("shadow"))
+            form.addRow(tr("阴影偏移"), self.sub_shadow)
+            form.addRow(tr("底色"), self._sub_colour_button("back_color"))
+            self.sub_back_opacity = QSpinBox()
+            self.sub_back_opacity.setRange(0, 100)
+            self.sub_back_opacity.setSuffix(" %")
+            self.sub_back_opacity.valueChanged.connect(
+                lambda _v: self.on_sub_style_changed("back_opacity"))
+            form.addRow(tr("底色不透明度"), self.sub_back_opacity)
+            self.sub_align = QComboBox()
+            for _i in range(1, 10):
+                self.sub_align.addItem(tr("对齐 ") + str(_i), _i)
+            self.sub_align.setToolTip(
+                tr("九宫格按小键盘排：1-3 贴底，4-6 居中，7-9 贴顶"))
+            self.sub_align.currentIndexChanged.connect(
+                lambda _i: self.on_sub_style_changed("align"))
+            form.addRow(tr("对齐"), self.sub_align)
+            self.sub_margin_l = QDoubleSpinBox()
+            self.sub_margin_l.setRange(0.0, 45.0)
+            self.sub_margin_l.setSingleStep(0.5)
+            self.sub_margin_l.setSuffix(" %")
+            self.sub_margin_l.valueChanged.connect(
+                lambda _v: self.on_sub_style_changed("margin_l"))
+            form.addRow(tr("左边距"), self.sub_margin_l)
+            self.sub_margin_r = QDoubleSpinBox()
+            self.sub_margin_r.setRange(0.0, 45.0)
+            self.sub_margin_r.setSingleStep(0.5)
+            self.sub_margin_r.setSuffix(" %")
+            self.sub_margin_r.valueChanged.connect(
+                lambda _v: self.on_sub_style_changed("margin_r"))
+            form.addRow(tr("右边距"), self.sub_margin_r)
+            self.sub_margin_v = QDoubleSpinBox()
+            self.sub_margin_v.setRange(0.0, 45.0)
+            self.sub_margin_v.setSingleStep(0.5)
+            self.sub_margin_v.setSuffix(" %")
+            self.sub_margin_v.valueChanged.connect(
+                lambda _v: self.on_sub_style_changed("margin_v"))
+            form.addRow(tr("底边距"), self.sub_margin_v)
+            sc.setWidget(holder)
+            pv.addWidget(sc)
+            svp.addWidget(self.sub_props)
+
+            erow = QHBoxLayout()
+            self.btn_sub_new = QPushButton(tr("新增"))
+            self.btn_sub_new.clicked.connect(self.on_sub_add)
+            self.btn_sub_split = QPushButton(tr("拆分"))
+            self.btn_sub_split.setToolTip(tr("按播放头把这一条切成两条"))
+            self.btn_sub_split.clicked.connect(self.on_sub_split)
+            self.btn_sub_merge = QPushButton(tr("合并"))
+            self.btn_sub_merge.setToolTip(tr("把这一条和下一条连成一条"))
+            self.btn_sub_merge.clicked.connect(self.on_sub_merge)
+            self.btn_sub_cue_del = QPushButton(tr("删除"))
+            self.btn_sub_cue_del.clicked.connect(self.on_sub_del)
+            for _b in (self.btn_sub_new, self.btn_sub_split,
+                       self.btn_sub_merge, self.btn_sub_cue_del):
+                erow.addWidget(_b)
+            erow.addStretch(1)
+            svp.addLayout(erow)
+
             sb = QHBoxLayout()
             self.btn_sub_add = QPushButton(tr("导入字幕…"))
             self.btn_sub_add.setToolTip(tr("支持 .srt 与 .ass，烧进成片"))
@@ -9488,6 +9913,8 @@ def run_gui() -> int:
             self.timeline.audioGroupMoved.connect(self.on_audio_group_move)
             self.timeline.blockMoved.connect(self.on_timeline_block_move)
             self.timeline.subtitleMoved.connect(self.on_subtitle_move)
+            self.timeline.subtitleDragged.connect(self.on_subtitle_drag)
+            self.timeline.subtitleTrimmed.connect(self.on_subtitle_trim)
             self.timeline.audioVolume.connect(self.on_audio_volume)
             self.timeline.envelopeChanged.connect(self.on_envelope_changed)
             self.timeline.overlayMoved.connect(self.on_overlay_moved)
@@ -9598,6 +10025,16 @@ def run_gui() -> int:
             self.left_tabs.setTabText(0, tr("素材"))
             self.left_tabs.setTabText(1, tr("历史"))
             self.left_tabs.setTabText(2, tr("字幕"))
+            self.btn_sub_new.setText(tr("新增"))
+            self.btn_sub_split.setText(tr("拆分"))
+            self.btn_sub_merge.setText(tr("合并"))
+            self.btn_sub_cue_del.setText(tr("删除"))
+            self.btn_sub_reset.setText(tr("还原样式"))
+            self.lbl_sub_ovr.setText(tr("未改样式"))
+            self.sub_text.setPlaceholderText(
+                tr("这一条字幕的文字，可以多行"))
+            self.sub_align.setToolTip(
+                tr("九宫格按小键盘排：1-3 贴底，4-6 居中，7-9 贴顶"))
             self.btn_sub_add.setText(tr("导入字幕…"))
             self.btn_sub_del.setText(tr("移除字幕"))
             self.btn_sub_save.setText(tr("另存 .srt…"))
@@ -9990,6 +10427,433 @@ def run_gui() -> int:
                 MsgBox.warn(self, tr("字幕没存下去"), str(e))
                 return
             self.lbl_status.setText(tr("字幕已存到：{path}", path=path))
+
+        # ---------------- 字幕面板：一段 = 一个块，属性区只记差异
+        def _sub_row_text(self, cue) -> str:
+            """列表里一行：起止时间 + 正文（换行压成 " / "）。"""
+            text = str(cue.get("text", "")).replace("\n", " / ")
+            return "%.1fs → %.1fs  %s" % (float(cue.get("start") or 0.0),
+                                          float(cue.get("end") or 0.0), text)
+
+        def _sub_index(self) -> int:
+            """当前选中的是哪一条；没选中给 -1。"""
+            row = self.sub_list.currentRow()
+            return row if 0 <= row < len(self.project.cues) else -1
+
+        def _refresh_subtitles(self):
+            n = len(self.project.cues)
+            path = self.project.subtitles_path
+            if n:
+                head = tr("已导入 {n} 条字幕", n=n)
+                self.lbl_subs.setText(head + (("\n" + path) if path else ""))
+            elif path:
+                self.lbl_subs.setText(tr("字幕里没有一条能用的") + "\n" + path)
+            else:
+                self.lbl_subs.setText(tr("还没有字幕"))
+            self.btn_sub_del.setEnabled(bool(n or path))
+            row = self.sub_list.currentRow()
+            self.sub_list.blockSignals(True)
+            try:
+                self.sub_list.clear()
+                for cue in self.project.cues:
+                    self.sub_list.addItem(self._sub_row_text(cue))
+                if n and 0 <= row < n:
+                    self.sub_list.setCurrentRow(row)
+            finally:
+                self.sub_list.blockSignals(False)
+            self._refresh_sub_props()
+
+        def _sub_base_style(self, cue) -> dict:
+            """这一条的基准：它指名道姓的样式，找不到就用默认样式。"""
+            name = str(cue.get("style") or "")
+            table = self.project.styles or {}
+            base = table.get(name) or table.get(self.project.default_style)
+            if base:
+                return sub_style.clean_style(base)
+            return dict(sub_style.DEFAULT_SUBTITLE_STYLE)
+
+        def on_sub_row_changed(self, row: int):
+            self._refresh_sub_props()
+
+        def _refresh_sub_props(self):
+            """把选中那条的字幕填进属性区；填的时候别反过来写回数据。"""
+            k = self._sub_index()
+            has = k >= 0
+            self.sub_props.setVisible(has)
+            self.btn_sub_new.setEnabled(self.project.total() > 0)
+            for name in ("btn_sub_split", "btn_sub_merge", "btn_sub_reset"):
+                getattr(self, name).setEnabled(has)
+            self.btn_sub_cue_del.setEnabled(has)
+            if not has:
+                return
+            cue = self.project.cues[k]
+            total = max(0.1, self.project.total())
+            self._sub_loading = True
+            try:
+                self.sub_in.setMaximum(total)
+                self.sub_out.setMaximum(total)
+                self.sub_in.setValue(float(cue.get("start") or 0.0))
+                self.sub_out.setValue(float(cue.get("end") or 0.0))
+                self.sub_text.setPlainText(str(cue.get("text") or ""))
+                self._fill_style_combo(cue)
+                self._fill_style_widgets(
+                    sub_style.effective_style(cue, self.project.styles,
+                                              self.project.default_style))
+                n = len(cue.get("overrides") or {})
+                if n:
+                    self.lbl_sub_ovr.setText(tr("已改 {n} 项", n=n))
+                else:
+                    self.lbl_sub_ovr.setText(tr("未改样式"))
+            finally:
+                self._sub_loading = False
+
+        def _fill_style_combo(self, cue):
+            """样式下拉：「（默认样式）」+ 工程里已有的样式名。"""
+            cur = str(cue.get("style") or "")
+            self.sub_style.blockSignals(True)
+            try:
+                self.sub_style.clear()
+                self.sub_style.addItem(tr("（默认样式）"), "")
+                for name in sorted(self.project.styles or {}):
+                    self.sub_style.addItem(name, name)
+                idx = self.sub_style.findData(cur)
+                self.sub_style.setCurrentIndex(max(0, idx))
+            finally:
+                self.sub_style.blockSignals(False)
+
+        def _fill_style_widgets(self, style):
+            was = getattr(self, "_sub_loading", False)
+            self._sub_loading = True
+            try:
+                for key in sub_style.STYLE_KEYS:
+                    self._set_sub_style_widget(key, style)
+            finally:
+                self._sub_loading = was
+
+        def _set_sub_style_widget(self, key: str, style):
+            """往某个控件里塞值；塞的时候屏蔽信号，免得又当成用户改动。"""
+            val = sub_style.clean_style(style).get(key)
+            if key == "font":
+                self.sub_font.blockSignals(True)
+                self.sub_font.setCurrentFont(QFont(str(val)))
+                self.sub_font.blockSignals(False)
+            elif key == "size":
+                self.sub_size.blockSignals(True)
+                self.sub_size.setValue(int(sub_style.clean_style(style)["size"]))
+                self.sub_size.blockSignals(False)
+            elif key == "bold":
+                self.sub_bold.blockSignals(True)
+                self.sub_bold.setChecked(bool(val))
+                self.sub_bold.blockSignals(False)
+            elif key == "italic":
+                self.sub_italic.blockSignals(True)
+                self.sub_italic.setChecked(bool(val))
+                self.sub_italic.blockSignals(False)
+            elif key in ("outline", "shadow"):
+                spin = self.sub_outline if key == "outline" else self.sub_shadow
+                spin.blockSignals(True)
+                spin.setValue(float(val))
+                spin.blockSignals(False)
+            elif key == "back_opacity":
+                self.sub_back_opacity.blockSignals(True)
+                self.sub_back_opacity.setValue(int(val))
+                self.sub_back_opacity.blockSignals(False)
+            elif key == "align":
+                self.sub_align.blockSignals(True)
+                self.sub_align.setCurrentIndex(max(0, int(val) - 1))
+                self.sub_align.blockSignals(False)
+            elif key.startswith("margin_"):
+                spin = {"margin_l": self.sub_margin_l,
+                        "margin_r": self.sub_margin_r,
+                        "margin_v": self.sub_margin_v}[key]
+                spin.blockSignals(True)
+                spin.setValue(float(val))
+                spin.blockSignals(False)
+            elif key in self._sub_colour_btns:
+                self._paint_colour_button(key, str(val))
+
+        def _sub_style_value(self, key: str):
+            """从控件里读回一个样式键的当前值。"""
+            if key == "font":
+                return self.sub_font.currentFont().family()
+            if key == "size":
+                return self.sub_size.value()
+            if key == "bold":
+                return self.sub_bold.isChecked()
+            if key == "italic":
+                return self.sub_italic.isChecked()
+            if key in self._sub_colour_btns:
+                return str(self._sub_colour_btns[key].property("colour")
+                           or "#FFFFFF")
+            if key == "outline":
+                return self.sub_outline.value()
+            if key == "shadow":
+                return self.sub_shadow.value()
+            if key == "back_opacity":
+                return self.sub_back_opacity.value()
+            if key == "align":
+                return int(self.sub_align.currentData() or 2)
+            if key == "margin_l":
+                return self.sub_margin_l.value()
+            if key == "margin_r":
+                return self.sub_margin_r.value()
+            if key == "margin_v":
+                return self.sub_margin_v.value()
+            return None
+
+        def _sub_colour_button(self, key: str):
+            """样式里的颜色键做成一枚小色块按钮。"""
+            btn = QPushButton()
+            btn.setFixedSize(72, 22)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, k=key: self.on_sub_colour_pick(k))
+            self._sub_colour_btns[key] = btn
+            return btn
+
+        def _paint_colour_button(self, key: str, colour: str):
+            btn = self._sub_colour_btns.get(key)
+            if btn is None:
+                return
+            btn.setProperty("colour", str(colour))
+            btn.setToolTip(str(colour))
+            btn.setStyleSheet(
+                "QPushButton { background: %s; border: 1px solid #808080;"
+                " border-radius: 4px; }" % str(colour))
+
+        def on_sub_style_changed(self, key: str):
+            """某个样式键被改：只把和基准不一样的记进这一条的 overrides。"""
+            if getattr(self, "_sub_loading", False):
+                return
+            k = self._sub_index()
+            if k < 0:
+                return
+            cue = self.project.cues[k]
+            value = self._sub_style_value(key)
+            if value is None:
+                return
+            base = self._sub_base_style(cue)
+            cleaned = sub_style.clean_style({key: value}, base).get(key)
+            ovr = dict(cue.get("overrides") or {})
+            if cleaned == base.get(key):
+                ovr.pop(key, None)          # 和基准一样就不记，属性区只记差异
+            else:
+                ovr[key] = cleaned
+            if not self.project.set_cue_overrides(k, ovr):
+                return
+            self._sub_after_style_change()
+
+        def _sub_after_style_change(self):
+            k = self._sub_index()
+            if k < 0:
+                return
+            n = len(self.project.cues[k].get("overrides") or {})
+            if n:
+                self.lbl_sub_ovr.setText(tr("已改 {n} 项", n=n))
+            else:
+                self.lbl_sub_ovr.setText(tr("未改样式"))
+            self._sub_after_edit(tr("改字幕样式"))
+
+        def on_sub_style_picked(self, index: int):
+            """换这一条指向的样式：换完把已经等于新基准的差异清掉。"""
+            if getattr(self, "_sub_loading", False):
+                return
+            k = self._sub_index()
+            if k < 0:
+                return
+            name = self.sub_style.itemData(index)
+            if not self.project.set_cue_style(k, "" if name is None else name):
+                return
+            cue = self.project.cues[k]
+            base = self._sub_base_style(cue)
+            ovr = {kk: vv for kk, vv in (cue.get("overrides") or {}).items()
+                   if vv != base.get(kk)}
+            self.project.set_cue_overrides(k, ovr)
+            self._fill_style_widgets(
+                sub_style.effective_style(cue, self.project.styles,
+                                          self.project.default_style))
+            self._sub_after_style_change()
+
+        def on_sub_colour_pick(self, key: str):
+            """点色块换颜色。"""
+            colour = QColor(self._sub_style_value(key) or "#FFFFFF")
+            picked = QColorDialog.getColor(colour, self, tr("字幕颜色"))
+            if not picked.isValid():
+                return
+            self._paint_colour_button(key, picked.name())
+            self.on_sub_style_changed(key)
+
+        def on_sub_reset_style(self):
+            """把这一条改过的样式全清掉，回到样式表里的设置。"""
+            k = self._sub_index()
+            if k < 0 or not (self.project.cues[k].get("overrides") or {}):
+                return
+            self.project.set_cue_overrides(k, {})
+            self._fill_style_widgets(
+                sub_style.effective_style(self.project.cues[k],
+                                          self.project.styles,
+                                          self.project.default_style))
+            self._sub_after_style_change()
+            self.lbl_status.setText(tr("这一条改过的样式已清掉"))
+
+        def on_sub_text_changed(self):
+            """多行文字框：边打边写回数据，空的不写（等用户接着敲）。"""
+            if getattr(self, "_sub_loading", False):
+                return
+            k = self._sub_index()
+            if k < 0:
+                return
+            text = self.sub_text.toPlainText()
+            if not text.strip():
+                return
+            if not self.project.set_cue_text(k, text):
+                return
+            self._sub_after_edit(tr("改字幕文字"))
+
+        def on_sub_span_edited(self):
+            """入点/出点数值框改完：交给 Project 去夹、去让位。"""
+            if getattr(self, "_sub_loading", False):
+                return
+            k = self._sub_index()
+            if k < 0:
+                return
+            span = self.project.set_cue_span(k, self.sub_in.value(),
+                                             self.sub_out.value())
+            if span is None:
+                return
+            self._sub_loading = True
+            try:
+                self.sub_in.setValue(span[0])
+                self.sub_out.setValue(span[1])
+            finally:
+                self._sub_loading = False
+            self._sub_after_edit(tr("改字幕时间"))
+
+        def _sub_after_edit(self, label: str, debounce: bool = True):
+            """一条字幕改完：列表行、时间线、预览、脏标记，再记一步撤销。"""
+            k = self._sub_index()
+            if 0 <= k < len(self.project.cues):
+                item = self.sub_list.item(k)
+                if item is not None:
+                    item.setText(self._sub_row_text(self.project.cues[k]))
+            self.timeline.update()
+            self._sync_cue_preview()
+            self._touch_preview_flag()
+            self._sub_history(label, debounce)
+
+        def _touch_preview_flag(self):
+            """只点亮「该刷新了」，不重建场景（连续编辑时不卡）。"""
+            self.preview_stale = True
+            self.btn_refresh.setText(tr("刷新预览 ●"))
+
+        def _sub_history(self, label: str, debounce: bool = True):
+            """撤销记录：连续打字/拖数值合并成一步，停下后再落地。"""
+            self._sub_pending_label = label
+            if not debounce:
+                self._sub_flush_history()
+                return
+            if getattr(self, "_sub_hist_timer", None) is None:
+                self._sub_hist_timer = QTimer(self)
+                self._sub_hist_timer.setSingleShot(True)
+                self._sub_hist_timer.timeout.connect(self._sub_flush_history)
+            self._sub_hist_timer.start(500)
+
+        def _sub_flush_history(self):
+            label = getattr(self, "_sub_pending_label", "")
+            if not label:
+                return
+            self._sub_pending_label = ""
+            self._mark_dirty()
+            self._mark_stale()
+            self._history_push(label)
+
+        def _sync_cue_preview(self):
+            """按新数据重画当前这一帧，不重建场景、不重新解码。"""
+            if self.scene is None:
+                return
+            self.scene.set_cues(self.project.cues)
+            self._draw_frame(self._playhead())
+
+        def on_sub_add(self):
+            """在播放头处新增一条（默认 2 秒，撞上了就顺延到空隙）。"""
+            if self.project.total() <= 0:
+                self.lbl_status.setText(tr("时间轴还是空的，先加素材"))
+                return
+            k = self.project.add_cue(self._playhead())
+            if k < 0:
+                self.lbl_status.setText(tr("这里放不下新字幕，先把后面的挪开"))
+                return
+            self._refresh_subtitles()
+            self.sub_list.setCurrentRow(k)
+            self._mark_dirty()
+            self._mark_stale()
+            self._history_push(tr("新增字幕"))
+            self.lbl_status.setText(tr("已新增 1 条字幕"))
+            self.on_sub_edit_text()
+
+        def on_sub_del(self):
+            """删掉选中的这一条，选中顺延到下一条。"""
+            k = self._sub_index()
+            if k < 0:
+                return
+            if not self.project.remove_cue(k):
+                return
+            self._refresh_subtitles()
+            if self.project.cues:
+                self.sub_list.setCurrentRow(min(k, len(self.project.cues) - 1))
+            self._mark_dirty()
+            self._mark_stale()
+            self._history_push(tr("删除字幕"))
+            self.lbl_status.setText(tr("已删除 1 条字幕"))
+
+        def on_sub_split(self):
+            """按播放头把这一条切成两条。"""
+            k = self._sub_index()
+            if k < 0:
+                return
+            if not self.project.split_cue(k, self._playhead()):
+                self.lbl_status.setText(tr("播放头要落在这一条中间才能拆分"))
+                return
+            self._refresh_subtitles()
+            self.sub_list.setCurrentRow(k)
+            self._mark_dirty()
+            self._mark_stale()
+            self._history_push(tr("拆分字幕"))
+            self.lbl_status.setText(tr("已按播放头拆成两条"))
+
+        def on_sub_merge(self):
+            """把这一条和下一条连成一条。"""
+            k = self._sub_index()
+            if k < 0:
+                return
+            if not self.project.merge_cue(k):
+                self.lbl_status.setText(tr("这一条后面没有下一条，没法合并"))
+                return
+            self._refresh_subtitles()
+            self.sub_list.setCurrentRow(k)
+            self._mark_dirty()
+            self._mark_stale()
+            self._history_push(tr("合并字幕"))
+            self.lbl_status.setText(tr("已把两条合成一条"))
+
+        def on_sub_edit_text(self, *_a):
+            """双击或 F2：跳到文字框，全选着改。"""
+            if self._sub_index() < 0:
+                return
+            self.sub_text.setFocus()
+            self.sub_text.selectAll()
+
+        def on_sub_action(self, name: str):
+            """列表上的快捷键统一从这里分发。"""
+            if name == "delete":
+                self.on_sub_del()
+            elif name == "merge":
+                self.on_sub_merge()
+            elif name == "split":
+                self.on_sub_split()
+            elif name == "add":
+                self.on_sub_add()
+            elif name == "rename":
+                self.on_sub_edit_text()
 
         # ---------------- 配音：文稿 -> TTS -> 旁白 + 字幕
         def _script_text(self) -> str:
@@ -11057,16 +11921,40 @@ def run_gui() -> int:
             self._history_push(tr("移音频"))
             self.lbl_status.setText(tr("已挪 {n} 条音频", n=len(items)))
 
-        def on_subtitle_move(self, k, start):
-            """字幕轨上整条拖动：改这条字幕的进出时间，导出跟着走。"""
-            if not self.project.set_cue_start(int(k), float(start)):
+        def on_subtitle_drag(self):
+            """拖动中：只把新时间送进预览，不重建场景、不记历史。"""
+            if not self.project.cues:
                 return
+            self._sync_cue_preview()
+            self._refresh_sub_props()
+
+        def _finish_subtitle_drag(self):
+            """拖动松手：列表、属性区、时间线、预览、撤销一起落地。"""
             self._refresh_subtitles()
             self.timeline.update()
             self._mark_stale()
+
+        def _finish_subtitle_edit(self):
+            """一次字幕编辑结束：刷列表、刷时间线、刷画面、记一步撤销。"""
+            self._sub_pending_label = ""     # 拖动自己就是一步，别和防抖的合并
+            self._finish_subtitle_drag()
+            self._mark_dirty()
             self._history_push(tr("改字幕时间"))
+
+        def on_subtitle_move(self, k, start):
+            """字幕轨上整条拖动：时间线已改好数据，这里只管刷新与记一步。"""
+            if not self.project.cues:
+                return
+            self._finish_subtitle_edit()
             self.lbl_status.setText(tr("字幕已挪到 {time}", time=human_time(
                 float(start))))
+
+        def on_subtitle_trim(self, k):
+            """捏住两端改完入点/出点：同样刷新并记一步。"""
+            if not self.project.cues:
+                return
+            self._finish_subtitle_edit()
+            self.lbl_status.setText(tr("字幕时间已改"))
 
         def add_audio_extra(self, path: str):
             """再叠一条音频（不占 BGM 那条，起始位置跟着播放头）。"""

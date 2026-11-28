@@ -1638,6 +1638,144 @@ p.set_subtitles(pr3, "a.srt", [{"start": 0, "end": 99, "text": "跨满全片"}])
 check("字幕不参与时长计算", (pr3.frame_counts(), pr3.total()) == before,
       (before, (pr3.frame_counts(), pr3.total())))
 
+# ---------------- 49b 字幕块的编辑 API（阶段 3，方案 §3.3 ～ §3.6）
+
+def cue_project(*spans):
+    """15 秒的自由模式工程 + 指定的几条字幕（入点、出点、文字）。"""
+    pr = p.Project()
+    p.set_mode(pr, "free")
+    pr.add_images(IMG[:1] * 3)
+    for i in range(3):
+        pr.set_duration(i, 5.0)
+    pr.cues = [p._cue(a, b, t) for (a, b, t) in spans]
+    pr.cues = p._clean_cues([dict(c) for c in pr.cues])
+    return pr
+
+def span_of(pr, k):
+    return (round(pr.cues[k]["start"], 3), round(pr.cues[k]["end"], 3))
+
+check("最短时长与新增时长是常量",
+      abs(p.CUE_MIN_DUR - 0.1) < 1e-9 and abs(p.CUE_ADD_SEC - 2.0) < 1e-9,
+      (p.CUE_MIN_DUR, p.CUE_ADD_SEC))
+
+_ce = cue_project((0, 2, "a"), (3, 5, "b"), (8, 10, "c"))
+check("三条字幕在 15 秒轴上", abs(_ce.total() - 15.0) < 1e-6
+      and [_ce.cues[k]["text"] for k in range(3)] == ["a", "b", "c"],
+      _ce.total())
+
+# 拖右端：跨过下一条就把它整体让开
+_ce.trim_cue(0, "right", 4.0)
+check("右端拖到下一条里：后一条整体让位",
+      span_of(_ce, 0) == (0.0, 4.0) and span_of(_ce, 1) == (4.0, 6.0)
+      and span_of(_ce, 2) == (9.0, 11.0),
+      [span_of(_ce, k) for k in range(3)])
+
+# 拖右端：顶到片尾要夹住
+_ce2 = cue_project((0, 2, "a"), (3, 5, "b"))
+_ce2.trim_cue(0, "right", 14.0)
+check("右端顶到片尾夹在 total-0.1", abs(_ce2.cues[0]["end"] - 3.0) < 1e-6,
+      span_of(_ce2, 0))
+
+# 拖左端：夹在前一条末尾
+_ce3 = cue_project((0, 2, "a"), (3, 5, "b"))
+_ce3.trim_cue(1, "left", 1.5)
+check("左端不越过前一条末尾", span_of(_ce3, 1) == (2.0, 5.0),
+      span_of(_ce3, 1))
+_ce3.trim_cue(1, "left", 9.0)
+check("左端也要给自己留出最短时长",
+      abs(_ce3.cues[1]["start"] - (5.0 - p.CUE_MIN_DUR)) < 1e-6,
+      span_of(_ce3, 1))
+
+# 数值框改入出点
+_ce4 = cue_project((0, 2, "a"), (3, 5, "b"))
+_ce4.set_cue_span(1, 2.2, 4.0)
+check("数值框改入出点生效", span_of(_ce4, 1) == (2.2, 4.0), span_of(_ce4, 1))
+check("改入出点不会动别人", span_of(_ce4, 0) == (0.0, 2.0), span_of(_ce4, 0))
+
+# 新增：撞上了就顺延
+_ce5 = cue_project((0, 2, "a"), (3, 5, "b"), (8, 10, "c"))
+_k5 = _ce5.add_cue(2.9)
+check("新增撞块时顺延到空隙", _k5 == 2 and span_of(_ce5, 2) == (5.0, 7.0),
+      (_k5, [span_of(_ce5, k) for k in range(len(_ce5.cues))]))
+check("新增默认 2 秒", abs(_ce5.cues[2]["end"] - _ce5.cues[2]["start"]
+                           - p.CUE_ADD_SEC) < 1e-6, span_of(_ce5, 2))
+_k6 = _ce5.add_cue(14.5)
+check("新增顶到片尾时夹到片尾为止",
+      _k6 == 4 and span_of(_ce5, 4) == (14.5, 15.0),
+      (_k6, span_of(_ce5, 4) if _k6 >= 0 else None))
+check("整条都塞不下就不建", _ce5.add_cue(14.95) == -1)
+
+# 拆分与合并
+_ce6 = cue_project((3, 5, "b"))
+check("播放头在块内可以拆", _ce6.split_cue(0, 4.0) is True, len(_ce6.cues))
+check("拆成两段且时间对得上",
+      span_of(_ce6, 0) == (3.0, 4.0) and span_of(_ce6, 1) == (4.0, 5.0),
+      [span_of(_ce6, k) for k in range(2)])
+check("拆开两段都保留原文", [c["text"] for c in _ce6.cues] == ["b", "b"],
+      [c["text"] for c in _ce6.cues])
+check("播放头在块外不拆", _ce6.split_cue(0, 9.0) is False)
+check("合并两段为一", _ce6.merge_cue(0) is True and len(_ce6.cues) == 1)
+check("合并后时间取后一条末尾", span_of(_ce6, 0) == (3.0, 5.0),
+      span_of(_ce6, 0))
+check("合并后文字用换行连起来", _ce6.cues[0]["text"] == "b\nb",
+      repr(_ce6.cues[0]["text"]))
+check("最后一条没法合并", _ce6.merge_cue(0) is False)
+
+# 整句挪动：夹在邻居之间
+_ce7 = cue_project((0, 2, "a"), (3, 5, "b"), (8, 10, "c"))
+_ce7.move_cue(1, 6.0)
+check("整句挪动被后一条夹住",
+      abs(_ce7.cues[1]["end"] - _ce7.cues[2]["start"]) < 1e-6,
+      span_of(_ce7, 1))
+check("往前挪被前一条末尾夹住",
+      _ce7.move_cue(1, 0.5) is True and span_of(_ce7, 1) == (2.0, 4.0),
+      span_of(_ce7, 1))
+
+# 改字与样式
+_ce8 = cue_project((0, 2, "a"))
+check("改字会去掉首尾空白", _ce8.set_cue_text(0, "  hi  ") is True
+      and _ce8.cues[0]["text"] == "hi", repr(_ce8.cues[0]["text"]))
+check("空字不写进去", _ce8.set_cue_text(0, "   ") is False)
+check("只认样式表里有的键名",
+      _ce8.set_cue_overrides(0, {"size": 60, "bogus": 1}) is True
+      and _ce8.cues[0]["overrides"].get("size") == 60
+      and "bogus" not in _ce8.cues[0]["overrides"],
+      _ce8.cues[0]["overrides"])
+check("样式覆盖能清空",
+      _ce8.set_cue_overrides(0, {}) is True and _ce8.cues[0]["overrides"] == {},
+      _ce8.cues[0]["overrides"])
+check("指向不存在的样式就退回默认",
+      _ce8.set_cue_style(0, "没有这个样式") is True
+      and _ce8.cues[0]["style"] == "", _ce8.cues[0]["style"])
+
+# 删除
+_ce9 = cue_project((0, 2, "a"), (3, 5, "b"))
+check("删除选中那条", _ce9.remove_cue(0) is True and len(_ce9.cues) == 1
+      and _ce9.cues[0]["text"] == "b")
+check("越界删除返回 False", _ce9.remove_cue(5) is False)
+
+# 吸附候选点里现在也有字幕首尾
+_ce10 = cue_project((1.5, 2.5, "a"))
+_cands = p.snap_candidates(_ce10)
+check("吸附候选点包含字幕首尾", 1.5 in _cands and 2.5 in _cands,
+      [v for v in _cands if v < 4])
+check("拖动时可以跳过自己那条",
+      1.5 not in p.snap_candidates(_ce10, 0.0, (), 0),
+      p.snap_candidates(_ce10, 0.0, (), 0)[:6])
+
+# 面板与时间线接线（源码级检查，GUI 由 tests/smoke_subtitles.py 真跑）
+for _name in ("def on_sub_row_changed", "def on_sub_style_changed",
+              "def on_sub_span_edited", "def on_sub_text_changed",
+              "def on_sub_add", "def on_sub_del", "def on_sub_split",
+              "def on_sub_merge", "def on_sub_action",
+              "def on_sub_reset_style", "class SubtitleList"):
+    check("字幕面板接线：" + _name, _name in src)
+check("时间线拖动分三态",
+      '"subtrim"' in src and '_drag = ("subtitle"' in src)
+check("松手才记一步撤销",
+      "def _finish_subtitle_drag" in src and "def _finish_subtitle_edit" in src)
+check("预览拖动用便宜通道",
+      "def _sync_cue_preview" in src and "self.scene.set_cues(" in src)
 # ---------------- 50 字幕：设置默认值与界面接线
 
 s0 = p.Settings.__new__(p.Settings)
